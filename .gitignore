@@ -6,3 +6,4 @@ apps/riak_crdt/ebin
 dev/*
 doc/*
 rel/riak_crdt
+data/*
