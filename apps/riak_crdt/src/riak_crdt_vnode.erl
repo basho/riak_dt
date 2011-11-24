@@ -19,10 +19,10 @@
          handle_exit/3]).
 
 %% CRDT API
--export([value/2,
-        update/4,
-         merge/4]).
-        
+-export([value/4,
+         update/4,
+         merge/5]).
+
 -record(state, {partition, data}).
 
 -define(MASTER, riak_crdt_vnode_master).
@@ -33,48 +33,50 @@
 start_vnode(I) ->
     riak_core_vnode_master:get_vnode_pid(I, ?MODULE).
 
-value(IdxNode, Key) ->
-    ?sync(IdxNode, {value, Key}, ?MASTER).
+value(PrefList, Mod, Key, ReqId) ->
+    riak_core_vnode_master:command(PrefList, {value, Mod, Key, ReqId}, {fsm, undefined, self()}, ?MASTER).
 
 %% Call sync, at source
-update(IdxNode, Key, Mod, Args) ->
-    ?sync(IdxNode, {update, Key, Mod, Args}, ?MASTER).
+update(IdxNode, Mod, Key, Args) ->
+    ?sync(IdxNode, {update, Mod, Key, Args}, ?MASTER).
 
 %% Call async at replica
-merge(PrefList, Key, CRDT, ReqId) ->
-    riak_core_vnode_master:command(PrefList, {merge, Key, CRDT, ReqId}, {fsm, undefined, self()}, ?MASTER).
+merge(PrefList, Mod, Key, CRDT, ReqId) ->
+    riak_core_vnode_master:command(PrefList, {merge, Mod, Key, CRDT, ReqId}, {fsm, undefined, self()}, ?MASTER).
 
 %% Vnode API
 init([Partition]) ->
     {ok, #state { partition=Partition, data=orddict:new() }}.
 
-handle_command({value, Key}, _Sender, #state{data=Data}=State) ->
-    Reply = case orddict:find(Key, Data) of
-                {ok, {Mod, Val}} -> Mod:value(Val);
+handle_command({value, Mod, Key, ReqId}, Sender, #state{data=Data}=State) ->
+    Reply = case orddict:find({Mod, Key}, Data) of
+                {ok, {Mod, Val}} -> {ok, {Mod, Val}};
+                {ok, {DiffMod, _}} -> {error,{ crdt_type_mismatch, DiffMod}};
                 _ -> notfound
             end,
-    {reply, Reply, State};
-handle_command({update, Key, Mod,  Args}, _Sender, #state{data=Data, partition=Idx}=State) ->
-    {Reply, NewState} = case orddict:find(Key, Data) of
+    riak_core_vnode:reply(Sender, {ReqId, Reply}),
+    {noreply, State};
+handle_command({update, Mod, Key, Args}, _Sender, #state{data=Data, partition=Idx}=State) ->
+    {Reply, NewState} = case orddict:find({Mod, Key}, Data) of
                             {ok, {Mod, Val}} -> 
                                 Updated = Mod:update(Args, {node(), Idx}, Val),
-                                {{ok, {Mod, Updated}}, State#state{data=orddict:store(Key, {Mod, Updated}, Data)}};
+                                {{ok, {Mod, Updated}}, State#state{data=orddict:store({Mod, Key}, {Mod, Updated}, Data)}};
                             {ok, {DiffMod, _}} ->
                                 {{error, {crdt_type_mismatch, DiffMod}}, State};
                             _ ->
                                 %% Not found, so create locally
                                 Updated = Mod:update(Args, {node(), Idx}, Mod:new()),
-                                {{ok, {Mod, Updated}}, State#state{data=orddict:store(Key, {Mod, Updated}, Data)}}
+                                {{ok, {Mod, Updated}}, State#state{data=orddict:store({Mod, Key}, {Mod, Updated}, Data)}}
                         end,
     {reply, Reply, NewState};
-handle_command({merge, Key, {RemoteMod, RemoteVal} = Remote, ReqId}, Sender, #state{data=Data}=State) ->
-    {Reply, NewState} = case orddict:find(Key, Data) of
-                            {ok, {RemoteMod, LocalVal}} ->
-                                {ok, State#state{data=orddict:store(Key, {RemoteMod, RemoteMod:merge(LocalVal, RemoteVal)}, Data)}};
-                            {ok, {_LocalMod, _}} ->
-                                {{error, crdt_type_mismatch}, State};
+handle_command({merge, Mod, Key, {Mod, RemoteVal} = Remote, ReqId}, Sender, #state{data=Data}=State) ->
+    {Reply, NewState} = case orddict:find({Mod, Key}, Data) of
+                            {ok, {Mod, LocalVal}} ->
+                                {ok, State#state{data=orddict:store({Mod, Key}, {Mod, Mod:merge(LocalVal, RemoteVal)}, Data)}};
+                            {ok, {DiffMod, _}} ->
+                                {{error, {crdt_type_mismatch, DiffMod}}, State};
                             _ ->
-                                {ok, State#state{data=orddict:store(Key, Remote, Data)}}
+                                {ok, State#state{data=orddict:store({Mod, Key}, Remote, Data)}}
                         end,
     riak_core_vnode:reply(Sender, {ReqId, Reply}),
     {noreply, NewState};

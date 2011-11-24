@@ -11,7 +11,7 @@
 -behaviour(gen_fsm).
 
 %% API
--export([start_link/3]).
+-export([start_link/4]).
 
 %% Callbacks
 -export([init/1, code_change/4, handle_event/3, handle_info/3,
@@ -22,8 +22,9 @@
 
 -record(state, {req_id :: pos_integer(),
                 from :: pid(),
+                mod :: atom(),
                 key :: string(),
-                values :: [term()],
+                values=[] :: [term()],
                 preflist :: riak_core_apl:preflist2(),
                 coord_pl_entry :: {integer(), atom()},
                 num_r = 0 :: non_neg_integer()}).
@@ -31,24 +32,25 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
-start_link(ReqID, From, Key) ->
-    gen_fsm:start_link(?MODULE, [ReqID, From, Key], []).
+start_link(ReqID, From, Mod, Key) ->
+    gen_fsm:start_link(?MODULE, [ReqID, From, Mod, Key], []).
 
 %%%===================================================================
 %%% States
 %%%===================================================================
 
 %% @doc Initialize the state data.
-init([ReqID, From, Key]) ->
+init([ReqID, From, Mod, Key]) ->
     SD = #state{req_id=ReqID,
                 from=From,
+                mod=Mod,
                 key=Key},
     {ok, prepare, SD, 0}.
 
 %% @doc Prepare the update by calculating the _preference list_.
-prepare(timeout, SD0=#state{key=Key}) ->
+prepare(timeout, SD0=#state{mod=Mod, key=Key}) ->
     {ok,Ring} = riak_core_ring_manager:get_my_ring(),
-    DocIdx = riak_core_util:chash_key({Key, Key}),
+    DocIdx = riak_core_util:chash_key({Mod, Key}),
     UpNodes = riak_core_node_watcher:nodes(riak_crdt),
     Preflist2 = riak_core_apl:get_apl_ann(DocIdx, 3, Ring, UpNodes),
     Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
@@ -57,17 +59,20 @@ prepare(timeout, SD0=#state{key=Key}) ->
 
 %% @doc Execute the write request and then go into waiting state to
 %% verify it has meets consistency requirements.
-execute(timeout, SD0=#state{preflist=Preflist, key=Key, req_id=ReqId}) ->
-    riak_crdt_vnode:value(Preflist, Key, ReqId),
+execute(timeout, SD0=#state{preflist=Preflist, mod=Mod, key=Key, req_id=ReqId}) ->
+    riak_crdt_vnode:value(Preflist, Mod, Key, ReqId),
     {next_state, waiting, SD0}.
 
 %% @doc Gather some responses, and merge them
-waiting({ReqId, CRDT}, SD0=#state{from=From, num_r=NumR0}) ->
+waiting({ReqId, {ok, {Mod, Val}}}, SD0=#state{from=From, num_r=NumR0, mod=Mod, values=Values}) ->
     NumR = NumR0 + 1,
-    SD = SD0#state{num_r=NumR},
+    Values2 = [Val|Values],
+    SD = SD0#state{num_r=NumR, values=Values2},
     if
         NumR =:= 2 ->
-            From ! {ReqId, CRDT},
+            [V1, V2] = Values2,
+            Merged = Mod:merge(V1, V2),
+            From ! {ReqId, Mod:value(Merged)},
             {stop, normal, SD};
         true ->
             {next_state, waiting, SD}

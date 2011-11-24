@@ -32,15 +32,15 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
-start_link(ReqID, From, Key, Mod, Args) ->
-    gen_fsm:start_link(?MODULE, [ReqID, From, Key, Mod, Args], []).
+start_link(ReqID, From, Mod, Key, Args) ->
+    gen_fsm:start_link(?MODULE, [ReqID, From, Mod, Key, Args], []).
 
 %%%===================================================================
 %%% States
 %%%===================================================================
 
 %% @doc Initialize the state data.
-init([ReqID, From, Key, Mod, Args]) ->
+init([ReqID, From, Mod, Key, Args]) ->
     SD = #state{req_id=ReqID,
                 from=From,
                 key=Key,
@@ -51,7 +51,7 @@ init([ReqID, From, Key, Mod, Args]) ->
 %% @doc Prepare the update by calculating the _preference list_.
 prepare(timeout, SD0=#state{key=Key, from=From, mod=Mod, args=Args, req_id=ReqId}) ->
     {ok,Ring} = riak_core_ring_manager:get_my_ring(),
-    DocIdx = riak_core_util:chash_key({Key, Key}),
+    DocIdx = riak_core_util:chash_key({Mod, Key}),
     UpNodes = riak_core_node_watcher:nodes(riak_crdt),
     Preflist2 = riak_core_apl:get_apl_ann(DocIdx, 3, Ring, UpNodes),
     %% Check if this node is in the preference list so it can coordinate
@@ -89,11 +89,11 @@ execute(timeout, SD0=#state{coord_pl_entry=CoordNode,
                             preflist=PrefList,
                             key=Key, mod=Mod,
                             args=Args, from=From, req_id=ReqId}) ->
-    case riak_crdt_vnode:update(CoordNode, Key, Mod, Args) of
+    case riak_crdt_vnode:update(CoordNode, Mod, Key, Args) of
         {ok, CRDT} ->
             %% ask remote nodes to merge
             PrefList2 = [IndexNode || {IndexNode, _Type} <- PrefList],
-            riak_crdt_vnode:merge(PrefList2, Key, CRDT, ReqId),
+            riak_crdt_vnode:merge(PrefList2, Mod, Key, CRDT, ReqId),
             {next_state, waiting_remotes, SD0#state{num_w=1}};
         Error ->
             %% send reply and bail

@@ -24,10 +24,14 @@ init(_Args) ->
                 {riak_core_vnode_master, start_link, [riak_crdt_vnode]},
                 permanent, 5000, worker, [riak_core_vnode_master]},
 
-    UpdateFsmSup = {riak_rdt_update_fsm_sup,
+    UpdateFsmSup = {riak_crdt_update_fsm_sup,
                     {riak_crdt_update_fsm_sup, start_link, []},
                     permanent, infinity, supervisor, [riak_crdt_update_fsm_sup]},
 
+    ValueFsmSup = {riak_crdt_value_fsm_sup,
+                    {riak_crdt_value_fsm_sup, start_link, []},
+                    permanent, infinity, supervisor, [riak_crdt_value_fsm_sup]},
+
     { ok,
       { {one_for_one, 5, 10},
-        [VMaster, UpdateFsmSup]}}.
+        [VMaster, UpdateFsmSup, ValueFsmSup]}}.
