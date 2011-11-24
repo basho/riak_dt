@@ -76,7 +76,9 @@ waiting({ReqId, {ok, {Mod, Val}}}, SD0=#state{from=From, num_r=NumR0, mod=Mod, v
             {stop, normal, SD};
         true ->
             {next_state, waiting, SD}
-    end.
+    end;
+waiting({_ReqId, notfound}, SD) ->
+    {next_state, waiting, SD}.
 
 handle_info(_Info, _StateName, StateData) ->
     {stop,badmsg,StateData}.
