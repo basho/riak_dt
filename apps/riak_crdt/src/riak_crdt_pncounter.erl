@@ -10,7 +10,7 @@
 -behaviour(riak_crdt).
 
 %% API
--export([new/0, value/1, update/3, merge/2]).
+-export([new/0, value/1, update/3, merge/2, equal/2]).
 
 new() ->
     {vclock:fresh(), vclock:fresh()}.
@@ -27,6 +27,9 @@ merge({Incr1, Decr1}, {Incr2, Decr2}) ->
     MergedIncr = vclock:merge([Incr1, Incr2]),
     MergedDecr = vclock:merge([Decr1, Decr2]),
     {MergedIncr, MergedDecr}.
+
+equal({Incr1, Decr1}, {Incr2, Decr2}) ->
+    vclock:equal(Incr1, Incr2) andalso vclock:equal(Decr1, Decr2).
 
 %% Private
 sum([]) ->

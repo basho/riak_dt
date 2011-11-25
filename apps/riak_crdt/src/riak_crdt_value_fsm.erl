@@ -18,13 +18,13 @@
          handle_sync_event/4, terminate/3]).
 
 %% States
--export([prepare/2, execute/2, waiting/2]).
+-export([prepare/2, execute/2, waiting/2, await_n/2, read_repair/2]).
 
 -record(state, {req_id :: pos_integer(),
                 from :: pid(),
                 mod :: atom(),
                 key :: string(),
-                values=[] :: [term()],
+                replies=[] :: [{integer(), term()}],
                 preflist :: riak_core_apl:preflist2(),
                 coord_pl_entry :: {integer(), atom()},
                 num_r = 0 :: non_neg_integer()}).
@@ -63,22 +63,41 @@ execute(timeout, SD0=#state{preflist=Preflist, mod=Mod, key=Key, req_id=ReqId}) 
     riak_crdt_vnode:value(Preflist, Mod, Key, ReqId),
     {next_state, waiting, SD0}.
 
-%% @doc Gather some responses, and merge them
-waiting({ReqId, {ok, {Mod, Val}}}, SD0=#state{from=From, num_r=NumR0, mod=Mod, values=Values}) ->
+%% @doc Gather some responses, and merge them, do I need to check the Mod?
+waiting({ReqId, Reply}, SD0=#state{from=From, num_r=NumR0, replies=Replies}) ->
     NumR = NumR0 + 1,
-    Values2 = [Val|Values],
-    SD = SD0#state{num_r=NumR, values=Values2},
+    Replies2 = [Reply|Replies],
+    SD = SD0#state{num_r=NumR, replies=Replies2},
     if
         NumR =:= 2 ->
-            [V1, V2] = Values2,
-            Merged = Mod:merge(V1, V2),
-            From ! {ReqId, Mod:value(Merged)},
-            {stop, normal, SD};
+            Result = value(Replies),
+            From ! {ReqId, Result},
+            if NumR =:= 3 -> {next_state, read_repair, SD, 0};
+               true -> {next_state, await_n, SD, 5000}
+            end;
         true ->
             {next_state, waiting, SD}
+    end.
+
+await_n({_ReqId, Reply}, SD0=#state{num_r=NumR0, replies=Replies0}) ->
+    NumR = NumR0 +1,
+    Replies = [Reply|Replies0],
+    SD = SD0#state{num_r=NumR, replies=Replies},
+    if NumR =:= 3 ->
+            {next_state, read_repair, SD, 0};
+       true ->
+            {next_state, await_n, SD}
     end;
-waiting({_ReqId, notfound}, SD) ->
-    {next_state, waiting, SD}.
+%% Repair what you can
+await_n(timeout, SD) ->
+    {next_state, read_repair, SD, 0}.
+
+%% rr
+read_repair(timeout, SD=#state{mod=Mod, key=Key, replies=Replies}) ->
+    Merged = merge(Replies, notfound),
+    Indexes = [Idx || {Idx, Val} <- Replies, needs_repair(Val, Merged)],
+    do_repair(Indexes, Mod, Key, Merged),
+    {stop, normal, SD}.
 
 handle_info(_Info, _StateName, StateData) ->
     {stop,badmsg,StateData}.
@@ -92,4 +111,32 @@ handle_sync_event(_Event, _From, _StateName, StateData) ->
 code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
 
 terminate(_Reason, _SN, _SD) ->
+    ok.
+
+%% get a single merged value for a list of replies
+value(Replies) ->
+    case merge(Replies, notfound) of
+        {Mod, Val} -> Mod:value(Val);
+        notfound -> notfound
+    end.
+
+%% merge all replies to a single CRDT
+merge([], Final) ->
+    Final;
+merge([{_Idx, notfound}|Rest], Mergedest) ->
+    merge(Rest, Mergedest);
+merge([{_Idx, {_Mod, _Val}=Mergedest}|Rest], notfound) ->
+    merge(Rest, Mergedest);
+merge([{_Idx, {Mod, Val1}}|Rest], {Mod, Val2}) ->
+    Mergedest = Mod:merge(Val1, Val2),
+    merge(Rest, {Mod, Mergedest}).
+
+needs_repair({Mod, Val1}, {Mod, Val2}) ->
+    Mod:equal(Val1, Val2) =:= false;
+needs_repair(_, _Merged) ->
+    true.
+
+do_repair(Indexes, Mod, Key, Merged) when length(Indexes) =/= 0 ->
+    riak_crdt_vnode:repair(Indexes, Mod, Key, Merged);
+do_repair(_, _, _, _) ->
     ok.

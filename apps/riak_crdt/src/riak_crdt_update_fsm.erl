@@ -92,7 +92,8 @@ execute(timeout, SD0=#state{coord_pl_entry=CoordNode,
     case riak_crdt_vnode:update(CoordNode, Mod, Key, Args) of
         {ok, CRDT} ->
             %% ask remote nodes to merge
-            PrefList2 = [IndexNode || {IndexNode, _Type} <- PrefList],
+            PrefList2 = [{Index, Node} || {{Index, Node}, _Type} <- PrefList,
+                                          Node =/= CoordNode],
             riak_crdt_vnode:merge(PrefList2, Mod, Key, CRDT, ReqId),
             {next_state, waiting_remotes, SD0#state{num_w=1}};
         Error ->
@@ -101,8 +102,8 @@ execute(timeout, SD0=#state{coord_pl_entry=CoordNode,
             {stop, normal, SD0}
     end. 
 
-%% @doc Wait for at least 1 successfull merge reqs to respond.
-%% TODO: What about merge errors?
+%% @doc Wait for at least 1 successfull merge req to respond.
+%% TODO: What about merge errors? hrm
 waiting_remotes({ReqId, ok}, SD0=#state{from=From, num_w=NumW0}) ->
     NumW = NumW0 + 1,
     SD = SD0#state{num_w=NumW},
