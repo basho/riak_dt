@@ -66,11 +66,13 @@ execute(timeout, SD0=#state{preflist=Preflist, mod=Mod, key=Key, req_id=ReqId}) 
 %% @doc Gather some responses, and merge them, do I need to check the Mod?
 waiting({ReqId, Reply}, SD0=#state{from=From, num_r=NumR0, replies=Replies}) ->
     NumR = NumR0 + 1,
+    lager:debug("Got reply, ~p~n", [Reply]),
     Replies2 = [Reply|Replies],
     SD = SD0#state{num_r=NumR, replies=Replies2},
     if
         NumR =:= 2 ->
-            Result = value(Replies),
+            Result = value(Replies2),
+            lager:debug("replying ~p~n", [Result]),
             From ! {ReqId, Result},
             if NumR =:= 3 -> {next_state, read_repair, SD, 0};
                true -> {next_state, await_n, SD, 5000}
@@ -95,8 +97,8 @@ await_n(timeout, SD) ->
 %% rr
 read_repair(timeout, SD=#state{mod=Mod, key=Key, replies=Replies}) ->
     Merged = merge(Replies, notfound),
-    Indexes = [Idx || {Idx, Val} <- Replies, needs_repair(Val, Merged)],
-    do_repair(Indexes, Mod, Key, Merged),
+    PrefList = [IdxNode || {IdxNode, Val} <- Replies, needs_repair(Val, Merged)],
+    do_repair(PrefList, Mod, Key, Merged),
     {stop, normal, SD}.
 
 handle_info(_Info, _StateName, StateData) ->
@@ -115,6 +117,7 @@ terminate(_Reason, _SN, _SD) ->
 
 %% get a single merged value for a list of replies
 value(Replies) ->
+    lager:debug("Getting merged value ~p~n", [Replies]),
     case merge(Replies, notfound) of
         {Mod, Val} -> Mod:value(Val);
         notfound -> notfound
@@ -123,9 +126,9 @@ value(Replies) ->
 %% merge all replies to a single CRDT
 merge([], Final) ->
     Final;
-merge([{_Idx, notfound}|Rest], Mergedest) ->
+merge([{_Idx, Mergedest}|Rest], notfound) ->
     merge(Rest, Mergedest);
-merge([{_Idx, {_Mod, _Val}=Mergedest}|Rest], notfound) ->
+merge([{_Idx, notfound}|Rest], Mergedest) ->
     merge(Rest, Mergedest);
 merge([{_Idx, {Mod, Val1}}|Rest], {Mod, Val2}) ->
     Mergedest = Mod:merge(Val1, Val2),
@@ -133,10 +136,13 @@ merge([{_Idx, {Mod, Val1}}|Rest], {Mod, Val2}) ->
 
 needs_repair({Mod, Val1}, {Mod, Val2}) ->
     Mod:equal(Val1, Val2) =:= false;
+needs_repair(_, notfound) ->
+    false;
 needs_repair(_, _Merged) ->
     true.
 
 do_repair(Indexes, Mod, Key, Merged) when length(Indexes) =/= 0 ->
+    lager:debug("Read repairing ~p~n", [Indexes]),
     riak_crdt_vnode:repair(Indexes, Mod, Key, Merged);
 do_repair(_, _, _, _) ->
     ok.

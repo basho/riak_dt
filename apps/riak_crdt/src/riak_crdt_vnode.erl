@@ -24,7 +24,7 @@
          merge/5,
          repair/4]).
 
--record(state, {partition, data}).
+-record(state, {partition, data, node}).
 
 -define(MASTER, riak_crdt_vnode_master).
 -define(sync(PrefList, Command, Master),
@@ -51,17 +51,17 @@ repair(PrefList, Mod, Key, CRDT) ->
 
 %% Vnode API
 init([Partition]) ->
-    {ok, #state { partition=Partition, data=orddict:new() }}.
+    {ok, #state { partition=Partition, data=orddict:new(), node=node() }}.
 
-handle_command({value, Mod, Key, ReqId}, Sender, #state{data=Data, partition=Idx}=State) ->
+handle_command({value, Mod, Key, ReqId}, Sender, #state{data=Data, partition=Idx, node=Node}=State) ->
     lager:debug("value ~p ~p ~p~n", [Idx, Mod, Key]),
     Reply = case orddict:find({Mod, Key}, Data) of
-                {ok, {Mod, Val}} -> {Idx, {Mod, Val}};
-                {ok, {DiffMod, _}} -> {Idx, {error,{ crdt_type_mismatch, DiffMod}}};
-                _ -> {Idx, notfound}
+                {ok, {Mod, Val}} -> {Mod, Val};
+                {ok, {DiffMod, _}} -> {error,{ crdt_type_mismatch, DiffMod}};
+                _ -> notfound
             end,
-    lager:debug("Value ~p~n", [orddict:find({Mod, Key}, State#state.data)]),
-    riak_core_vnode:reply(Sender, {ReqId, Reply}),
+    lager:debug("Value state ~p~n", [orddict:find({Mod, Key}, State#state.data)]),
+    riak_core_vnode:reply(Sender, {ReqId, {{Idx, Node}, Reply}}),
     {noreply, State};
 handle_command({update, Mod, Key, Args}, _Sender, #state{data=Data, partition=Idx}=State) ->
     lager:debug("update ~p ~p ~p~n", [Mod, Key, Args]),
@@ -76,7 +76,7 @@ handle_command({update, Mod, Key, Args}, _Sender, #state{data=Data, partition=Id
                                 Updated = Mod:update(Args, {node(), Idx}, Mod:new()),
                                 {{ok, {Mod, Updated}}, State#state{data=orddict:store({Mod, Key}, {Mod, Updated}, Data)}}
                         end,
-    lager:debug("Update ~p~n", [orddict:find({Mod, Key}, NewState#state.data)]),
+    lager:debug("Update state  ~p~n", [orddict:find({Mod, Key}, NewState#state.data)]),
     {reply, Reply, NewState};
 handle_command({merge, Mod, Key, {Mod, RemoteVal} = Remote, ReqId}, Sender, #state{data=Data}=State) ->
     lager:debug("Merge ~p ~p ~p~n", [Mod, Key, Remote]),
@@ -88,7 +88,7 @@ handle_command({merge, Mod, Key, {Mod, RemoteVal} = Remote, ReqId}, Sender, #sta
                             _ ->
                                 {ok, State#state{data=orddict:store({Mod, Key}, Remote, Data)}}
                         end,
-    lager:debug("State ~p~n", [orddict:find({Mod, Key}, NewState#state.data)]),
+    lager:debug("Merge state ~p~n", [orddict:find({Mod, Key}, NewState#state.data)]),
     riak_core_vnode:reply(Sender, {ReqId, Reply}),
     {noreply, NewState};
 handle_command(Message, _Sender, State) ->
@@ -96,7 +96,7 @@ handle_command(Message, _Sender, State) ->
     {noreply, State}.
 
 handle_handoff_command(?FOLD_REQ{foldfun=Fun, acc0=Acc0}, _Sender, State) ->
-    Acc = dict:fold(Fun, Acc0, State#state.data),
+    Acc = orddict:fold(Fun, Acc0, State#state.data),
     {reply, Acc, State}.
 
 handoff_starting(_TargetNode, State) ->

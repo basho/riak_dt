@@ -66,6 +66,7 @@ prepare(timeout, SD0=#state{key=Key, from=From, mod=Mod, args=Args, req_id=ReqId
             %% This node is not in the preference list
             %% forward on to the first node
             [{{_Idx, CoordNode},_Type}|_] = Preflist2,
+            lager:debug("Forward to ~p to co-ordinate~n", [CoordNode]),
             case riak_crdt_update_fsm_sup:start_update_fsm(CoordNode, [ReqId, From, Key, Mod, Args]) of
                 {ok, _Pid} ->
                     {stop, normal, SD0};
@@ -85,15 +86,15 @@ prepare(timeout, SD0=#state{key=Key, from=From, mod=Mod, args=Args, req_id=ReqId
 
 %% @doc Execute the write request and then go into waiting state to
 %% verify it has meets consistency requirements.
-execute(timeout, SD0=#state{coord_pl_entry=CoordNode,
+execute(timeout, SD0=#state{coord_pl_entry=CoordPLEntry,
                             preflist=PrefList,
                             key=Key, mod=Mod,
                             args=Args, from=From, req_id=ReqId}) ->
-    case riak_crdt_vnode:update(CoordNode, Mod, Key, Args) of
+    case riak_crdt_vnode:update(CoordPLEntry, Mod, Key, Args) of
         {ok, CRDT} ->
             %% ask remote nodes to merge
-            PrefList2 = [{Index, Node} || {{Index, Node}, _Type} <- PrefList,
-                                          Node =/= CoordNode],
+            PrefList2 = [{Index, Node} || {{Index, Node}=Entry, _Type} <- PrefList,
+                                          Entry =/= CoordPLEntry],
             riak_crdt_vnode:merge(PrefList2, Mod, Key, CRDT, ReqId),
             {next_state, waiting_remotes, SD0#state{num_w=1}};
         Error ->
