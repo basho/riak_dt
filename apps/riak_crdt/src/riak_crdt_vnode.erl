@@ -24,7 +24,7 @@
          merge/5,
          repair/4]).
 
--record(state, {partition, data, node}).
+-record(state, {partition, node, table}).
 
 -define(MASTER, riak_crdt_vnode_master).
 -define(sync(PrefList, Command, Master),
@@ -51,52 +51,51 @@ repair(PrefList, Mod, Key, CRDT) ->
 
 %% Vnode API
 init([Partition]) ->
-    {ok, #state { partition=Partition, data=orddict:new(), node=node() }}.
+    Node = node(),
+    Table = "data/" ++ integer_to_list(Partition),
+    {ok, Table} = dets:open_file(Table, []),
+    {ok, #state { partition=Partition, node=Node, table=Table }}.
 
-handle_command({value, Mod, Key, ReqId}, Sender, #state{data=Data, partition=Idx, node=Node}=State) ->
+handle_command({value, Mod, Key, ReqId}, Sender, #state{partition=Idx, node=Node, table=Table}=State) ->
     lager:debug("value ~p ~p ~p~n", [Idx, Mod, Key]),
-    Reply = case orddict:find({Mod, Key}, Data) of
-                {ok, {Mod, Val}} -> {Mod, Val};
-                {ok, {DiffMod, _}} -> {error,{ crdt_type_mismatch, DiffMod}};
-                _ -> notfound
+    Reply = case dets:lookup(Table, {Mod, Key}) of
+                [{{Mod, Key}, {Mod, Val}}] -> {Mod, Val};
+                [] -> notfound
             end,
-    lager:debug("Value state ~p~n", [orddict:find({Mod, Key}, State#state.data)]),
     riak_core_vnode:reply(Sender, {ReqId, {{Idx, Node}, Reply}}),
     {noreply, State};
-handle_command({update, Mod, Key, Args}, _Sender, #state{data=Data, partition=Idx}=State) ->
+handle_command({update, Mod, Key, Args}, _Sender, #state{table=Table, partition=Idx}=State) ->
     lager:debug("update ~p ~p ~p~n", [Mod, Key, Args]),
-    {Reply, NewState} = case orddict:find({Mod, Key}, Data) of
-                            {ok, {Mod, Val}} -> 
-                                Updated = Mod:update(Args, {node(), Idx}, Val),
-                                {{ok, {Mod, Updated}}, State#state{data=orddict:store({Mod, Key}, {Mod, Updated}, Data)}};
-                            {ok, {DiffMod, _}} ->
-                                {{error, {crdt_type_mismatch, DiffMod}}, State};
-                            _ ->
-                                %% Not found, so create locally
-                                Updated = Mod:update(Args, {node(), Idx}, Mod:new()),
-                                {{ok, {Mod, Updated}}, State#state{data=orddict:store({Mod, Key}, {Mod, Updated}, Data)}}
-                        end,
-    lager:debug("Update state  ~p~n", [orddict:find({Mod, Key}, NewState#state.data)]),
-    {reply, Reply, NewState};
-handle_command({merge, Mod, Key, {Mod, RemoteVal} = Remote, ReqId}, Sender, #state{data=Data}=State) ->
+    Reply = case dets:lookup(Table, {Mod, Key}) of
+                [{{Mod, Key}, {Mod, Val}}] -> 
+                    Updated = Mod:update(Args, {node(), Idx}, Val),
+                    ok = dets:insert(Table, {{Mod, Key}, {Mod, Updated}}),
+                    {ok, {Mod, Updated}};
+                [] ->
+                    %% Not found, so create locally
+                    Updated = Mod:update(Args, {node(), Idx}, Mod:new()),
+                    ok = dets:insert(Table, {{Mod, Key}, {Mod, Updated}}),
+                    {ok, {Mod, Updated}}
+            end,
+    {reply, Reply, State};
+handle_command({merge, Mod, Key, {Mod, RemoteVal} = Remote, ReqId}, Sender, #state{table=Table}=State) ->
     lager:debug("Merge ~p ~p ~p~n", [Mod, Key, Remote]),
-    {Reply, NewState} = case orddict:find({Mod, Key}, Data) of
-                            {ok, {Mod, LocalVal}} ->
-                                {ok, State#state{data=orddict:store({Mod, Key}, {Mod, Mod:merge(LocalVal, RemoteVal)}, Data)}};
-                            {ok, {DiffMod, _}} ->
-                                {{error, {crdt_type_mismatch, DiffMod}}, State};
-                            _ ->
-                                {ok, State#state{data=orddict:store({Mod, Key}, Remote, Data)}}
-                        end,
-    lager:debug("Merge state ~p~n", [orddict:find({Mod, Key}, NewState#state.data)]),
+    Reply = case dets:lookup(Table, {Mod, Key}) of
+                [{{Mod, Key}, {Mod, LocalVal}}] ->
+                    Merged = Mod:merge(LocalVal, RemoteVal),
+                    dets:insert(Table, {{Mod, Key}, {Mod, Merged}});
+                [] ->
+                    dets:insert(Table, {{Mod, Key}, Remote})
+            end,
     riak_core_vnode:reply(Sender, {ReqId, Reply}),
-    {noreply, NewState};
+    {noreply, State};
 handle_command(Message, _Sender, State) ->
     ?PRINT({unhandled_command, Message}),
     {noreply, State}.
 
-handle_handoff_command(?FOLD_REQ{foldfun=Fun, acc0=Acc0}, _Sender, State) ->
-    Acc = orddict:fold(Fun, Acc0, State#state.data),
+handle_handoff_command(?FOLD_REQ{foldfun=Fun, acc0=Acc0}, _Sender, State=#state{table=Table}) ->
+    F = fun({K, V}, AccIn) -> Fun(K, V, AccIn) end,
+    Acc = dets:foldl(F, Acc0, Table),
     {reply, Acc, State}.
 
 handoff_starting(_TargetNode, State) ->
@@ -108,25 +107,23 @@ handoff_cancelled(State) ->
 handoff_finished(_TargetNode, State) ->
     {ok, State}.
 
-handle_handoff_data(Binary, #state{data=Data0}=State) ->
-    {{Mod, Key}, V} = binary_to_term(Binary),
+handle_handoff_data(Binary, #state{table=Table}=State) ->
+    {{Mod, Key}, {Mod, HoffVal}} = binary_to_term(Binary),
     %% merge with local
-    Data =  case orddict:find({Mod, Key}, Data0) of
-                {ok, {Mod, LocalVal}} ->
-                    orddict:store({Mod, Key}, {Mod, Mod:merge(LocalVal, V)}, Data0);
-                {ok, {DiffMod, _}} ->
-                    lager:error("Crdt type mismatch on handoff~p~n", [DiffMod]),
-                    Data0;
-                _ ->
-                    orddict:store({Mod, Key}, V, Data0)
-            end,
-    {reply, ok, State#state{data=Data}}.
+     case dets:lookup(Table, {Mod, Key}) of
+         [{{Mod, Key}, {Mod, LocalVal}}] ->
+             Merged = Mod:merge(LocalVal, HoffVal),
+             dets:insert(Table, {{Mod, Key}, {Mod, Merged}});
+         [] ->
+             dets:insert(Table, {{Mod, Key}, {Mod, HoffVal}})
+         end,
+    {reply, ok, State}.
 
 encode_handoff_item(Name, Value) ->
     term_to_binary({Name, Value}).
 
 is_empty(State) ->
-    case orddict:size(State#state.data) of
+    case dets:info(State#state.table, no_keys) of
         0 -> {true, State};
         _ -> {false, State}
     end.

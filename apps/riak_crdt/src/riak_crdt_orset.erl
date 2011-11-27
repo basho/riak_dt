@@ -48,13 +48,16 @@ add_elem(Actor, Dict, Elem) ->
     Unique = unique(Actor),
     add_unique(dict:find(Elem, Dict), Dict, Elem, Unique).
 
-remove_elem({ok, Set0}, Elem, Dict) ->
-    case dict:find(Elem, Dict) of
+remove_elem({ok, Set0}, Elem, RDict) ->
+    case dict:find(Elem, RDict) of
         {ok, Set} ->
-            dict:store(Elem, sets:union(Set, Set0), Dict);
+            dict:store(Elem, sets:union(Set, Set0), RDict);
         error ->
-            dict:store(Elem, Set0, Dict)
-    end.
+            dict:store(Elem, Set0, RDict)
+    end;
+remove_elem(error, _Elem, RDict) ->
+    %% Can't remove an element not in the ADict, warn??
+    RDict.
 
 add_unique({ok, Set0}, Dict, Elem, Unique) ->
     Set = sets:add_element(Unique, Set0),
