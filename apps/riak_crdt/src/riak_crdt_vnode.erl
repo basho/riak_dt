@@ -57,7 +57,7 @@ init([Partition]) ->
     {ok, #state { partition=Partition, node=Node, table=Table }}.
 
 handle_command({value, Mod, Key, ReqId}, Sender, #state{partition=Idx, node=Node, table=Table}=State) ->
-    lager:debug("value ~p ~p ~p~n", [Idx, Mod, Key]),
+    lager:debug("value ~p ~p~n", [Mod, Key]),
     Reply = case dets:lookup(Table, {Mod, Key}) of
                 [{{Mod, Key}, {Mod, Val}}] -> {Mod, Val};
                 [] -> notfound
@@ -79,7 +79,7 @@ handle_command({update, Mod, Key, Args}, _Sender, #state{table=Table, partition=
             end,
     {reply, Reply, State};
 handle_command({merge, Mod, Key, {Mod, RemoteVal} = Remote, ReqId}, Sender, #state{table=Table}=State) ->
-    lager:debug("Merge ~p ~p ~p~n", [Mod, Key, Remote]),
+    lager:debug("Merge ~p ~p~n", [Mod, Key]),
     Reply = case dets:lookup(Table, {Mod, Key}) of
                 [{{Mod, Key}, {Mod, LocalVal}}] ->
                     Merged = Mod:merge(LocalVal, RemoteVal),

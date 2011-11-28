@@ -117,7 +117,6 @@ terminate(_Reason, _SN, _SD) ->
 
 %% get a single merged value for a list of replies
 value(Replies) ->
-    lager:debug("Getting merged value ~p~n", [Replies]),
     case merge(Replies, notfound) of
         {Mod, Val} -> Mod:value(Val);
         notfound -> notfound

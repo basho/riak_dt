@@ -67,7 +67,7 @@ prepare(timeout, SD0=#state{key=Key, from=From, mod=Mod, args=Args, req_id=ReqId
             %% forward on to the first node
             [{{_Idx, CoordNode},_Type}|_] = Preflist2,
             lager:debug("Forward to ~p to co-ordinate~n", [CoordNode]),
-            case riak_crdt_update_fsm_sup:start_update_fsm(CoordNode, [ReqId, From, Key, Mod, Args]) of
+            case riak_crdt_update_fsm_sup:start_update_fsm(CoordNode, [ReqId, From, Mod, Key, Args]) of
                 {ok, _Pid} ->
                     {stop, normal, SD0};
                 {error, Reason} ->
