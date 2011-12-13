@@ -13,26 +13,25 @@
 -export([new/0, value/1, update/3, merge/2, equal/2]).
 
 new() ->
-    {vclock:fresh(), vclock:fresh()}.
+    {riak_crdt_gcounter:new(), riak_crdt_gcounter:new()}.
 
 value({Incr, Decr}) ->
-    sum(Incr) - sum(Decr).
+    riak_crdt_gcounter:value(Incr) -  riak_crdt_gcounter:value(Decr).
 
 update(increment, Actor, {Incr, Decr}) ->
-    {vclock:increment(Actor, Incr), Decr};
+    {riak_crdt_gcounter:update(increment, Actor, Incr), Decr};
+update({increment, By}, Actor, {Incr, Decr}) when is_integer(By), By > 0 ->
+    {riak_crdt_gcounter:update({increment, By}, Actor, Incr), Decr};
 update(decrement, Actor, {Incr, Decr}) ->
-    {Incr, vclock:increment(Actor, Decr)}.
+    {Incr, riak_crdt_gcounter:update(increment, Actor, Decr)};
+update({decrement, By}, Actor, {Incr, Decr}) ->
+    {Incr, riak_crdt_gcounter:update({increment, By}, Actor, Decr)}.
     
 merge({Incr1, Decr1}, {Incr2, Decr2}) ->   
-    MergedIncr = vclock:merge([Incr1, Incr2]),
-    MergedDecr = vclock:merge([Decr1, Decr2]),
+    MergedIncr =  riak_crdt_gcounter:merge(Incr1, Incr2),
+    MergedDecr =  riak_crdt_gcounter:merge(Decr1, Decr2),
     {MergedIncr, MergedDecr}.
 
 equal({Incr1, Decr1}, {Incr2, Decr2}) ->
-    vclock:equal(Incr1, Incr2) andalso vclock:equal(Decr1, Decr2).
+    riak_crdt_gcounter:equal(Incr1, Incr2) andalso  riak_crdt_gcounter:equal(Decr1, Decr2).
 
-%% Private
-sum([]) ->
-    0;
-sum(Vclock) ->
-    lists:sum([vclock:get_counter(Node, Vclock) || Node <- vclock:all_nodes(Vclock)]).
