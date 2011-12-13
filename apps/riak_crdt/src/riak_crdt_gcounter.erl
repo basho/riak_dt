@@ -22,7 +22,7 @@ value(GCnt) ->
     lists:sum([ Cnt || {_Act, Cnt} <- GCnt]).
 
 update(increment, Actor, GCnt) ->
-    increment(Actor, GCnt);
+    increment_by(1, Actor, GCnt);
 update({increment, Amount}, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
     increment_by(Amount, Actor, GCnt).
 
@@ -47,16 +47,13 @@ equal(VA,VB) ->
     lists:sort(VA) =:= lists:sort(VB).
 
 %% priv
-increment(Actor, GCnt) ->
-    increment_by(1, Actor, GCnt).
-%% priv
 increment_by(Amount, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
     {Ctr, NewGCnt} = case lists:keytake(Actor, 1, GCnt) of
-                                false ->
-                                    {Amount, GCnt};
-                                {value, {_N, C}, ModGCnt} ->
-                                    {C + Amount, ModGCnt}
-                            end,
+                         false ->
+                             {Amount, GCnt};
+                         {value, {_N, C}, ModGCnt} ->
+                             {C + Amount, ModGCnt}
+                     end,
     [{Actor, Ctr}|NewGCnt].
 
 
