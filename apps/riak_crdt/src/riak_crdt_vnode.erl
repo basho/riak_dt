@@ -54,7 +54,7 @@ repair(PrefList, Mod, Key, CRDT) ->
 %% Vnode API
 init([Partition]) ->
     Node = node(),
-    StorageState = start_storage(Partition),
+    {ok, StorageState} = start_storage(Partition),
     {ok, #state { partition=Partition, node=Node, storage_state=StorageState }}.
 
 handle_command({value, Mod, Key, ReqId}, Sender, #state{partition=Idx, node=Node, storage_state=StorageState}=State) ->
@@ -64,17 +64,23 @@ handle_command({value, Mod, Key, ReqId}, Sender, #state{partition=Idx, node=Node
     {noreply, State};
 handle_command({update, Mod, Key, Args}, _Sender, #state{storage_state=StorageState, partition=Idx}=State) ->
     lager:debug("update ~p ~p ~p~n", [Mod, Key, Args]),
-    Current = case lookup({Mod, Key}, StorageState) of
-                  {Mod, Val} ->
-                      Val;
+    Updated = case lookup({Mod, Key}, StorageState) of
+                  {ok, {Mod, Val}} ->
+                      Mod:update(Args, {node(), Idx}, Val);
                   notfound ->
                       %% Not found, so create locally
-                      Mod:new()
+                      Mod:update(Args, {node(), Idx}, Mod:new());
+                  {error, Reason} ->
+                      {error, Reason}
               end,
-    Updated = Mod:update(Args, {node(), Idx}, Current),
-    ok = store({{Mod, Key}, {Mod, Updated}}, StorageState),
-    Reply =   {ok, {Mod, Updated}},
-    {reply, Reply, State};
+    case Updated of
+        {error, Reason2} ->
+            lager:error("Error ~p looking up ~p.", [Reason2, {Mod, Key}]),
+            {reply, {error, Reason2}, State};
+        _ ->
+            store({{Mod, Key}, {Mod, Updated}}, StorageState),
+            {reply, {ok, {Mod, Updated}}, State}
+    end;
 handle_command({merge, Mod, Key, {Mod, RemoteVal}, ReqId}, Sender, #state{storage_state=StorageState}=State) ->
     lager:debug("Merge ~p ~p~n", [Mod, Key]),
     Reply = do_merge({Mod, Key}, RemoteVal, StorageState),
@@ -98,8 +104,8 @@ handoff_finished(_TargetNode, State) ->
     {ok, State}.
 
 handle_handoff_data(Binary, #state{storage_state=StorageState}=State) ->
-    {{Mod, Key}, {Mod, HoffVal}} = binary_to_term(Binary),
-    %% merge with local
+    {KB, VB} = binary_to_term(Binary),
+    {{Mod, Key}, {Mod, HoffVal}} = {binary_to_term(KB), binary_to_term(VB)},
     ok = do_merge({Mod, Key}, HoffVal, StorageState),
     {reply, ok, State}.
 
@@ -107,7 +113,7 @@ encode_handoff_item(Name, Value) ->
     term_to_binary({Name, Value}).
 
 is_empty(State) ->
-    {db_empty(State#state.storage_state), State}.
+    {db_is_empty(State#state.storage_state), State}.
 
 delete(State) ->
     {ok, State}.
@@ -118,53 +124,82 @@ handle_coverage(_Req, _KeySpaces, _Sender, State) ->
 handle_exit(_Pid, _Reason, State) ->
     {noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(_Reason, State) ->
+    stop_storage(State#state.storage_state),
     ok.
 
 %% priv
 do_merge({Mod, Key}, RemoteVal, StorageState) ->
     Merged = case lookup({Mod, Key}, StorageState) of
-                 {Mod, LocalVal} ->
-                     Mod:merge(LocalVal, RemoteVal);
                  notfound ->
-                     RemoteVal
+                     RemoteVal;
+                 {ok, {Mod, LocalValue}} ->
+                     Mod:merge(LocalValue, RemoteVal);
+                 {error, Reason} ->
+                     {error, Reason}
              end,
-    store({{Mod, Key}, {Mod, Merged}}, StorageState).
+    case Merged of
+        {error, Reason2} ->
+            lager:error("Looking up ~p failed with ~p, on merge.", [{Mod, Key}, Reason2]),
+            ok;
+        _ ->
+            store({{Mod, Key}, {Mod, Merged}}, StorageState)
+    end.
 
 %% Priv, storage stuff
 -spec start_storage(Partition :: integer()) ->
                            StorageState :: term().
 start_storage(Partition) ->
-    Table = "data/" ++ integer_to_list(Partition),
-    {ok, Table} = dets:open_file(Table, []),
-    Table.
+    DataRoot = app_helper:get_env(riak_crdt, data_root, "data/crdt_bitcask"),
+    PartitionRoot = filename:join(DataRoot, integer_to_list(Partition)),
+    filelib:ensure_dir(PartitionRoot),
+    case bitcask:open(PartitionRoot, [read_write]) of
+        {error, Error} ->
+            {error, Error};
+        Cask ->
+            {ok, Cask}
+    end.
+
+-spec stop_storage(StorageState :: term()) ->
+                           ok.
+stop_storage(StorageState) ->
+    bitcask:close(StorageState).
 
 -spec lookup(K :: key(), StorageState :: term()) ->
-                   {atom(), term()} | notfound.
-lookup(Key, StorageState) ->
-    Reply = case dets:lookup(StorageState, Key) of
-                [{{Mod, Key}, {Mod, Val}=Val}] ->
-                    Val;
-                [] ->
-                    notfound
-            end,
-    Reply.
+                    {ok, {atom(), term()}} | notfound | {error, Reason :: term()}.
+lookup(ModKey, StorageState) ->
+    MKey = make_mkey(ModKey),
+    case bitcask:get(StorageState, MKey) of
+        {ok, Bin} ->
+            {ok, binary_to_term(Bin)};
+        not_found ->
+            notfound;
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 -spec store({K :: key(), {atom(), term()}}, StorageState :: term()) ->
                    ok.
-store(KV, StorageState) ->
-    dets:insert(StorageState, KV).
+store({Key, Value}, StorageState) ->
+    MKey = make_mkey(Key),
+    bitcask:put(StorageState, MKey, term_to_binary(Value)).
 
 -spec fold(function(), list(), StorageState :: term()) ->
                   list().
-fold(Fun, Acc0, StorageState) ->
-    F = fun({K, V}, AccIn) -> Fun(K, V, AccIn) end,
-    dets:foldl(F, Acc0, StorageState).
+fold(Fun, Acc, StorageState) ->
+    bitcask:fold(StorageState, Fun, Acc).
 
 -spec is_empty(StorageState :: term()) ->
                       boolean().
-db_empty(StorageState) ->
-    case dets:info(StorageState, no_keys) of
-        0 -> true;
-        _ -> false
-    end.
+db_is_empty(StorageState) ->
+    %% Taken, verabtim, from riak_kv_bitcask_backend.erl
+    %% Determining if a bitcask is empty requires us to find at least
+    %% one value that is NOT a tombstone. Accomplish this by doing a fold_keys
+    %% that forcibly bails on the very first key encountered.
+    F = fun(_K, _Acc0) ->
+                throw(found_one_value)
+        end,
+    (catch bitcask:fold_keys(StorageState, F, undefined)) /= found_one_value.
+
+make_mkey(ModKey) ->
+    term_to_binary(ModKey).
