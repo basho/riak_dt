@@ -189,7 +189,7 @@ store({Key, Value}, StorageState) ->
 fold(Fun, Acc, StorageState) ->
     bitcask:fold(StorageState, Fun, Acc).
 
--spec is_empty(StorageState :: term()) ->
+-spec db_is_empty(StorageState :: term()) ->
                       boolean().
 db_is_empty(StorageState) ->
     %% Taken, verabtim, from riak_kv_bitcask_backend.erl
