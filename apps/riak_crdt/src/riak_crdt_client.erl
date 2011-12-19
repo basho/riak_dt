@@ -19,13 +19,13 @@ update(Mod, Key, Args) ->
     update(Mod, Key, Args, 5000).
 update(Mod, Key, Args, Timeout) ->
     ReqID = mk_reqid(),
-    riak_crdt_update_fsm_sup:start_update_fsm(node(), [ReqID, self(), Mod, Key, Args]),
+    {ok, _} = riak_crdt_update_fsm_sup:start_update_fsm(node(), [ReqID, self(), Mod, Key, Args]),
     wait_for_reqid(ReqID, Timeout).
 value(Mod, Key) ->
     value(Mod, Key, 5000).
 value(Mod, Key, Timeout) ->
     ReqID = mk_reqid(),
-    riak_crdt_value_fsm_sup:start_value_fsm(node(), [ReqID, self(), Mod, Key]),
+    {ok, _} = riak_crdt_value_fsm_sup:start_value_fsm(node(), [ReqID, self(), Mod, Key]),
     wait_for_reqid(ReqID, Timeout).
 
 %%%===================================================================

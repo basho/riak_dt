@@ -152,7 +152,7 @@ do_merge({Mod, Key}, RemoteVal, StorageState) ->
 start_storage(Partition) ->
     DataRoot = app_helper:get_env(riak_crdt, data_root, "data/crdt_bitcask"),
     PartitionRoot = filename:join(DataRoot, integer_to_list(Partition)),
-    filelib:ensure_dir(PartitionRoot),
+    ok = filelib:ensure_dir(PartitionRoot),
     case bitcask:open(PartitionRoot, [read_write]) of
         {error, Error} ->
             {error, Error};
