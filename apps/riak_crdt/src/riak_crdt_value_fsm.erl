@@ -74,9 +74,7 @@ waiting({ReqId, Reply}, SD0=#state{from=From, num_r=NumR0, replies=Replies}) ->
             Result = value(Replies2),
             lager:debug("replying ~p~n", [Result]),
             From ! {ReqId, Result},
-            if NumR =:= 3 -> {next_state, read_repair, SD, 0};
-               true -> {next_state, await_n, SD, 5000}
-            end;
+            {next_state, await_n, SD, 5000};
         true ->
             {next_state, waiting, SD}
     end.
