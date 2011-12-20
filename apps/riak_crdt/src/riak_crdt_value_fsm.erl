@@ -116,30 +116,37 @@ terminate(_Reason, _SN, _SD) ->
 %% get a single merged value for a list of replies
 value(Replies) ->
     case merge(Replies, notfound) of
-        {Mod, Val} -> Mod:value(Val);
+        {error, Reason} -> {error, Reason};
+        {ok, {Mod, Val}} -> Mod:value(Val);
         notfound -> notfound
     end.
 
 %% merge all replies to a single CRDT
 merge([], Final) ->
     Final;
-merge([{_Idx, Mergedest}|Rest], notfound) ->
-    merge(Rest, Mergedest);
-merge([{_Idx, notfound}|Rest], Mergedest) ->
-    merge(Rest, Mergedest);
-merge([{_Idx, {Mod, Val1}}|Rest], {Mod, Val2}) ->
+merge([{_Idx, {ok, {Mod, Val1}}}|Rest], {ok, {Mod, Val2}}) ->
     Mergedest = Mod:merge(Val1, Val2),
-    merge(Rest, {Mod, Mergedest}).
+    merge(Rest, {ok, {Mod, Mergedest}});
+merge([{_Idx, _}|Rest], {ok, _}=Mergedest) ->
+    merge(Rest, Mergedest);
+merge([{_Idx, {ok, _}=Mergedest}|Rest], _) ->
+    merge(Rest, Mergedest);
+merge([{_Idx, _}|Rest], {error, Error}) ->
+    merge(Rest, {error, Error});
+merge([{_Idx, A}|Rest], _) ->
+    merge(Rest, A).
 
-needs_repair({Mod, Val1}, {Mod, Val2}) ->
+%% Does Val1 need repairing?
+needs_repair({ok, {Mod, Val1}}, {ok, {Mod, Val2}}) ->
     Mod:equal(Val1, Val2) =:= false;
-needs_repair(_, notfound) ->
-    false;
-needs_repair(_, _Merged) ->
-    true.
+needs_repair(_, {ok, _}) ->
+    true;
+needs_repair(_, _) ->
+    false.
 
-do_repair(Indexes, Mod, Key, Merged) when length(Indexes) =/= 0 ->
+do_repair(Indexes, Mod, Key, {ok, Merged}) when length(Indexes) =/= 0 ->
     lager:debug("Read repairing ~p~n", [Indexes]),
     riak_crdt_vnode:repair(Indexes, Mod, Key, Merged);
 do_repair(_, _, _, _) ->
     ok.
+
