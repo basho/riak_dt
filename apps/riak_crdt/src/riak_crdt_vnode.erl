@@ -115,8 +115,9 @@ encode_handoff_item(Name, Value) ->
 is_empty(State) ->
     {db_is_empty(State#state.storage_state), State}.
 
-delete(State) ->
-    {ok, State}.
+delete(#state{storage_state=StorageState0, partition=Partition}=State) ->
+    StorageState = drop_storage(StorageState0, Partition),
+    {ok, State#state{storage_state=StorageState}}.
 
 handle_coverage(_Req, _KeySpaces, _Sender, State) ->
     {stop, not_implemented, State}.
@@ -150,9 +151,7 @@ do_merge({Mod, Key}, RemoteVal, StorageState) ->
 -spec start_storage(Partition :: integer()) ->
                            StorageState :: term().
 start_storage(Partition) ->
-    DataRoot = app_helper:get_env(riak_crdt, data_root, "data/crdt_bitcask"),
-    PartitionRoot = filename:join(DataRoot, integer_to_list(Partition)),
-    ok = filelib:ensure_dir(PartitionRoot),
+    {ok, PartitionRoot} = get_data_dir(Partition),
     case bitcask:open(PartitionRoot, [read_write]) of
         {error, Error} ->
             {error, Error};
@@ -201,5 +200,27 @@ db_is_empty(StorageState) ->
         end,
     (catch bitcask:fold_keys(StorageState, F, undefined)) /= found_one_value.
 
+-spec drop_storage(StorageState :: term(), Partition :: integer()) ->
+                                                             reference().
+drop_storage(StorageState, Partition) ->
+    %% Close the bitcask, delete the data directory
+    ok = bitcask:close(StorageState),
+    {ok, DataDir} = get_data_dir(Partition),
+    {ok, Files} = file:list_dir(DataDir),
+    [file:delete(filename:join([DataDir, F])) || F <- Files],
+    ok = file:del_dir(DataDir),
+    {ok, Ref} = start_storage(Partition),
+    Ref.
+
+-spec make_mkey(key()) ->
+                       binary().
 make_mkey(ModKey) ->
     term_to_binary(ModKey).
+
+-spec get_data_dir(integer()) ->
+                                {ok, PartitionRoot :: string()}.
+get_data_dir(Partition) ->
+    DataRoot = app_helper:get_env(riak_crdt, data_root, "data/crdt_bitcask"),
+    PartitionRoot = filename:join(DataRoot, integer_to_list(Partition)),
+    ok = filelib:ensure_dir(PartitionRoot),
+    {ok, PartitionRoot}.
