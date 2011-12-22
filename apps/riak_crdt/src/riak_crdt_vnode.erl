@@ -26,7 +26,7 @@
 
 -type key() :: {Mod :: atom(), Key :: term()}.
 
--record(state, {partition, node, storage_state}).
+-record(state, {partition, node, storage_state, vnode_id}).
 
 -define(MASTER, riak_crdt_vnode_master).
 -define(sync(PrefList, Command, Master),
@@ -54,22 +54,23 @@ repair(PrefList, Mod, Key, CRDT) ->
 %% Vnode API
 init([Partition]) ->
     Node = node(),
+    VnodeId = {node(), Partition, erlang:now()},
     {ok, StorageState} = start_storage(Partition),
-    {ok, #state { partition=Partition, node=Node, storage_state=StorageState }}.
+    {ok, #state { partition=Partition, node=Node, storage_state=StorageState, vnode_id=VnodeId }}.
 
 handle_command({value, Mod, Key, ReqId}, Sender, #state{partition=Idx, node=Node, storage_state=StorageState}=State) ->
     lager:debug("value ~p ~p~n", [Mod, Key]),
     Reply = lookup({Mod, Key}, StorageState),
     riak_core_vnode:reply(Sender, {ReqId, {{Idx, Node}, Reply}}),
     {noreply, State};
-handle_command({update, Mod, Key, Args}, _Sender, #state{storage_state=StorageState, partition=Idx}=State) ->
+handle_command({update, Mod, Key, Args}, _Sender, #state{storage_state=StorageState,vnode_id=VnodeId}=State) ->
     lager:debug("update ~p ~p ~p~n", [Mod, Key, Args]),
     Updated = case lookup({Mod, Key}, StorageState) of
                   {ok, {Mod, Val}} ->
-                      Mod:update(Args, {node(), Idx}, Val);
+                      Mod:update(Args, VnodeId, Val);
                   notfound ->
                       %% Not found, so create locally
-                      Mod:update(Args, {node(), Idx}, Mod:new());
+                      Mod:update(Args, VnodeId, Mod:new());
                   {error, Reason} ->
                       {error, Reason}
               end,
