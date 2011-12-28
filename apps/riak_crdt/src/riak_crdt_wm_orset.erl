@@ -1,4 +1,4 @@
--module(riak_crdt_wm_pncounter).
+-module(riak_crdt_wm_orset).
 -compile([export_all]).
 
 -include_lib("webmachine/include/webmachine.hrl").
@@ -7,9 +7,9 @@
                 action :: atom(),
                 value :: term()}).
 add_routes() ->
-    webmachine_router:add_route({["counters", key], ?MODULE, [{action, value}]}),
-    webmachine_router:add_route({["counters", key, "increment"], ?MODULE, [{action, increment}]}),
-    webmachine_router:add_route({["counters", key, "decrement"], ?MODULE, [{action, decrement}]}).
+    webmachine_router:add_route({["sets", key], ?MODULE, [{action, value}]}),
+    webmachine_router:add_route({["sets", key, "add"], ?MODULE, [{action, add}]}),
+    webmachine_router:add_route({["sets", key, "remove"], ?MODULE, [{action, remove}]}).
 
 init(Props) ->
     {ok, #state{
@@ -20,13 +20,13 @@ resource_exists(RD, #state{action=Action}=State) ->
     Key = wrq:path_info(key, RD),
     case Action of
         value ->
-            case riak_crdt_client:value(riak_crdt_pncounter, Key) of
-                Count when is_integer(Count) ->
-                    {true, RD, State#state{value=Count, key=Key}};
+            case riak_crdt_client:value(riak_crdt_orset, Key) of
+                Val when is_list(Val) ->
+                    {true, RD, State#state{value=Val, key=Key}};
                 notfound ->
                     {false, RD, State#state{key=Key}};
                 Other ->
-                    lager:info("Got error when fetching counter ~w: ~w~n",[Key, Other]),
+                    lager:info("Got error when fetching set ~w: ~w~n",[Key, Other]),
                     {false, RD, State#state{key=Key}}
             end;
         _ ->
@@ -45,8 +45,8 @@ content_types_provided(RD, State) ->
     {[{"text/plain", to_text}], RD, State}.
 
 process_post(RD, #state{action=Action, key=Key}=State) ->
-    UpdateOp = get_action(Action, wrq:req_body(RD)),
-    case riak_crdt_client:update(riak_crdt_pncounter, Key, UpdateOp) of
+    UpdateOp = {Action, wrq:req_body(RD)},
+    case riak_crdt_client:update(riak_crdt_orset, Key, UpdateOp) of
         ok ->
             {true, RD, State};
         {error, timeout} ->
@@ -57,15 +57,6 @@ process_post(RD, #state{action=Action, key=Key}=State) ->
             {false, RD, State}
     end.
 
-to_text(RD, #state{value=Value}=State) ->
-    {integer_to_list(Value), RD, State}.
-
-get_action(Action, Val0)  ->
-    Val = binary_to_list(Val0),
-    case (catch list_to_integer(Val)) of
-        I when is_integer(I), I > 0 ->
-            {Action, I};
-        _ ->
-            Action
-    end.
-
+to_text(RD, #state{key=Key, value=Value}=State) ->
+    JSON = mochijson2:encode({struct, [{Key, Value}]}),
+    {JSON, RD, State}.
