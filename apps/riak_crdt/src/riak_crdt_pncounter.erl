@@ -9,12 +9,39 @@
 
 -behaviour(riak_crdt).
 
+-ifdef(EQC).
+-include_lib("eqc/include/eqc.hrl").
+-endif.
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
 %% API
 -export([new/0, value/1, update/3, merge/2, equal/2]).
+
+%% EQC API
+-ifdef(EQC).
+-export([gen_op/0, update_expected/2]).
+-endif.
+
+%% EQC generator
+-ifdef(EQC).
+gen_op() ->
+    oneof([increment, {increment, gen_pos()}, decrement, {decrement, gen_pos()} ]).
+
+gen_pos()->
+    ?LET(X, int(), 1+abs(X)).
+
+update_expected(increment, Prev) ->
+    Prev+1;
+update_expected(decrement, Prev) ->
+    Prev-1;
+update_expected({increment, By}, Prev) ->
+    Prev+By;
+update_expected({decrement, By}, Prev) ->
+    Prev-By.
+-endif.
 
 new() ->
     {riak_crdt_gcounter:new(), riak_crdt_gcounter:new()}.
@@ -28,7 +55,7 @@ update({increment, By}, Actor, {Incr, Decr}) when is_integer(By), By > 0 ->
     {riak_crdt_gcounter:update({increment, By}, Actor, Incr), Decr};
 update(decrement, Actor, {Incr, Decr}) ->
     {Incr, riak_crdt_gcounter:update(increment, Actor, Decr)};
-update({decrement, By}, Actor, {Incr, Decr}) ->
+update({decrement, By}, Actor, {Incr, Decr}) when is_integer(By), By > 0 ->
     {Incr, riak_crdt_gcounter:update({increment, By}, Actor, Decr)}.
     
 merge({Incr1, Decr1}, {Incr2, Decr2}) ->   
@@ -43,6 +70,11 @@ equal({Incr1, Decr1}, {Incr2, Decr2}) ->
 %% EUnit tests
 %% ===================================================================
 -ifdef(TEST).
+
+-ifdef(EQC).
+eqc_value_test_() ->
+    {timeout, 120, [?_assert(pncounter_statem_eqc:prop_converge(1000, ?MODULE))]}.
+-endif.
 
 new_test() ->
     ?assertEqual({[], []}, new()).
