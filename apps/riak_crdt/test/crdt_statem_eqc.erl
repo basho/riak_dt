@@ -58,20 +58,6 @@ postcondition(_S,{call,?MODULE, crdt_equals, _},Res) ->
 postcondition(_S,{call,_,_,_},_Res) ->
     true.
 
-
-dump_orset(Name, {DictA, DictB}) ->
-    io:format("dumping ~p~n", [Name]),
-    dump_dict(add, DictA),
-    dump_dict(remove, DictB).
-
-dump_dict(Name, Dict) ->
-    io:format("~p: ", [Name]),
-    [dump_set(K, dict:fetch(K, Dict)) || K <- dict:fetch_keys(Dict)].
-
-dump_set(Name, Set) ->
-    io:format("~p: -> ", [Name]),
-    io:format("~p~n", [set:to_list(Set)]).
-
 prop_converge(InitialValue, NumTests, Mod) ->
     eqc:quickcheck(eqc:numtests(NumTests, ?QC_OUT(prop_converge(InitialValue, Mod)))).
 
