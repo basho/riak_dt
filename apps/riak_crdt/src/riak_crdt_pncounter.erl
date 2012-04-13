@@ -22,7 +22,7 @@
 
 %% EQC API
 -ifdef(EQC).
--export([gen_op/0, update_expected/2]).
+-export([gen_op/0, update_expected/3, eqc_state_value/1]).
 -endif.
 
 %% EQC generator
@@ -33,14 +33,19 @@ gen_op() ->
 gen_pos()->
     ?LET(X, int(), 1+abs(X)).
 
-update_expected(increment, Prev) ->
+update_expected(_ID, increment, Prev) ->
     Prev+1;
-update_expected(decrement, Prev) ->
+update_expected(_ID, decrement, Prev) ->
     Prev-1;
-update_expected({increment, By}, Prev) ->
+update_expected(_ID, {increment, By}, Prev) ->
     Prev+By;
-update_expected({decrement, By}, Prev) ->
-    Prev-By.
+update_expected(_ID, {decrement, By}, Prev) ->
+    Prev-By;
+update_expected(_ID, _Op, Prev) ->
+    Prev.
+
+eqc_state_value(S) ->
+    S.
 -endif.
 
 new() ->
@@ -73,7 +78,7 @@ equal({Incr1, Decr1}, {Incr2, Decr2}) ->
 
 -ifdef(EQC).
 eqc_value_test_() ->
-    {timeout, 120, [?_assert(pncounter_statem_eqc:prop_converge(1000, ?MODULE))]}.
+    {timeout, 120, [?_assert(crdt_statem_eqc:prop_converge(0, 1000, ?MODULE))]}.
 -endif.
 
 new_test() ->
