@@ -13,7 +13,7 @@
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
--export([gen_op/0, update_expected/2]).
+-export([gen_op/0, update_expected/3, eqc_state_value/1]).
 -endif.
 
 -ifdef(TEST).
@@ -28,10 +28,15 @@ gen_op() ->
 gen_pos()->
     ?LET(X, int(), 1+abs(X)).
 
-update_expected(increment, Prev) ->
+update_expected(_ID, increment, Prev) ->
     Prev+1;
-update_expected({increment, By}, Prev) ->
-    Prev+By.
+update_expected(_ID, {increment, By}, Prev) ->
+    Prev+By;
+update_expected(_ID, _Op, Prev) ->
+    Prev.
+
+eqc_state_value(S) ->
+    S.
 -endif.
 
 new() ->
@@ -83,7 +88,7 @@ increment_by(Amount, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
 
 -ifdef(EQC).
 eqc_value_test_() ->
-    {timeout, 120, [?_assert(pncounter_statem_eqc:prop_converge(1000, ?MODULE))]}.
+    {timeout, 120, [?_assert(crdt_statem_eqc:prop_converge(0, 1000, ?MODULE))]}.
 -endif.
 
 new_test() ->
