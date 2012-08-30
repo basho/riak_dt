@@ -14,4 +14,3 @@ part() ->
 heal() ->
     true = rpc:call('riak_crdt2@127.0.0.1', erlang, set_cookie, ['riak_crdt2@127.0.0.1', riak_crdt]),
     true = erlang:set_cookie(node(), riak_crdt).
-    

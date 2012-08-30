@@ -62,8 +62,8 @@ update(decrement, Actor, {Incr, Decr}) ->
     {Incr, riak_crdt_gcounter:update(increment, Actor, Decr)};
 update({decrement, By}, Actor, {Incr, Decr}) when is_integer(By), By > 0 ->
     {Incr, riak_crdt_gcounter:update({increment, By}, Actor, Decr)}.
-    
-merge({Incr1, Decr1}, {Incr2, Decr2}) ->   
+
+merge({Incr1, Decr1}, {Incr2, Decr2}) ->
     MergedIncr =  riak_crdt_gcounter:merge(Incr1, Incr2),
     MergedDecr =  riak_crdt_gcounter:merge(Decr1, Decr2),
     {MergedIncr, MergedDecr}.
