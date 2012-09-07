@@ -14,7 +14,7 @@
 
 %% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
 
--module(riak_crdt_ring_event_handler).
+-module(riak_dt_node_event_handler).
 -behaviour(gen_event).
 
 %% gen_event callbacks
@@ -25,7 +25,7 @@
 init([]) ->
     {ok, #state{}}.
 
-handle_event({ring_update, _Ring}, State) ->
+handle_event({service_update, _Services}, State) ->
     {ok, State}.
 
 handle_call(_Event, State) ->
@@ -39,4 +39,3 @@ terminate(_Reason, _State) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
-

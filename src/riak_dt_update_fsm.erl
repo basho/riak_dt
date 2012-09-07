@@ -6,7 +6,7 @@
 %%% @end
 %%% Created : 22 Nov 2011 by Russell Brown <russelldb@basho.com>
 %%%-------------------------------------------------------------------
--module(riak_crdt_update_fsm).
+-module(riak_dt_update_fsm).
 
 -behaviour(gen_fsm).
 
@@ -52,7 +52,7 @@ init([ReqID, From, Mod, Key, Args]) ->
 prepare(timeout, SD0=#state{key=Key, from=From, mod=Mod, args=Args, req_id=ReqId}) ->
     {ok,Ring} = riak_core_ring_manager:get_my_ring(),
     DocIdx = riak_core_util:chash_key({Mod, Key}),
-    UpNodes = riak_core_node_watcher:nodes(riak_crdt),
+    UpNodes = riak_core_node_watcher:nodes(riak_dt),
     Preflist2 = riak_core_apl:get_apl_ann(DocIdx, 3, Ring, UpNodes),
     %% Check if this node is in the preference list so it can coordinate
     LocalPL = [IndexNode || {{_Index, Node} = IndexNode, _Type} <- Preflist2,
@@ -67,7 +67,7 @@ prepare(timeout, SD0=#state{key=Key, from=From, mod=Mod, args=Args, req_id=ReqId
             %% forward on to the first node
             [{{_Idx, CoordNode},_Type}|_] = Preflist2,
             lager:debug("Forward to ~p to co-ordinate~n", [CoordNode]),
-            case riak_crdt_update_fsm_sup:start_update_fsm(CoordNode, [ReqId, From, Mod, Key, Args]) of
+            case riak_dt_update_fsm_sup:start_update_fsm(CoordNode, [ReqId, From, Mod, Key, Args]) of
                 {ok, _Pid} ->
                     {stop, normal, SD0};
                 {error, Reason} ->
@@ -90,18 +90,18 @@ execute(timeout, SD0=#state{coord_pl_entry=CoordPLEntry,
                             preflist=PrefList,
                             key=Key, mod=Mod,
                             args=Args, from=From, req_id=ReqId}) ->
-    case riak_crdt_vnode:update(CoordPLEntry, Mod, Key, Args) of
+    case riak_dt_vnode:update(CoordPLEntry, Mod, Key, Args) of
         {ok, CRDT} ->
             %% ask remote nodes to merge
             PrefList2 = [{Index, Node} || {{Index, Node}=Entry, _Type} <- PrefList,
                                           Entry =/= CoordPLEntry],
-            riak_crdt_vnode:merge(PrefList2, Mod, Key, CRDT, ReqId),
+            riak_dt_vnode:merge(PrefList2, Mod, Key, CRDT, ReqId),
             {next_state, waiting_remotes, SD0#state{num_w=1}};
         Error ->
             %% send reply and bail
             From ! {ReqId, Error},
             {stop, normal, SD0}
-    end. 
+    end.
 
 %% @doc Wait for at least 1 successfull merge req to respond.
 %% TODO: What about merge errors? hrm

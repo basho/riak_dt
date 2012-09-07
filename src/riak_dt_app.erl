@@ -1,4 +1,4 @@
--module(riak_crdt_app).
+-module(riak_dt_app).
 
 -behaviour(application).
 
@@ -10,15 +10,15 @@
 %% ===================================================================
 
 start(_StartType, _StartArgs) ->
-    case riak_crdt_sup:start_link() of
+    case riak_dt_sup:start_link() of
         {ok, Pid} ->
             ok = lager:start(),
-            riak_core:register(riak_crdt, [
-                {vnode_module, riak_crdt_vnode}
+            riak_core:register(riak_dt, [
+                {vnode_module, riak_dt_vnode}
             ]),
 
-            riak_crdt_wm_pncounter:add_routes(),
-            riak_crdt_wm_orset:add_routes(),
+            riak_dt_wm_pncounter:add_routes(),
+            riak_dt_wm_orset:add_routes(),
             {ok, Pid};
         {error, Reason} ->
             {error, Reason}

@@ -1,5 +1,5 @@
-%% @doc Interface for riak_crdt-admin commands.
--module(riak_crdt_console).
+%% @doc Interface for riak_dt-admin commands.
+-module(riak_dt_console).
 -export([join/1,
          leave/1,
          remove/1,

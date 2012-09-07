@@ -1,9 +1,8 @@
 *.beam
 .eunit
 deps/*
-apps/riak_crdt/ebin
 *~
 dev/*
 doc/*
-rel/riak_crdt
+rel/riak_dt
 data/*

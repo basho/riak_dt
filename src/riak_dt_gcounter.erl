@@ -5,9 +5,9 @@
 %%% @end
 %%% Created : 12 Dec 2011 by Russell Brown <russelldb@basho.com>
 
--module(riak_crdt_gcounter).
+-module(riak_dt_gcounter).
 
--behaviour(riak_crdt).
+-behaviour(riak_dt).
 
 -export([new/0, value/1, update/3, merge/2, equal/2]).
 
@@ -159,8 +159,8 @@ usage_test() ->
     GC2_2 = update({increment, 3}, a3, GC2_1),
     GC3_1 = update(increment, a4, GC3),
     GC3_2 = update(increment, a1, GC3_1),
-    ?assertEqual([{a1, 3}, {a2, 1}, {a3, 3}, {a4, 1}], 
+    ?assertEqual([{a1, 3}, {a2, 1}, {a3, 3}, {a4, 1}],
                  lists:sort(merge(GC3_2, GC2_2))).
-    
+
 
 -endif.
