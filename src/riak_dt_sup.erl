@@ -1,4 +1,4 @@
--module(riak_crdt_sup).
+-module(riak_dt_sup).
 
 -behaviour(supervisor).
 
@@ -20,17 +20,17 @@ start_link() ->
 %% ===================================================================
 
 init(_Args) ->
-    VMaster = { riak_crdt_vnode_master,
-                {riak_core_vnode_master, start_link, [riak_crdt_vnode]},
+    VMaster = { riak_dt_vnode_master,
+                {riak_core_vnode_master, start_link, [riak_dt_vnode]},
                 permanent, 5000, worker, [riak_core_vnode_master]},
 
-    UpdateFsmSup = {riak_crdt_update_fsm_sup,
-                    {riak_crdt_update_fsm_sup, start_link, []},
-                    permanent, infinity, supervisor, [riak_crdt_update_fsm_sup]},
+    UpdateFsmSup = {riak_dt_update_fsm_sup,
+                    {riak_dt_update_fsm_sup, start_link, []},
+                    permanent, infinity, supervisor, [riak_dt_update_fsm_sup]},
 
-    ValueFsmSup = {riak_crdt_value_fsm_sup,
-                    {riak_crdt_value_fsm_sup, start_link, []},
-                    permanent, infinity, supervisor, [riak_crdt_value_fsm_sup]},
+    ValueFsmSup = {riak_dt_value_fsm_sup,
+                    {riak_dt_value_fsm_sup, start_link, []},
+                    permanent, infinity, supervisor, [riak_dt_value_fsm_sup]},
 
     { ok,
       { {one_for_one, 5, 10},

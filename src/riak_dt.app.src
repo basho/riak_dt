@@ -1,5 +1,5 @@
 %% -*- erlang -*-
-{application, riak_crdt,
+{application, riak_dt,
  [
   {description, ""},
   {vsn, "1"},
@@ -9,6 +9,6 @@
                   stdlib,
                   riak_core
                  ]},
-  {mod, { riak_crdt_app, []}},
+  {mod, { riak_dt_app, []}},
   {env, []}
  ]}.

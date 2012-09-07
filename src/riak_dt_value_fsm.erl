@@ -6,7 +6,7 @@
 %%% @end
 %%% Created : 22 Nov 2011 by Russell Brown <russelldb@basho.com>
 %%%-------------------------------------------------------------------
--module(riak_crdt_value_fsm).
+-module(riak_dt_value_fsm).
 
 -behaviour(gen_fsm).
 
@@ -51,7 +51,7 @@ init([ReqID, From, Mod, Key]) ->
 prepare(timeout, SD0=#state{mod=Mod, key=Key}) ->
     {ok,Ring} = riak_core_ring_manager:get_my_ring(),
     DocIdx = riak_core_util:chash_key({Mod, Key}),
-    UpNodes = riak_core_node_watcher:nodes(riak_crdt),
+    UpNodes = riak_core_node_watcher:nodes(riak_dt),
     Preflist2 = riak_core_apl:get_apl_ann(DocIdx, 3, Ring, UpNodes),
     Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
     SD = SD0#state{ preflist = Preflist},
@@ -60,7 +60,7 @@ prepare(timeout, SD0=#state{mod=Mod, key=Key}) ->
 %% @doc Execute the write request and then go into waiting state to
 %% verify it has meets consistency requirements.
 execute(timeout, SD0=#state{preflist=Preflist, mod=Mod, key=Key, req_id=ReqId}) ->
-    riak_crdt_vnode:value(Preflist, Mod, Key, ReqId),
+    riak_dt_vnode:value(Preflist, Mod, Key, ReqId),
     {next_state, waiting, SD0}.
 
 %% @doc Gather some responses, and merge them, do I need to check the Mod?
@@ -146,7 +146,6 @@ needs_repair(_, _) ->
 
 do_repair(Indexes, Mod, Key, {ok, Merged}) when length(Indexes) =/= 0 ->
     lager:debug("Read repairing ~p~n", [Indexes]),
-    riak_crdt_vnode:repair(Indexes, Mod, Key, Merged);
+    riak_dt_vnode:repair(Indexes, Mod, Key, Merged);
 do_repair(_, _, _, _) ->
     ok.
-

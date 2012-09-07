@@ -5,9 +5,9 @@
 %%% @end
 %%% Created : 22 Nov 2011 by Russell Brown <russelldb@basho.com>
 
--module(riak_crdt_orset).
+-module(riak_dt_orset).
 
--behaviour(riak_crdt).
+-behaviour(riak_dt).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -72,7 +72,7 @@ new() ->
 
 value({ADict, RDict}) ->
     orddict:fetch_keys(orddict:filter(fun(K, V) ->
-                                        case orddict:find(K, RDict) of 
+                                        case orddict:find(K, RDict) of
                                             {ok, RSet} ->
                                                 case
                                                     ordsets:to_list(ordsets:subtract(V, RSet)) of
@@ -90,7 +90,7 @@ update({add, Elem}, Actor, {ADict0, RDict}) ->
 update({remove, Elem}, _Actor, {ADict, RDict0}) ->
     RDict = remove_elem(orddict:find(Elem, ADict), Elem, RDict0),
     {ADict, RDict}.
-merge({ADict1, RDict1}, {ADict2, RDict2}) ->   
+merge({ADict1, RDict1}, {ADict2, RDict2}) ->
     MergedADict = merge_dicts(ADict1, ADict2),
     MergedRDict = merge_dicts(RDict1, RDict2),
     {MergedADict, MergedRDict}.

@@ -1,7 +1,7 @@
--module(riak_crdt_vnode).
+-module(riak_dt_vnode).
 -behaviour(riak_core_vnode).
 -include_lib("riak_core/include/riak_core_vnode.hrl").
--include("riak_crdt.hrl").
+-include("riak_dt.hrl").
 
 -export([start_vnode/1,
          init/1,
@@ -28,7 +28,7 @@
 
 -record(state, {partition, node, storage_state, vnode_id}).
 
--define(MASTER, riak_crdt_vnode_master).
+-define(MASTER, riak_dt_vnode_master).
 -define(sync(PrefList, Command, Master),
         riak_core_vnode_master:sync_command(PrefList, Command, Master)).
 
@@ -221,7 +221,7 @@ make_mkey(ModKey) ->
 -spec get_data_dir(integer()) ->
                                 {ok, PartitionRoot :: string()}.
 get_data_dir(Partition) ->
-    DataRoot = app_helper:get_env(riak_crdt, data_root, "data/crdt_bitcask"),
+    DataRoot = app_helper:get_env(riak_dt, data_root, "data/crdt_bitcask"),
     PartitionRoot = filename:join(DataRoot, integer_to_list(Partition)),
     ok = filelib:ensure_dir(PartitionRoot),
     {ok, PartitionRoot}.

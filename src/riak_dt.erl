@@ -5,7 +5,7 @@
 %%% @end
 %%% Created : 22 Nov 2011 by Russell Brown <russelldb@basho.com>
 
--module(riak_crdt).
+-module(riak_dt).
 
 -export([behaviour_info/1]).
 
