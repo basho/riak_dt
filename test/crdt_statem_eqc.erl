@@ -7,7 +7,7 @@
 
 -module(crdt_statem_eqc).
 
-
+-ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eqc/include/eqc_statem.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -52,7 +52,7 @@ precondition(_S,{call,_,_,_}) ->
     true.
 
 %% Postcondition, checked after command has been evaluated
-%% OBS: S is the state before next_state(S,_,<command>) 
+%% OBS: S is the state before next_state(S,_,<command>)
 postcondition(_S,{call,?MODULE, crdt_equals, _},Res) ->
     Res == true;
 postcondition(_S,{call,_,_,_},_Res) ->
@@ -104,3 +104,5 @@ sort(L) when is_list(L) ->
     lists:sort(L);
 sort(Other) ->
     Other.
+
+-endif. % EQC
