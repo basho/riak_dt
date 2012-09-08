@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_dt_wm_orset: Webmachine resource ofor OR-Set access
+%% riak_dt_wm_orset: Webmachine resource for OR-Set access
 %%
 %% Copyright (c) 2007-2012 Basho Technologies, Inc.  All Rights Reserved.
 %%
