@@ -1,11 +1,24 @@
-%%%-------------------------------------------------------------------
-%%% @author Russell Brown <russelldb@basho.com>
-%%% @copyright (C) 2011, Russell Brown
-%%% @doc
-%%% kicks off riak_dt_value_fsms on a 141 basis
-%%% @end
-%%% Created : 22 Nov 2011 by Russell Brown <russelldb@basho.com>
-%%%-------------------------------------------------------------------
+%% -------------------------------------------------------------------
+%%
+%% riak_dt_value_fsm_sup: One-for-one supervisor for per request value fsm
+%%
+%% Copyright (c) 2007-2012 Basho Technologies, Inc.  All Rights Reserved.
+%%
+%% This file is provided to you under the Apache License,
+%% Version 2.0 (the "License"); you may not use this file
+%% except in compliance with the License.  You may obtain
+%% a copy of the License at
+%%
+%%   http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing,
+%% software distributed under the License is distributed on an
+%% "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+%% KIND, either express or implied.  See the License for the
+%% specific language governing permissions and limitations
+%% under the License.
+%%
+%% -------------------------------------------------------------------
 -module(riak_dt_value_fsm_sup).
 -behaviour(supervisor).
 
