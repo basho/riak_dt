@@ -1,3 +1,4 @@
+ebin/riak_dt.app
 *.beam
 .eunit
 deps/*
