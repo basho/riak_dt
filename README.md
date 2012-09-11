@@ -3,14 +3,14 @@
 ## WHAT?
 
 Currently under initial development, riak_dt is a platform for
-convergent data types. Built on
+convergent data types. It's built on
 [riak core](https://github.com/basho/riak_core) and deployed with
-[riak](https://github.com/basho/riak). All our current work is around
-supporting fast, replicated, eventually consistent counters (though
-more data types are in the repo, and on the way.) This work is based
-on the paper
-["A Comprehensive study of Convergent and Commutative Replicated Data Types"]
-(http://hal.inria.fr/docs/00/55/55/88/PDF/techreport.pdf).  which you
+[riak](https://github.com/basho/riak). All of our current work is
+around supporting fast, replicated, eventually consistent counters
+(though more data types are in the repo, and on the way.) This work is
+based on the paper -
+[A Comprehensive study of Convergent and Commutative Replicated Data Types]
+(http://hal.inria.fr/docs/00/55/55/88/PDF/techreport.pdf) - which you
 may find an interesting read.
 
 
@@ -42,8 +42,8 @@ riak from source.
     > git checkout origin/rdb-riak-dt
     > make devrel
 
-Which should have fetched all the `riak` dependancies from github and
-compiled them, and create 4 release directories under the `dev`
+This should have fetched all the riak dependancies from github,
+compiled them, and created four release directories under the `dev`
 directory. Now start your nodes and build your cluster.
 
     > for d in dev/*; do $d/bin/riak start; done
@@ -62,7 +62,7 @@ If that worked and you see all four nodes in the ring then proceed to…
 ### Count things
 
 At the moment we only have a simple HTTP API for counters. There is no
-explicit create operation for a counter. If you increment a counter
+explicit `create` operation for a counter. If you increment a counter
 that doesn't exist it will be created for you.
 
 Create / increment a counter named `a`:
@@ -78,7 +78,7 @@ Increment by a specific amount:
     curl -X POST localhost:8094/counters/a/increment -d"10"
     curl localhost:809[1-4]/counters/a
 
-You can decrement a counter too:
+You can decrement a counter, too:
 
     curl -X POST localhost:8092/counters/a/decrement
     curl localhost:809[1-4]/counters/a
