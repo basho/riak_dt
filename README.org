@@ -1,2 +1,0 @@
-* Riak Crdt
-This is a proof of concept Riak Core application for storing CRDTs.
