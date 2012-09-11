@@ -227,6 +227,10 @@ do_merge({Mod, Key}, RemoteVal, StorageState) ->
     end.
 
 
+%% -------------------
+%% Storage engine
+%% -------------------
+
 %% @doc Initializes the internal storage engine where datatypes are
 %% persisted.
 -spec start_storage(Partition :: integer()) ->
@@ -239,7 +243,6 @@ start_storage(Partition) ->
         Cask ->
             {ok, Cask}
     end.
-
 
 %% @doc Stops the internal storage engine.
 -spec stop_storage(StorageState :: term()) ->
@@ -277,9 +280,9 @@ fold(Fun, Acc, StorageState) ->
 
 
 %% @doc Determines whether the persistent storage is empty.
--spec db_is_empty(StorageState :: term()) ->
-                      boolean().
+-spec db_is_empty(StorageState :: term()) -> boolean().
 db_is_empty(StorageState) ->
+
     %% Taken, verabtim, from riak_kv_bitcask_backend.erl
     %% Determining if a bitcask is empty requires us to find at least
     %% one value that is NOT a tombstone. Accomplish this by doing a fold_keys
@@ -314,7 +317,7 @@ make_mkey(ModKey) ->
 -spec get_data_dir(integer()) ->
                                 {ok, PartitionRoot :: string()}.
 get_data_dir(Partition) ->
-    DataRoot = app_helper:get_env(riak_dt, data_root, "data/crdt_bitcask"),
+    DataRoot = app_helper:get_env(riak_dt, data_root, "data/riak_dt_bitcask"),
     PartitionRoot = filename:join(DataRoot, integer_to_list(Partition)),
     ok = filelib:ensure_dir(PartitionRoot),
     {ok, PartitionRoot}.
