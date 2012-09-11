@@ -52,7 +52,7 @@
                    {update, Mod::module(), Key::term(), Args::list()} |
                    {merge, Mod::module(), Key::term(), {Mod::module(), RemoteVal::term()}, ReqId::term()}.
 
--record(state, {partition, node, storage_state, vnode_id}).
+-record(state, {partition, node, storage_state, vnode_id, data_dir, storage_opts}).
 
 -define(MASTER, riak_dt_vnode_master).
 -define(sync(PrefList, Command, Master),
@@ -96,8 +96,14 @@ repair(PrefList, Mod, Key, CRDT) ->
 init([Partition]) ->
     Node = node(),
     VnodeId = {node(), Partition, erlang:now()},
-    {ok, StorageState} = start_storage(Partition),
-    {ok, #state { partition=Partition, node=Node, storage_state=StorageState, vnode_id=VnodeId }}.
+    StorageOptions = application:get_all_env(bitcask),
+    {ok, DataDir, StorageState} = start_storage(Partition, StorageOptions),
+    {ok, #state { partition=Partition,
+                  node=Node,
+                  storage_state=StorageState,
+                  vnode_id=VnodeId,
+                  data_dir=DataDir,
+                  storage_opts=StorageOptions}}.
 
 %% @doc Handles incoming vnode commands.
 -spec handle_command(command(), sender(), #state{}) -> {noreply, #state{}} | {reply, term(), #state{}}.
@@ -129,6 +135,11 @@ handle_command({merge, Mod, Key, {Mod, RemoteVal}, ReqId}, Sender, #state{storag
     lager:debug("Merge ~p ~p~n", [Mod, Key]),
     Reply = do_merge({Mod, Key}, RemoteVal, StorageState),
     riak_core_vnode:reply(Sender, {ReqId, Reply}),
+    {noreply, State};
+handle_command(merge_check, _Sender, #state{storage_state=StorageState,
+                                            data_dir=DataDir,
+                                            storage_opts=StorageOptions}=State) ->
+    maybe_merge(DataDir, StorageOptions, StorageState),
     {noreply, State};
 handle_command(Message, _Sender, State) ->
     ?PRINT({unhandled_command, Message}),
@@ -177,8 +188,8 @@ is_empty(State) ->
 
 %% @doc Instructs the vnode to delete all its stored data.
 -spec delete(#state{}) -> {ok, #state{}}.
-delete(#state{storage_state=StorageState0, partition=Partition}=State) ->
-    StorageState = drop_storage(StorageState0, Partition),
+delete(#state{storage_state=StorageState0, partition=Partition, storage_opts=Opts}=State) ->
+    StorageState = drop_storage(StorageState0, Opts, Partition),
     {ok, State#state{storage_state=StorageState}}.
 
 %% @doc Handles coverage requests.
@@ -233,15 +244,17 @@ do_merge({Mod, Key}, RemoteVal, StorageState) ->
 
 %% @doc Initializes the internal storage engine where datatypes are
 %% persisted.
--spec start_storage(Partition :: integer()) ->
+-spec start_storage(Partition :: integer(), Options::list()) ->
                            StorageState :: term().
-start_storage(Partition) ->
+start_storage(Partition, Options0) ->
     {ok, PartitionRoot} = get_data_dir(Partition),
-    case bitcask:open(PartitionRoot, [read_write]) of
+    Options = set_mode(read_write, Options0),
+    case bitcask:open(PartitionRoot, Options) of
         {error, Error} ->
             {error, Error};
         Cask ->
-            {ok, Cask}
+            schedule_merge(),
+            {ok, PartitionRoot, Cask}
     end.
 
 %% @doc Stops the internal storage engine.
@@ -280,7 +293,7 @@ fold(Fun, Acc, StorageState) ->
 
 
 %% @doc Determines whether the persistent storage is empty.
--spec db_is_empty(StorageState :: term()) -> boolean().
+-spec db_is_empty(term()) -> boolean().
 db_is_empty(StorageState) ->
 
     %% Taken, verabtim, from riak_kv_bitcask_backend.erl
@@ -294,16 +307,15 @@ db_is_empty(StorageState) ->
 
 
 %% @doc Drops the persistent storage, leaving no trace.
--spec drop_storage(StorageState :: term(), Partition :: integer()) ->
-                                                             reference().
-drop_storage(StorageState, Partition) ->
+-spec drop_storage(term(),list(),integer()) -> reference().
+drop_storage(StorageState, StorageOptions, Partition) ->
     %% Close the bitcask, delete the data directory
     ok = bitcask:close(StorageState),
     {ok, DataDir} = get_data_dir(Partition),
     {ok, Files} = file:list_dir(DataDir),
     [file:delete(filename:join([DataDir, F])) || F <- Files],
     ok = file:del_dir(DataDir),
-    {ok, Ref} = start_storage(Partition),
+    {ok, Ref} = start_storage(Partition, StorageOptions),
     Ref.
 
 
@@ -321,3 +333,31 @@ get_data_dir(Partition) ->
     PartitionRoot = filename:join(DataRoot, integer_to_list(Partition)),
     ok = filelib:ensure_dir(PartitionRoot),
     {ok, PartitionRoot}.
+
+
+%% @doc Schedules a merge check and enqueue for a point in the future.
+-spec schedule_merge() -> reference().
+schedule_merge() ->
+    riak_core_vnode:send_command_after(timer:minutes(3), merge_check).
+
+%% @doc Checks whether a merge is necessary and enqueues it.
+-spec maybe_merge(string(), list(), term()) -> ok.
+maybe_merge(Root, Options, StorageState) ->
+    case bitcask:needs_merge(StorageState) of
+        {true, Files} ->
+            bitcask_merge_worker:merge(Root, Options, Files);
+        false ->
+            ok
+    end,
+    schedule_merge(),
+    ok.
+
+%% @doc Sets the R/W mode, overriding any existing value and returning
+%% a new configuration list.
+-spec set_mode(read_only | read_write, list()) -> list().
+set_mode(read_only, Config) ->
+    Config1 = lists:keystore(read_only, 1, Config, {read_only, true}),
+    lists:keydelete(read_write, 1, Config1);
+set_mode(read_write, Config) ->
+    Config1 = lists:keystore(read_write, 1, Config, {read_write, true}),
+    lists:keydelete(read_only, 1, Config1).
