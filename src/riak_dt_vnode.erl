@@ -76,7 +76,7 @@ repair(PrefList, Mod, Key, CRDT) ->
 %% Vnode API
 init([Partition]) ->
     Node = node(),
-    VnodeId = {node(), Partition, erlang:now()},
+    VnodeId = uuid:v4(),
     {ok, StorageState} = start_storage(Partition),
     {ok, #state { partition=Partition, node=Node, storage_state=StorageState, vnode_id=VnodeId }}.
 
