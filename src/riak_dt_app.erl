@@ -34,7 +34,6 @@
 start(_StartType, _StartArgs) ->
     case riak_dt_sup:start_link() of
         {ok, Pid} ->
-            ok = lager:start(),
             riak_core:register(riak_dt, [
                 {vnode_module, riak_dt_vnode}
             ]),
