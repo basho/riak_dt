@@ -8,6 +8,7 @@
                   kernel,
                   stdlib,
                   lager,
+                  bitcask,
                   webmachine,
                   riak_core
                  ]},
