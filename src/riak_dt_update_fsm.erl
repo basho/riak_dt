@@ -40,7 +40,7 @@
                 args = undefined :: term() | undefined,
                 mod :: atom(),
                 preflist :: riak_core_apl:preflist2(),
-                coord_pl_entry :: {integer(), atom()},
+                coord_pl_entry :: {integer(), node()},
                 num_w = 0 :: non_neg_integer()}).
 
 %%%===================================================================
@@ -71,12 +71,21 @@ prepare(timeout, SD0=#state{key=Key, from=From, mod=Mod, args=Args, req_id=ReqId
     %% Check if this node is in the preference list so it can coordinate
     LocalPL = [IndexNode || {{_Index, Node} = IndexNode, _Type} <- Preflist2,
                             Node == node()],
-    case {Preflist2, LocalPL =:= []} of
-        {[], _} ->
-            %% Empty preflist
+    Primaries = [IndexNode || {IndexNode, primary} <- Preflist2 ],
+    case {Primaries, Preflist2, LocalPL =:= []} of
+        {_, [], _} ->
+            %% Empty preflist, no replicas available
             From ! {ReqId, {error, all_nodes_down}},
             {stop, error, SD0};
-        {_, true} ->
+        {[], _, _} ->
+            %% There must be at least one primary in the preflist so
+            %% we can reduce garbage accretion resulting from many
+            %% vnodes being involved in writes. This is a separate
+            %% constraint from the local node being in the preflist.
+            %% Ideally, we forward to a primary.
+            From ! {ReqId, {error, no_primaries}},
+            {stop, error, SD0};
+        {_, _, true} ->
             %% This node is not in the preference list
             %% forward on to the first node
             [{{_Idx, CoordNode},_Type}|_] = Preflist2,
@@ -127,7 +136,7 @@ waiting_remotes({ReqId, ok}, SD0=#state{from=From, num_w=NumW0}) ->
             From ! {ReqId, ok},
             {stop, normal, SD};
         true ->
-            {next_state, waiting, SD}
+            {next_state, waiting_remotes, SD}
     end.
 
 handle_info(_Info, _StateName, StateData) ->
