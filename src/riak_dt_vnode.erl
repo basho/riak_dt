@@ -331,7 +331,7 @@ make_mkey(ModKey) ->
 get_data_dir(Partition) ->
     DataRoot = app_helper:get_env(riak_dt, data_root, "data/riak_dt_bitcask"),
     PartitionRoot = filename:join(DataRoot, integer_to_list(Partition)),
-    ok = filelib:ensure_dir(PartitionRoot),
+    ok = filelib:ensure_dir(filename:join(PartitionRoot, ".dummy")),
     {ok, PartitionRoot}.
 
 
