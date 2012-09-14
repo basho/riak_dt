@@ -189,8 +189,8 @@ is_empty(State) ->
 %% @doc Instructs the vnode to delete all its stored data.
 -spec delete(#state{}) -> {ok, #state{}}.
 delete(#state{storage_state=StorageState0, partition=Partition, storage_opts=Opts}=State) ->
-    StorageState = drop_storage(StorageState0, Opts, Partition),
-    {ok, State#state{storage_state=StorageState}}.
+    {ok, DataDir, StorageState} = drop_storage(StorageState0, Opts, Partition),
+    {ok, State#state{storage_state=StorageState, data_dir=DataDir}}.
 
 %% @doc Handles coverage requests.
 -spec handle_coverage(vnode_req(), [{partition(), [partition()]}], sender(), #state{}) ->
@@ -315,9 +315,7 @@ drop_storage(StorageState, StorageOptions, Partition) ->
     {ok, Files} = file:list_dir(DataDir),
     [file:delete(filename:join([DataDir, F])) || F <- Files],
     ok = file:del_dir(DataDir),
-    {ok, Ref} = start_storage(Partition, StorageOptions),
-    Ref.
-
+    start_storage(Partition, StorageOptions).
 
 %% @doc Creates a key appropriate for use in the persistent storage engine.
 -spec make_mkey(key()) -> binary().
