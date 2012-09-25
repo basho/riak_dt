@@ -95,6 +95,7 @@ repair(PrefList, Mod, Key, CRDT) ->
 -spec init([partition()]) -> {ok, #state{}}.
 init([Partition]) ->
     Node = node(),
+    random:seed(erlang:now()), %% In this case we _DO_ want monotonicity
     VnodeId = uuid:v4(),
     StorageOptions = application:get_all_env(bitcask),
     {ok, DataDir, StorageState} = start_storage(Partition, StorageOptions),
