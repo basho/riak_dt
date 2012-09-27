@@ -42,7 +42,7 @@
 
 %% DT API
 -export([value/4,
-         update/4,
+         update/5,
          merge/5,
          repair/4]).
 
@@ -52,11 +52,9 @@
                    {update, Mod::module(), Key::term(), Args::list()} |
                    {merge, Mod::module(), Key::term(), {Mod::module(), RemoteVal::term()}, ReqId::term()}.
 
--record(state, {partition, node, storage_state, vnode_id, data_dir, storage_opts}).
-
 -define(MASTER, riak_dt_vnode_master).
--define(sync(PrefList, Command, Master),
-        riak_core_vnode_master:sync_command(PrefList, Command, Master)).
+
+-record(state, {partition, node, storage_state, vnode_id, data_dir, storage_opts}).
 
 %% @doc Starts or retrieves the pid of the riak_dt_vnode for the given
 %% partition index.
@@ -71,9 +69,9 @@ value(PrefList, Mod, Key, ReqId) ->
     riak_core_vnode_master:command(PrefList, {value, Mod, Key, ReqId}, {fsm, undefined, self()}, ?MASTER).
 
 %% @doc Updates the value of the specified data type on this index.
--spec update(partition(), module(), term(), term()) -> ok.
-update(IdxNode, Mod, Key, Args) ->
-    ?sync(IdxNode, {update, Mod, Key, Args}, ?MASTER).
+-spec update(partition(), module(), term(), term(), pos_integer() | infinity) -> ok.
+update(IdxNode, Mod, Key, Args, Timeout) ->
+    riak_core_vnode_master:sync_command(IdxNode, {update, Mod, Key, Args}, ?MASTER, Timeout).
 
 %% @doc Sends a state to the indexes in the preflist to merge with
 %% their local states.
@@ -108,12 +106,10 @@ init([Partition]) ->
 %% @doc Handles incoming vnode commands.
 -spec handle_command(command(), sender(), #state{}) -> {noreply, #state{}} | {reply, term(), #state{}}.
 handle_command({value, Mod, Key, ReqId}, Sender, #state{partition=Idx, node=Node, storage_state=StorageState}=State) ->
-    lager:debug("value ~p ~p~n", [Mod, Key]),
     Reply = lookup({Mod, Key}, StorageState),
     riak_core_vnode:reply(Sender, {ReqId, {{Idx, Node}, Reply}}),
     {noreply, State};
 handle_command({update, Mod, Key, Args}, _Sender, #state{storage_state=StorageState,vnode_id=VnodeId}=State) ->
-    lager:debug("update ~p ~p ~p~n", [Mod, Key, Args]),
     Updated = case lookup({Mod, Key}, StorageState) of
                   {ok, {Mod, Val}} ->
                       Mod:update(Args, VnodeId, Val);
@@ -132,7 +128,6 @@ handle_command({update, Mod, Key, Args}, _Sender, #state{storage_state=StorageSt
             {reply, {ok, {Mod, Updated}}, State}
     end;
 handle_command({merge, Mod, Key, {Mod, RemoteVal}, ReqId}, Sender, #state{storage_state=StorageState}=State) ->
-    lager:debug("Merge ~p ~p~n", [Mod, Key]),
     Reply = do_merge({Mod, Key}, RemoteVal, StorageState),
     riak_core_vnode:reply(Sender, {ReqId, Reply}),
     {noreply, State};
