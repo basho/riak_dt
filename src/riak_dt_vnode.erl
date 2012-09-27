@@ -42,7 +42,7 @@
 
 %% DT API
 -export([value/4,
-         update/4,
+         update/5,
          merge/5,
          repair/4]).
 
@@ -60,8 +60,6 @@
           handoff_target :: node()}).
 
 -define(MASTER, riak_dt_vnode_master).
--define(sync(PrefList, Command, Master),
-        riak_core_vnode_master:sync_command(PrefList, Command, Master)).
 
 %% @doc Starts or retrieves the pid of the riak_dt_vnode for the given
 %% partition index.
@@ -76,9 +74,9 @@ value(PrefList, Mod, Key, ReqId) ->
     riak_core_vnode_master:command(PrefList, {value, Mod, Key, ReqId}, {fsm, undefined, self()}, ?MASTER).
 
 %% @doc Updates the value of the specified data type on this index.
--spec update(partition(), module(), term(), term()) -> ok.
-update(IdxNode, Mod, Key, Args) ->
-    ?sync(IdxNode, {update, Mod, Key, Args}, ?MASTER).
+-spec update(partition(), module(), term(), term(), pos_integer() | infinity) -> ok.
+update(IdxNode, Mod, Key, Args, Timeout) ->
+    riak_core_vnode_master:sync_command(IdxNode, {update, Mod, Key, Args}, ?MASTER, Timeout).
 
 %% @doc Sends a state to the indexes in the preflist to merge with
 %% their local states.

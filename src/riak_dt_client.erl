@@ -23,7 +23,6 @@
 %% @doc Interface into the CRDT application.
 -module(riak_dt_client).
 -include("riak_dt.hrl").
--include_lib("riak_core/include/riak_core_vnode.hrl").
 
 -export([
          update/3,
@@ -32,22 +31,24 @@
          value/3
         ]).
 
+-define(REQ_TIMEOUT, 60000). %% default to a minute
+
 %%%===================================================================
 %%% API
 %%%===================================================================
 
 %% @doc Tell the crdt at key to update itself with Args.
 update(Mod, Key, Args) ->
-    update(Mod, Key, Args, 5000).
+    update(Mod, Key, Args, ?REQ_TIMEOUT).
 update(Mod, Key, Args, Timeout) ->
     ReqID = mk_reqid(),
-    {ok, _} = riak_dt_update_fsm_sup:start_update_fsm(node(), [ReqID, self(), Mod, Key, Args]),
+    {ok, _} = riak_dt_update_fsm_sup:start_update_fsm(node(), [ReqID, self(), Mod, Key, Args, Timeout]),
     wait_for_reqid(ReqID, Timeout).
 value(Mod, Key) ->
-    value(Mod, Key, 5000).
+    value(Mod, Key, ?REQ_TIMEOUT).
 value(Mod, Key, Timeout) ->
     ReqID = mk_reqid(),
-    {ok, _} = riak_dt_value_fsm_sup:start_value_fsm(node(), [ReqID, self(), Mod, Key]),
+    {ok, _} = riak_dt_value_fsm_sup:start_value_fsm(node(), [ReqID, self(), Mod, Key, Timeout]),
     wait_for_reqid(ReqID, Timeout).
 
 %%%===================================================================
@@ -55,14 +56,16 @@ value(Mod, Key, Timeout) ->
 %%%===================================================================
 mk_reqid() -> erlang:phash2(erlang:now()).
 
-wait_for_reqid(ReqID, Timeout) ->
+wait_for_reqid(ReqID, Timeout0) ->
+    %% give the fsm 100ms to reply before we cut it off
+    Timeout = if is_integer(Timeout0) ->
+            Timeout0 + 100;
+                 true -> Timeout0
+              end,
     receive
-        {ReqID, ok} -> ok;
-        {ReqID, ok, Val} -> {ok, Val};
-        {ReqID, Error} -> Error;
-        Other ->
-            lager:error("Received unexpected message! ~w~n", [Other]),
-            Other
+        {ReqID, Response} -> Response
     after Timeout ->
+            %% Do we need to do something to drain messages on the queue,
+            %% if the FSM replies after we timeout?
 	    {error, timeout}
     end.
