@@ -48,11 +48,16 @@
 
 -type key() :: {Mod :: atom(), Key :: term()}.
 
--type command() :: {value, Mod::module(), Key::term(), ReqId::term()} |
-                   {update, Mod::module(), Key::term(), Args::list()} |
-                   {merge, Mod::module(), Key::term(), {Mod::module(), RemoteVal::term()}, ReqId::term()}.
+-type command() :: ?VALUE_REQ{} | ?UPDATE_REQ{} | ?MERGE_REQ{}.
 
--record(state, {partition, node, storage_state, vnode_id, data_dir, storage_opts}).
+-record(state, {
+          partition :: partition(),
+          node :: node(),
+          storage_state :: term(),
+          vnode_id :: binary(),
+          data_dir :: file:filename(),
+          storage_opts :: [ term() ],
+          handoff_target :: node()}).
 
 -define(MASTER, riak_dt_vnode_master).
 -define(sync(PrefList, Command, Master),
@@ -99,21 +104,33 @@ init([Partition]) ->
     VnodeId = uuid:v4(),
     StorageOptions = application:get_all_env(bitcask),
     {ok, DataDir, StorageState} = start_storage(Partition, StorageOptions),
+    PoolSize = app_helper:get_env(riak_dt, worker_pool_size, 10),
     {ok, #state { partition=Partition,
                   node=Node,
                   storage_state=StorageState,
                   vnode_id=VnodeId,
                   data_dir=DataDir,
-                  storage_opts=StorageOptions}}.
+                  storage_opts=StorageOptions},
+     [{pool, riak_dt_vnode_worker, PoolSize, []}]
+    }.
 
 %% @doc Handles incoming vnode commands.
--spec handle_command(command(), sender(), #state{}) -> {noreply, #state{}} | {reply, term(), #state{}}.
-handle_command({value, Mod, Key, ReqId}, Sender, #state{partition=Idx, node=Node, storage_state=StorageState}=State) ->
+-spec handle_command(command(), sender(), #state{}) ->
+                            {noreply, #state{}} | {reply, term(), #state{}}.
+
+handle_command(?VALUE_REQ{module=Mod, key=Key, req_id=ReqId}, _Sender,
+               #state{partition=Idx, node=Node, storage_state=StorageState}=State) ->
+    %% Value requests are like KV's "get" request, they return the
+    %% value of the data-structure that this vnode has stored.
     lager:debug("value ~p ~p~n", [Mod, Key]),
     Reply = lookup({Mod, Key}, StorageState),
-    riak_core_vnode:reply(Sender, {ReqId, {{Idx, Node}, Reply}}),
-    {noreply, State};
-handle_command({update, Mod, Key, Args}, _Sender, #state{storage_state=StorageState,vnode_id=VnodeId}=State) ->
+    {reply, {ReqId, {{Idx, Node}, Reply}}, State};
+
+handle_command(?UPDATE_REQ{module=Mod, key=Key, args=Args}, _Sender,
+               #state{storage_state=StorageState,vnode_id=VnodeId}=State) ->
+    %% Update requests apply the requested operation given by Args to
+    %% the locally-stored representation of the data-structure and
+    %% return the updated value to the requesting FSM.
     lager:debug("update ~p ~p ~p~n", [Mod, Key, Args]),
     Updated = case lookup({Mod, Key}, StorageState) of
                   {ok, {Mod, Val}} ->
@@ -132,40 +149,95 @@ handle_command({update, Mod, Key, Args}, _Sender, #state{storage_state=StorageSt
             store({{Mod, Key}, {Mod, Updated}}, StorageState),
             {reply, {ok, {Mod, Updated}}, State}
     end;
-handle_command({merge, Mod, Key, {Mod, RemoteVal}, ReqId}, Sender, #state{storage_state=StorageState}=State) ->
+
+handle_command(?MERGE_REQ{module=Mod, key=Key, value={Mod, RemoteVal}, req_id=ReqId},
+               _Sender, #state{storage_state=StorageState}=State) ->
+    %% Merge requests apply the state of a remote replica to the local
+    %% replica's state, using the merge function defined by the
+    %% data-structure.
     lager:debug("Merge ~p ~p~n", [Mod, Key]),
     Reply = do_merge({Mod, Key}, RemoteVal, StorageState),
-    riak_core_vnode:reply(Sender, {ReqId, Reply}),
-    {noreply, State};
+    {reply, {ReqId, Reply}, State};
+
 handle_command(merge_check, _Sender, #state{storage_state=StorageState,
                                             data_dir=DataDir,
                                             storage_opts=StorageOptions}=State) ->
+    %% This is a callback to check and possibly invoke bitcask
+    %% compaction (not to be confused with merge requests).
     maybe_merge(DataDir, StorageOptions, StorageState),
     {noreply, State};
-handle_command(Message, _Sender, State) ->
-    ?PRINT({unhandled_command, Message}),
+
+handle_command(Message, _Sender, #state{partition=P}=State) ->
+    %% Unknown commands are ignored
+    lager:error("~p:~p received unhandled command: ~p.", [?MODULE, P, Message]),
     {noreply, State}.
 
 %% @doc Handles commands while in the handoff state.
 -spec handle_handoff_command(vnode_req(), sender(), #state{}) -> {reply, term(), #state{}}.
-handle_handoff_command(?FOLD_REQ{foldfun=Fun, acc0=Acc0}, _Sender, State=#state{storage_state=StorageState}) ->
-    Acc = fold(Fun, Acc0, StorageState),
-    {reply, Acc, State}.
+handle_handoff_command(?FOLD_REQ{foldfun=Fun, acc0=Acc0}, Sender,
+                       State=#state{storage_opts=Opts, data_dir=DataDir}) ->
+    %% This should be the handoff fold for sending data to the new
+    %% owner. We perform it async using the worker pool, allowing
+    %% other requests to complete while handoff is happening. Since we
+    %% currently don't reply to folds in any other place, we don't
+    %% delegate this to handle_command.
+    {async, Work} = async_fold(Fun, Acc0, DataDir, Opts),
+    {async, {fold, Work}, Sender, State};
+
+handle_handoff_command(?UPDATE_REQ{key=Key}=Req, Sender,
+                       #state{partition=Partition,
+                              handoff_target=Target}=State) ->
+    %% Updates are sent only to primaries, so in this case we must be
+    %% in ownership handoff. One of the parties in handoff needs to
+    %% perform the update. We opt to apply the update locally, on the
+    %% current owner, and then send a merge to the future owner in
+    %% case the previous value has not been handed off yet.
+    case handle_command(Req, Sender, State) of
+        {reply, {error, _Reason}, _NS}=Reply ->
+            Reply;
+        {reply, {ok, {Mod, Updated}}, NS}=Reply ->
+            riak_core_vnode:reply(Sender, Reply),
+            riak_core_vnode_master:command({Partition, Target},
+                                           ?MERGE_REQ{module=Mod,
+                                                      key=Key,
+                                                      value={Mod, Updated}},
+                                           ignore, riak_dt_vnode_master),
+            {noreply, NS}
+    end;
+
+handle_handoff_command(?MERGE_REQ{}=Req, Sender, State) ->
+    %% While in handoff, merges are taken locally so that the local
+    %% state gets updated just-in-case, but also forwarded in case
+    %% that value has already been handed off.
+    handle_command(Req, Sender, State),
+    {forward, State};
+
+handle_handoff_command(Req, Sender, State) ->
+    %% Value requests can always be serviced by the current owner
+    %% vnode. All other requests are ignored, as they are in
+    %% handle_command.
+    handle_command(Req, Sender, State).
+
 
 %% @doc Tells the vnode that handoff is starting.
 -spec handoff_starting({partition(), node()}, #state{}) -> {true, #state{}}.
-handoff_starting(_TargetNode, State) ->
-    {true, State}.
+handoff_starting(TargetNode, State) ->
+    %% We track who we are handing off to so that we can forward local
+    %% updates as merges to the future owner.
+    {true, State#state{handoff_target=TargetNode}}.
 
 %% @doc Tells the vnode that handoff was cancelled.
 -spec handoff_cancelled(#state{}) -> {ok, #state{}}.
 handoff_cancelled(State) ->
-    {ok, State}.
+    %% We're no longer handing off, so the target node is cleared.
+    {ok, State#state{handoff_target=undefined}}.
 
 %% @doc Tells the vnode that handoff finished.
 -spec handoff_finished({partition, node()}, #state{}) -> {ok, #state{}}.
 handoff_finished(_TargetNode, State) ->
-    {ok, State}.
+    %% Handoff finished and we're about to enter the forwarding state,
+    %% so we can unset the target node.
+    {ok, State#state{handoff_target=undefined}}.
 
 %% @doc Decodes and receives a handoff value from the previous owner.
 %% For `riak_dt_vnode', the semantics of this is equivalent to a merge
@@ -287,10 +359,27 @@ store({Key, Value}, StorageState) ->
     bitcask:put(StorageState, MKey, term_to_binary(Value)).
 
 %% @doc Folds over the persistent storage.
--spec fold(function(), list(), StorageState :: term()) ->
-                  list().
-fold(Fun, Acc, StorageState) ->
-    bitcask:fold(StorageState, Fun, Acc).
+%% -spec fold(function(), list(), StorageState :: term()) ->
+%%                   list().
+%% fold(Fun, Acc, StorageState) ->
+%%     bitcask:fold(StorageState, Fun, Acc).
+
+
+%% @doc Folds over the persistent storage using the worker pool.
+async_fold(Fun, Acc, DataDir, StorageOpts) ->
+    ReadOpts = set_mode(read_only, StorageOpts),
+    Folder = fun() ->
+                     case bitcask:open(DataDir, ReadOpts) of
+                         Ref1 when is_reference(Ref1) ->
+                             try
+                                 bitcask:fold(Ref1, Fun, Acc)
+                             after
+                                 bitcask:close(Ref1)
+                             end;
+                         {error, Reason} -> {error, Reason}
+                     end
+             end,
+    {async, Folder}.
 
 
 %% @doc Determines whether the persistent storage is empty.

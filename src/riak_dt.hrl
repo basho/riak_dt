@@ -20,4 +20,31 @@
 %%
 %% -------------------------------------------------------------------
 
--define(PRINT(Var), io:format("DEBUG: ~p:~p - ~p~n~n ~p~n~n", [?MODULE, ?LINE, ??Var, Var])).
+%% Vnode Request for fetching the value of a data-structure.
+-record(value, {
+          module :: module(), %% The datatype to update
+          key    :: binary(), %% The key of the data structure
+          req_id :: pos_integer() %% A request identifier
+         }).
+
+%% Vnode Request for updating (or creating) a data-structure.
+-record(update, {
+          module :: module(), %% The datatype to update
+          key    :: binary(), %% The key of the data structure
+          args   :: [ term() ] %% Arguments to the data structure's update function, i.e. what to change
+         }).
+
+%% Vnode Request for merging a remote value into the local state for a
+%% data-structure.
+-record(merge, {
+          module :: module(), %% The datatype to update
+          key    :: binary(), %% The key of the data structure
+          value  :: {module(), term()}, %% The value from the remote replica
+          req_id :: pos_integer() %% A request identifier
+         }).
+
+%% Shorthands for request records. This will be useful at a later date
+%% when we need to deprecate internal request formats.
+-define(VALUE_REQ, #value).
+-define(UPDATE_REQ, #update).
+-define(MERGE_REQ, #merge).
