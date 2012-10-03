@@ -204,7 +204,6 @@ terminate(_Reason, State) ->
     stop_storage(State#state.storage_state),
     ok.
 
-
 %% -------------------
 %% Internal functions
 %% -------------------
