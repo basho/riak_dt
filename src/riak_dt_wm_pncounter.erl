@@ -27,7 +27,8 @@
 
 -record(state, {key :: string(),
                 action :: atom(),
-                value :: term()}).
+                value :: term(),
+                timeout :: pos_integer() | infinity | undefined}).
 add_routes() ->
     webmachine_router:add_route({["counters", key], ?MODULE, [{action, value}]}),
     webmachine_router:add_route({["counters", key, "increment"], ?MODULE, [{action, increment}]}),
@@ -39,21 +40,28 @@ init(Props) ->
       }}.
 
 resource_exists(RD, #state{action=Action}=State) ->
-    Key = wrq:path_info(key, RD),
+    Key = list_to_binary(wrq:path_info(key, RD)),
+    Timeout = wrq:get_qs_value("timeout", RD),
     case Action of
         value ->
-            case riak_dt_client:value(riak_dt_pncounter, Key) of
+            case get_value(Key, Timeout) of
                 Count when is_integer(Count) ->
                     {true, RD, State#state{value=Count, key=Key}};
                 notfound ->
                     {false, RD, State#state{key=Key}};
-                Other ->
-                    lager:info("Got error when fetching counter ~w: ~w~n",[Key, Other]),
-                    {false, RD, State#state{key=Key}}
+                {error, Reason} ->
+                    {{halt, 500}, wrq:set_resp_body(err_msg(Reason), RD), State#state{key=Key}}
             end;
         _ ->
-            {true, RD, State#state{key=Key}}
+            {true, RD, State#state{key=Key, timeout=Timeout}}
     end.
+
+get_value(Key, undefined) ->
+    riak_dt_client:value(riak_dt_pncounter, Key);
+get_value(Key, "infinity") ->
+    riak_dt_client:value(riak_dt_pncounter, Key, infinity);
+get_value(Key, Timeout) ->
+    riak_dt_client:value(riak_dt_pncounter, Key, list_to_integer(Timeout)).
 
 allowed_methods(RD, #state{action=Action} = State) ->
     case Action of
@@ -63,12 +71,15 @@ allowed_methods(RD, #state{action=Action} = State) ->
             {['POST'], RD, State}
     end.
 
+err_msg(Err) when is_atom(Err) ->
+    atom_to_binary(Err, utf8).
+
 content_types_provided(RD, State) ->
     {[{"text/plain", to_text}], RD, State}.
 
-process_post(RD, #state{action=Action, key=Key}=State) ->
+process_post(RD, #state{action=Action, key=Key, timeout=Timeout}=State) ->
     UpdateOp = get_action(Action, wrq:req_body(RD)),
-    case riak_dt_client:update(riak_dt_pncounter, Key, UpdateOp) of
+    case do_update(Key, UpdateOp, Timeout) of
         ok ->
             {true, RD, State};
         {error, timeout} ->
@@ -78,6 +89,13 @@ process_post(RD, #state{action=Action, key=Key}=State) ->
         _Other ->
             {false, RD, State}
     end.
+
+do_update(Key, UpdateOp, undefined) ->
+    riak_dt_client:update(riak_dt_pncounter, Key, UpdateOp);
+do_update(Key, UpdateOp, "infinity") ->
+    riak_dt_client:update(riak_dt_pncounter, Key, UpdateOp, infinity);
+do_update(Key, UpdateOp, Timeout) ->
+    riak_dt_client:update(riak_dt_pncounter, Key, UpdateOp, list_to_integer(Timeout)).
 
 to_text(RD, #state{value=Value}=State) ->
     {integer_to_list(Value), RD, State}.
