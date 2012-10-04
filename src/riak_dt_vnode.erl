@@ -195,13 +195,13 @@ handle_handoff_command(?UPDATE_REQ{key=Key}=Req, Sender,
     case handle_command(Req, Sender, State) of
         {reply, {error, _Reason}, _NS}=Reply ->
             Reply;
-        {reply, {ok, {Mod, Updated}}, NS}=Reply ->
+        {reply, {ok, {Mod, Updated}}=Reply, NS} ->
             riak_core_vnode:reply(Sender, Reply),
             riak_core_vnode_master:command({Partition, Target},
                                            ?MERGE_REQ{module=Mod,
                                                       key=Key,
                                                       value={Mod, Updated}},
-                                           ignore, riak_dt_vnode_master),
+                                           ignore, ?MASTER),
             {noreply, NS}
     end;
 
