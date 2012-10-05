@@ -358,13 +358,6 @@ store({Key, Value}, StorageState) ->
     MKey = make_mkey(Key),
     bitcask:put(StorageState, MKey, term_to_binary(Value)).
 
-%% @doc Folds over the persistent storage.
-%% -spec fold(function(), list(), StorageState :: term()) ->
-%%                   list().
-%% fold(Fun, Acc, StorageState) ->
-%%     bitcask:fold(StorageState, Fun, Acc).
-
-
 %% @doc Folds over the persistent storage using the worker pool.
 async_fold(Fun, Acc, DataDir, StorageOpts) ->
     ReadOpts = set_mode(read_only, StorageOpts),
