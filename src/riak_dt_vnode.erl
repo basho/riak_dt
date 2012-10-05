@@ -195,9 +195,9 @@ delete(#state{storage_state=StorageState0, partition=Partition, storage_opts=Opt
 
 %% @doc Handles coverage requests.
 -spec handle_coverage(vnode_req(), [{partition(), [partition()]}], sender(), #state{}) ->
-    {stop, not_implemented, #state{}}.
+    {reply, not_implemented, #state{}}.
 handle_coverage(_Req, _KeySpaces, _Sender, State) ->
-    {stop, not_implemented, State}.
+    {reply, not_implemented, State}.
 
 %% @doc Handles trapped exits from linked processes.
 -spec handle_exit(pid(), term(), #state{}) -> {noreply, #state{}}.
