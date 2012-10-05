@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_dt.hrl: include header file
+%% riak_dt_vnode_worker: Vnode worker for async folds
 %%
 %% Copyright (c) 2007-2012 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -19,5 +19,19 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
+-module(riak_dt_vnode_worker).
 
--define(PRINT(Var), io:format("DEBUG: ~p:~p - ~p~n~n ~p~n~n", [?MODULE, ?LINE, ??Var, Var])).
+-behaviour(riak_core_vnode_worker).
+
+-export([init_worker/3,
+         handle_work/3]).
+
+-include_lib("riak_core/include/riak_core_vnode.hrl").
+
+-record(state, {index :: partition()}).
+
+init_worker(Index, _Args, _Props) ->
+    {ok, #state{index=Index}}.
+
+handle_work({fold, FoldFun}, _Sender, State) ->
+    {reply, FoldFun(), State}.
