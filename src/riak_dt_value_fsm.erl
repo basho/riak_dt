@@ -49,8 +49,6 @@
                 coord_pl_entry :: {integer(), atom()},
                 num_r = 0 :: non_neg_integer(),
                 options = [] ::  option(),
-                fsm_timeout :: pos_integer(),
-                req_timeout :: pos_integer(),
                 trefs = [] :: [tref()],
                 send_reply = true :: boolean()}). %% should the fsm send the client a response?
 
@@ -66,26 +64,28 @@ start_link(ReqID, From, Mod, Key, Timeout) ->
 
 %% @doc Initialize the state data.
 init([ReqID, From, Mod, Key, Options]) ->
+    {ReqTimeout, FSMTimeout} = get_timeouts(Options),
+    TRefs = schedule_timeouts([{request_timeout, ReqTimeout},
+                               {fsm_timeout, FSMTimeout}]),
     SD = #state{req_id=ReqID,
                 from=From,
                 mod=Mod,
                 key=Key,
-                options = Options},
+                options = Options,
+                trefs=TRefs
+               },
     {ok, prepare, SD, 0}.
 
 %% @doc Prepare the read
-prepare(timeout, SD0=#state{mod=Mod, key=Key, options=Options}) ->
-    {ReqTimeout, FSMTimeout} = get_timeouts(Options),
+prepare(timeout, SD0=#state{mod=Mod, key=Key}) ->
     Preflist = get_preflist(Mod, Key),
-    SD = SD0#state{ preflist = Preflist, fsm_timeout=FSMTimeout, req_timeout=ReqTimeout},
+    SD = SD0#state{ preflist = Preflist},
     {next_state, execute, SD, 0}.
 
 %% @doc Execute the read request and then go into waiting state for responses
-execute(timeout, SD=#state{preflist=Preflist, mod=Mod, key=Key, req_id=ReqId,
-                           req_timeout=ReqTimeout, fsm_timeout=FSMTimeout}) ->
-    TRefs = schedule_timeouts([{request_timeout, ReqTimeout}, {fsm_timeout, FSMTimeout}]),
+execute(timeout, SD=#state{preflist=Preflist, mod=Mod, key=Key, req_id=ReqId}) ->
     riak_dt_vnode:value(Preflist, Mod, Key, ReqId),
-    {next_state, await_r, SD#state{trefs=TRefs}}.
+    {next_state, await_r, SD}.
 
 %% @doc Gather some responses, and merge them
 await_r({ReqId, Reply}, SD0=#state{req_id=ReqId, num_r=NumR0, replies=Replies}) ->
@@ -128,10 +128,6 @@ read_repair(timeout, SD=#state{mod=Mod, key=Key, replies=Replies}) ->
     {stop, normal, SD}.
 
 %% @private
-handle_info(request_timeout, StateName, StateData) ->
-    ?MODULE:StateName(request_timeout, StateData);
-handle_info(fsm_timeout, StateName, StateData) ->
-    ?MODULE:StateName(fsm_timeout, StateData);
 handle_info(_Info, _StateName, StateData) ->
     {stop,badmsg,StateData}.
 
@@ -227,10 +223,10 @@ schedule_timeouts(Timeouts) ->
 schedule_timeout(_Message, infinity) ->
     undefined;
 schedule_timeout(Message, Timeout) ->
-    erlang:send_after(Timeout, self(), Message).
+    gen_fsm:send_event_after(Timeout, Message).
 
 cancel_timeout(TRef) when is_reference(TRef) ->
-    erlang:cancel_timer(TRef);
+    gen_fsm:cancel_timer(TRef);
 cancel_timeout(_) ->
     ok.
 

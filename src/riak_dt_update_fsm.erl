@@ -63,12 +63,14 @@ start_link(ReqID, From, Mod, Key, Args, Timeout) ->
 %% @doc Initialize the state data.
 init([ReqID, From, Mod, Key, Args, Opts]) ->
     Timeout = get_timeout(Opts),
+    TRef = schedule_timeout(Timeout),
     SD = #state{req_id=ReqID,
                 from=From,
                 key=Key,
                 mod=Mod,
                 args=Args,
                 options=Opts,
+                tref=TRef,
                 timeout=Timeout},
     {ok, prepare, SD, 0}.
 
@@ -120,12 +122,10 @@ prepare(timeout, SD0=#state{key=Key, from=From, mod=Mod, args=Args,
 
 %% @doc Execute the write request and then go into waiting state to
 %% verify it meets consistency requirements.
-execute(timeout, SD0=#state{coord_pl_entry=CoordPLEntry,
+execute(timeout, SD=#state{coord_pl_entry=CoordPLEntry,
                             preflist=PrefList,
                             key=Key, mod=Mod, timeout=Timeout,
                             args=Args, req_id=ReqId}) ->
-    TRef = schedule_timeout(Timeout),
-    SD = SD0#state{tref=TRef},
     case riak_dt_vnode:update(CoordPLEntry, Mod, Key, Args, Timeout) of
         {ok, CRDT} ->
             %% ask remote nodes to merge
@@ -175,10 +175,10 @@ terminate(_Reason, _SN, #state{tref=TRef}) ->
 schedule_timeout(infinity) ->
     undefined;
 schedule_timeout(Timeout) when is_integer(Timeout) ->
-    erlang:send_after(Timeout, self(), request_timeout).
+    gen_fsm:send_event_after(Timeout, request_timeout).
 
 cancel_timeout(TRef) when is_reference(TRef) ->
-    erlang:cancel_timer(TRef);
+    gen_fsm:cancel_timer(TRef);
 cancel_timeout(_) ->
     ok.
 
