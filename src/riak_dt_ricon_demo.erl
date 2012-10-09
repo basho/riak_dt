@@ -45,8 +45,8 @@
 %%     {_GN, []} = rpc:sbcast(Cluster, riak_core_node_watcher, broadcast),
 %%     ok.
 
-%%-define(CLUSTER, ['riak@mgmt.r1s12', 'riak@mgmt.r1s13', 'riak@mgmt.r1s14', 'riak@mgmt.r1s15']).
--define(CLUSTER, ['dev1@127.0.0.1', 'dev2@127.0.0.1', 'dev3@127.0.0.1', 'dev4@127.0.0.1']).
+-define(CLUSTER, ['riak@mgmt.r1s12', 'riak@mgmt.r1s13', 'riak@mgmt.r1s14', 'riak@mgmt.r1s15']).
+%%-define(CLUSTER, ['dev1@127.0.0.1', 'dev2@127.0.0.1', 'dev3@127.0.0.1', 'dev4@127.0.0.1']).
 
 part() ->
     {P1, P2} = lists:split(2, ?CLUSTER),
