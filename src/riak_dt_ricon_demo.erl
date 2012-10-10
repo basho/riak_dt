@@ -24,27 +24,6 @@
 
 -compile(export_all).
 
-
-%% @doc partition the `P1' from `P2' nodes
-%%      note: the nodes remained connected to riak_test@local,
-%%      which is how `heal/1' can still work.
-%% partition(P1, P2) ->
-%%     OldCookie = rpc:call(hd(P1), erlang, get_cookie, []),
-%%     NewCookie = list_to_atom(lists:reverse(atom_to_list(OldCookie))),
-%%     [true = rpc:call(N, erlang, set_cookie, [N, NewCookie]) || N <- P1],
-%%     [[true = rpc:call(N, erlang, disconnect_node, [P2N]) || N <- P1] || P2N <- P2],
-%%     {NewCookie, OldCookie, P1, P2}.
-
-%% %% @doc heal the partition created by call to `partition/2'
-%% %%      `OldCookie' is the original shared cookie
-%% heal({_NewCookie, OldCookie, P1, P2}) ->
-%%     Cluster = P1 ++ P2,
-%%     % set OldCookie on P1 Nodes
-%%     [true = rpc:call(N, erlang, set_cookie, [N, OldCookie]) || N <- P1],
-%%     wait_until_connected(Cluster),
-%%     {_GN, []} = rpc:sbcast(Cluster, riak_core_node_watcher, broadcast),
-%%     ok.
-
 -define(CLUSTER, ['riak@mgmt.r1s12', 'riak@mgmt.r1s13', 'riak@mgmt.r1s14', 'riak@mgmt.r1s15']).
 %%-define(CLUSTER, ['dev1@127.0.0.1', 'dev2@127.0.0.1', 'dev3@127.0.0.1', 'dev4@127.0.0.1']).
 

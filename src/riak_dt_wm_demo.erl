@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_dt_app: OTP App file
+%% riak_dt_wm_pncounter: Webmachine resource for PN-Counter
 %%
 %% Copyright (c) 2007-2012 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -20,31 +20,25 @@
 %%
 %% -------------------------------------------------------------------
 
--module(riak_dt_app).
+-module(riak_dt_wm_demo).
+-compile([export_all]).
 
--behaviour(application).
+-include_lib("webmachine/include/webmachine.hrl").
 
-%% Application callbacks
--export([start/2, stop/1]).
+init(_Props) ->
+    {ok, []}.
 
-%% ===================================================================
-%% Application callbacks
-%% ===================================================================
+add_routes() ->
+    webmachine_router:add_route({["ricon", file], ?MODULE, []}).
 
-start(_StartType, _StartArgs) ->
-    case riak_dt_sup:start_link() of
-        {ok, Pid} ->
-            riak_core:register(riak_dt, [
-                {vnode_module, riak_dt_vnode}
-            ]),
+allowed_methods(RD, Ctx) ->
+    {['GET'], RD, Ctx}.
 
-            riak_dt_wm_pncounter:add_routes(),
-            riak_dt_wm_orset:add_routes(),
-            riak_dt_wm_demo:add_routes(),
-            {ok, Pid};
-        {error, Reason} ->
-            {error, Reason}
-    end.
+content_types_provided(RD, Ctx) ->
+    {[{"text/html", serve_file}, {"text/javascript", serve_file}], RD, Ctx}.
 
-stop(_State) ->
-    ok.
+serve_file(RD, Ctx) ->
+    File = proplists:get_value(file, dict:to_list(wrq:path_info(RD)), "index.html"),
+    lager:debug("F ~p", [File]),
+    {ok, Bin} = file:read_file(filename:join([code:priv_dir(riak_dt), "www", File])),
+    {Bin, RD, Ctx}.

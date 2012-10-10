@@ -1,0 +1,49 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+<script src="/ricon/jquery-1.8.2.js"></script>
+<script type="text/javascript">
+var t = self.setInterval(function() {
+    get_counter();}, 500);
+
+function get_counter() {
+$.get("/counters/ricon_demo", function(data) {
+    $('#counter').text(data);
+});
+}
+
+ $(document).ready(function() {
+   $("#increment").click(function() {
+     $.ajax({
+      type: 'POST',
+      data: '1',
+      url: '/counters/ricon_demo/increment',
+      success: function() { get_counter() },
+      cache:false
+   });
+  });
+});
+
+ $(document).ready(function() {
+   $("#decrement").click(function() {
+     $.ajax({
+      type: 'POST',
+      data: '1',
+      url: '/counters/ricon_demo/decrement',
+      success: function() { get_counter() },
+      cache:false
+   });
+  });
+});
+
+</script>
+</head>
+<body>
+<div id="counter">
+</div>
+<div id="controls">
+<a href="#" id="increment">Increment</a>
+<a href="#" id="decrement">decrement</a>
+</div>
+</body>
+</html>
