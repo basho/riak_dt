@@ -3,7 +3,7 @@
 -compile([export_all]).
 
 -define(HTTP_PORT, 32767).
--define(URL, "http://localhost:32767").
+-define(URL, "http://127.0.0.1:32767").
 
 setup(load) ->
     application:set_env(riak_core, http, [{"127.0.0.1", ?HTTP_PORT}]),
