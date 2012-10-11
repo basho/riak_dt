@@ -39,7 +39,7 @@ You must build the [riak_dt branch](https://github.com/basho/riak) of
 riak from source.
 
     > git clone riak
-    > git checkout origin/rdb-riak-dt
+    > git checkout origin/riak-dt
     > make devrel
 
 This should have fetched all the riak dependancies from github,
