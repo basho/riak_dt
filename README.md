@@ -67,7 +67,7 @@ that doesn't exist it will be created for you.
 
 Create / increment a counter named `a`:
 
-    curl -X POST localhost:8091/counters/a/increment
+    curl -X POST localhost:8091/counters/a -d'1'
 
 Read it from any and all nodes:
 
@@ -75,20 +75,20 @@ Read it from any and all nodes:
 
 Increment by a specific amount:
 
-    curl -X POST localhost:8094/counters/a/increment -d"10"
+    curl -X POST localhost:8094/counters/a -d'10'
     curl localhost:809[1-4]/counters/a
 
 You can decrement a counter, too:
 
-    curl -X POST localhost:8092/counters/a/decrement
+    curl -X POST localhost:8092/counters/a -d'-1'
     curl localhost:809[1-4]/counters/a
-    curl -X POST localhost:8092/counters/a/decrement -d"8"
+    curl -X POST localhost:8092/counters/a -d'-8'
     curl localhost:809[1-4]/counters/a
 
 So, `counters` is the resource prefix for all counters, and the next
-part in the path is the key for your counter (in this case
-`a`). Finally there is the action, with optional payload. `POST` to
-update, `GET` to read.
+part in the path is the key for your counter (in this case `a`).
+Finally there is the action, with payload. `POST` to update, `GET` to
+read.
 
 ## CAVEATS
 
