@@ -109,4 +109,5 @@ verify_handoff_value_local(State) ->
     ?assertMatch({reply, {0, {{42, _Node}, notfound}}, _}, Result),
     {reply, _, NS} = Result,
     ?assert(true), 
+    meck:unload(),
     NS.
