@@ -88,3 +88,41 @@ resolve_deps(App) ->
 is_otp_base_app(kernel) -> true;
 is_otp_base_app(stdlib) -> true;
 is_otp_base_app(_) -> false.
+
+new_connection(Port) ->
+    lager:debug( "connecting to 127.0.0.1:~p~n", [Port]),
+    gen_tcp:connect("127.0.0.1", Port, [binary,
+                                        {reuseaddr,true},
+                                        {active, false},
+                                        {packet, raw}], 100).
+
+wait_for_port(Port) ->
+    wait_for_port(Port, 10000).
+
+wait_for_port(Port, Timeout) when is_integer(Timeout) ->
+    lager:debug("Waiting for ~p port within timeout ~p~n", [Port, Timeout]),
+    TRef = erlang:send_after(Timeout, self(), timeout),
+    wait_for_port(Port, TRef);
+wait_for_port(Port, TRef) ->
+    Me = self(),
+    erlang:spawn_link(fun() ->
+                         case new_connection(Port) of
+                             {ok, Socket} ->
+                                 gen_tcp:close(Socket),
+                                 Me ! connected;
+                             {error, Reason} ->
+                                 Me ! {error, Reason}
+                         end
+                 end),
+    receive
+        timeout ->
+            lager:debug("Port ~p did not come up within timeout~n", [Port]),
+            {error, timeout};
+        {error, Reason} ->
+            lager:debug("Waiting for port ~p failed: ~p~n", [Port, Reason]),
+            wait_for_port(Port, TRef);
+        connected ->
+            erlang:cancel_timer(TRef),
+            lager:debug("Port ~p is up~n", [Port]),
+            ok
+    end.

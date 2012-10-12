@@ -26,24 +26,38 @@
 -include_lib("webmachine/include/webmachine.hrl").
 
 -record(state, {key :: string(),
-                action :: atom(),
                 value :: term(),
+                action :: {increment | decrement, integer()},
                 timeout :: pos_integer() | infinity | undefined}).
+
 add_routes() ->
-    webmachine_router:add_route({["counters", key], ?MODULE, [{action, value}]}),
-    webmachine_router:add_route({["counters", key, "increment"], ?MODULE, [{action, increment}]}),
-    webmachine_router:add_route({["counters", key, "decrement"], ?MODULE, [{action, decrement}]}).
+    webmachine_router:add_route({["counters", key], ?MODULE, []}).
 
-init(Props) ->
-    {ok, #state{
-       action=proplists:get_value(action, Props)
-      }}.
+init(_Props) ->
+    {ok, #state{}}.
 
-resource_exists(RD, #state{action=Action}=State) ->
+malformed_request(RD, State) ->
+    case wrq:method(RD) of
+        'POST' ->
+            case catch list_to_integer(binary_to_list(wrq:req_body(RD))) of
+                {'EXIT', _} ->
+                    {true, RD, State};
+                Change when Change < 0 ->
+                    {false, RD, State#state{action={decrement, -Change}}};
+                Change ->
+                    {false, RD, State#state{action={increment, Change}}}
+            end;
+        _ ->
+            {false, RD, State}
+    end.
+
+resource_exists(RD, State) ->
     Key = list_to_binary(wrq:path_info(key, RD)),
     Timeout = wrq:get_qs_value("timeout", RD),
-    case Action of
-        value ->
+    case wrq:method(RD) of
+        'POST' ->
+            {true, RD, State#state{key=Key, timeout=Timeout}};
+        _ ->
             case get_value(Key, Timeout) of
                 Count when is_integer(Count) ->
                     {true, RD, State#state{value=Count, key=Key}};
@@ -51,9 +65,7 @@ resource_exists(RD, #state{action=Action}=State) ->
                     {false, RD, State#state{key=Key}};
                 {error, Reason} ->
                     {{halt, 500}, wrq:set_resp_body(err_msg(Reason), RD), State#state{key=Key}}
-            end;
-        _ ->
-            {true, RD, State#state{key=Key, timeout=Timeout}}
+            end
     end.
 
 get_value(Key, undefined) ->
@@ -63,13 +75,8 @@ get_value(Key, "infinity") ->
 get_value(Key, Timeout) ->
     riak_dt_client:value(riak_dt_pncounter, Key, list_to_integer(Timeout)).
 
-allowed_methods(RD, #state{action=Action} = State) ->
-    case Action of
-        value ->
-            {['GET', 'HEAD'], RD, State};
-        _ ->
-            {['POST'], RD, State}
-    end.
+allowed_methods(RD, State) ->
+    {['GET', 'HEAD', 'POST'], RD, State}.
 
 err_msg(Err) when is_atom(Err) ->
     atom_to_binary(Err, utf8).
@@ -77,8 +84,7 @@ err_msg(Err) when is_atom(Err) ->
 content_types_provided(RD, State) ->
     {[{"text/plain", to_text}], RD, State}.
 
-process_post(RD, #state{action=Action, key=Key, timeout=Timeout}=State) ->
-    UpdateOp = get_action(Action, wrq:req_body(RD)),
+process_post(RD, #state{key=Key, action=UpdateOp, timeout=Timeout}=State) ->
     case do_update(Key, UpdateOp, Timeout) of
         ok ->
             {true, RD, State};
@@ -99,12 +105,3 @@ do_update(Key, UpdateOp, Timeout) ->
 
 to_text(RD, #state{value=Value}=State) ->
     {integer_to_list(Value), RD, State}.
-
-get_action(Action, Val0)  ->
-    Val = binary_to_list(Val0),
-    case (catch list_to_integer(Val)) of
-        I when is_integer(I), I > 0 ->
-            {Action, I};
-        _ ->
-            Action
-    end.
