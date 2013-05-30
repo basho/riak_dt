@@ -40,10 +40,10 @@
                                                         %% for vnode repsonses
 -type tref() :: reference() | undefined.
 
--record(state, {req_id :: pos_integer(),
-                from :: pid(),
+-record(state, {req_id :: pos_integer() | undefined,
+                from :: pid() | undefined,
                 mod :: atom(),
-                key :: binary(),
+                key :: binary() | undefined,
                 replies=[] :: [{integer(), term()}],
                 preflist :: riak_core_apl:preflist2(),
                 coord_pl_entry :: {integer(), atom()},
@@ -95,13 +95,13 @@ await_r({ReqId, Reply}, SD0=#state{req_id=ReqId, num_r=NumR0, replies=Replies}) 
     if
         NumR =:= 2 ->
             Result = value(Replies2),
-            client_reply(Result, SD),
+            _ = client_reply(Result, SD),
             {next_state, await_n, SD};
         true ->
             {next_state, await_r, SD}
     end;
 await_r(request_timeout, SD) ->
-    client_reply({error, timeout}, SD),
+    _ = client_reply({error, timeout}, SD),
     {next_state, await_r, SD#state{send_reply=false}};
 await_r(fsm_timeout, SD) ->
     {stop, normal, SD}.
