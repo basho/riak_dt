@@ -74,7 +74,8 @@ value(PrefList, Mod, Key, ReqId) ->
     riak_core_vnode_master:command(PrefList, {value, Mod, Key, ReqId}, {fsm, undefined, self()}, ?MASTER).
 
 %% @doc Updates the value of the specified data type on this index.
--spec update(partition(), module(), term(), term(), pos_integer() | infinity) -> ok.
+-spec update(partition(), module(), term(), term(), pos_integer() |
+             infinity) -> {ok, term()} | {error, term()}.
 update(IdxNode, Mod, Key, Args, Timeout) ->
     riak_core_vnode_master:sync_command(IdxNode, {update, Mod, Key, Args}, ?MASTER, Timeout).
 
@@ -82,23 +83,28 @@ update(IdxNode, Mod, Key, Args, Timeout) ->
 %% their local states.
 -spec merge(riak_core_apl:preflist2(), module(), term(), term(), term()) -> ok.
 merge(PrefList, Mod, Key, CRDT, ReqId) ->
-    riak_core_vnode_master:command(PrefList, {merge, Mod, Key, CRDT, ReqId}, {fsm, undefined, self()}, ?MASTER).
+    riak_core_vnode_master:command(PrefList,
+                                   {merge, Mod, Key, CRDT, ReqId},
+                                   {fsm, undefined, self()},
+                                   ?MASTER).
 
 %% @doc Sends a read-repair of a value, which amounts to a merge with
 %% no reply.
 -spec repair(riak_core_apl:preflist2(), module(), term(), term()) -> ok.
 repair(PrefList, Mod, Key, CRDT) ->
-    riak_core_vnode_master:command(PrefList, {merge, Mod, Key, CRDT, ignore}, ignore, ?MASTER).
+    riak_core_vnode_master:command(PrefList,
+                                   {merge, Mod, Key, CRDT, ignore},
+                                   ignore, ?MASTER).
 
 %% --------------------
 %% riak_core_vnode API
 %% --------------------
 
 %% @doc Initializes the riak_dt_vnode.
--spec init([partition()]) -> {ok, #state{}}.
+-spec init([partition()]) -> {ok, #state{}, list()}.
 init([Partition]) ->
     Node = node(),
-    random:seed(erlang:now()), %% In this case we _DO_ want monotonicity
+    _ = random:seed(erlang:now()), %% In this case we _DO_ want monotonicity
     VnodeId = uuid:v4(),
     StorageOptions = application:get_all_env(bitcask),
     {ok, DataDir, StorageState} = start_storage(Partition, StorageOptions),
@@ -207,14 +213,14 @@ handle_handoff_command(?MERGE_REQ{}=Req, Sender, State) ->
     %% While in handoff, merges are taken locally so that the local
     %% state gets updated just-in-case, but also forwarded in case
     %% that value has already been handed off.
-    handle_command(Req, Sender, State),
+    _ = handle_command(Req, Sender, State),
     {forward, State};
 
 handle_handoff_command(Req, Sender, State) ->
     %% Value requests can always be serviced by the current owner
     %% vnode. All other requests are ignored, as they are in
     %% handle_command.
-    handle_command(Req, Sender, State).
+    _ = handle_command(Req, Sender, State).
 
 
 %% @doc Tells the vnode that handoff is starting.
@@ -314,8 +320,8 @@ do_merge({Mod, Key}, RemoteVal, StorageState) ->
 
 %% @doc Initializes the internal storage engine where datatypes are
 %% persisted.
--spec start_storage(Partition :: integer(), Options::list()) ->
-                           StorageState :: term().
+-spec start_storage(integer(), list()) ->
+    {ok, reference()} | {error, term()}.
 start_storage(Partition, Options0) ->
     {ok, PartitionRoot} = get_data_dir(Partition),
     Options = set_mode(read_write, Options0),
@@ -387,13 +393,14 @@ db_is_empty(StorageState) ->
 
 
 %% @doc Drops the persistent storage, leaving no trace.
--spec drop_storage(term(),list(),integer()) -> reference().
+-spec drop_storage(integer(), list(), integer()) ->
+    {ok, reference()} | {error, term()}.
 drop_storage(StorageState, StorageOptions, Partition) ->
     %% Close the bitcask, delete the data directory
     ok = bitcask:close(StorageState),
     {ok, DataDir} = get_data_dir(Partition),
     {ok, Files} = file:list_dir(DataDir),
-    [file:delete(filename:join([DataDir, F])) || F <- Files],
+    _ = [file:delete(filename:join([DataDir, F])) || F <- Files],
     ok = file:del_dir(DataDir),
     start_storage(Partition, StorageOptions).
 

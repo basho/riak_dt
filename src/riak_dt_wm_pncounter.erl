@@ -25,7 +25,7 @@
 
 -include_lib("webmachine/include/webmachine.hrl").
 
--record(state, {key :: string(),
+-record(state, {key :: binary() | undefined,
                 value :: term(),
                 action :: {increment | decrement, integer()},
                 timeout :: pos_integer() | infinity | undefined}).
