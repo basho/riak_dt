@@ -88,7 +88,7 @@ prepare(timeout, SD0=#state{key=Key, from=From, mod=Mod, args=Args,
     case {Primaries, Preflist2, LocalPL =:= []} of
         {_, [], _} ->
             %% Empty preflist, no replicas available
-            client_reply({error, all_nodes_down}, SD0),
+            _ = client_reply({error, all_nodes_down}, SD0),
             {stop, error, SD0};
         {[], _, _} ->
             %% There must be at least one primary in the preflist so
@@ -96,7 +96,7 @@ prepare(timeout, SD0=#state{key=Key, from=From, mod=Mod, args=Args,
             %% vnodes being involved in writes. This is a separate
             %% constraint from the local node being in the preflist.
             %% Ideally, we forward to a primary.
-            client_reply({error, no_primaries}, SD0),
+            _ = client_reply({error, no_primaries}, SD0),
             {stop, error, SD0};
         {_, _, true} ->
             %% This node is not in the preference list
@@ -109,7 +109,7 @@ prepare(timeout, SD0=#state{key=Key, from=From, mod=Mod, args=Args,
                 {error, Reason} ->
                     lager:error("Unable to forward update for ~p to ~p - ~p\n",
                                 [Key, CoordNode, Reason]),
-                    client_reply({error, {coord_handoff_failed, Reason}}, SD0),
+                    _ = client_reply({error, {coord_handoff_failed, Reason}}, SD0),
                     {stop, error, SD0}
             end;
         _ ->
@@ -135,7 +135,7 @@ execute(timeout, SD=#state{coord_pl_entry=CoordPLEntry,
             {next_state, waiting_remotes, SD#state{num_w=1}};
         Error ->
             %% send reply and bail
-            client_reply(Error, SD),
+            _ = client_reply(Error, SD),
             {stop, normal, SD}
     end.
 
@@ -146,13 +146,13 @@ waiting_remotes({_ReqId, ok}, SD0=#state{num_w=NumW0}) ->
     SD = SD0#state{num_w=NumW},
     if
         NumW =:= 2 ->
-            client_reply(ok, SD),
+            _ = client_reply(ok, SD),
             {stop, normal, SD};
         true ->
             {next_state, waiting_remotes, SD}
     end;
 waiting_remotes(request_timeout, SD) ->
-    client_reply({error, timeout}, SD),
+    _ = client_reply({error, timeout}, SD),
     {stop, normal, SD}.
 
 handle_info(request_timeout, StateName, SD) ->
@@ -169,7 +169,7 @@ handle_sync_event(_Event, _From, _StateName, StateData) ->
 code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
 
 terminate(_Reason, _SN, #state{tref=TRef}) ->
-    cancel_timeout(TRef),
+    _ = cancel_timeout(TRef),
     ok.
 
 schedule_timeout(infinity) ->
