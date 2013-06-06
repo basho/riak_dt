@@ -8,6 +8,5 @@
                   kernel,
                   stdlib
                  ]},
-  {mod, { riak_dt_app, []}},
   {env, []}
  ]}.
