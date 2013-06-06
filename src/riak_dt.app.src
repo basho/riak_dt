@@ -6,11 +6,7 @@
   {registered, []},
   {applications, [
                   kernel,
-                  stdlib,
-                  lager,
-                  bitcask,
-                  webmachine,
-                  riak_core
+                  stdlib
                  ]},
   {mod, { riak_dt_app, []}},
   {env, []}
