@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_dt_vvorset: Another convergent, replicated, state based observe remove set
+%% riak_dt_multi: OR-Set schema based multi CRDT container
 %%
 %% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -20,7 +20,7 @@
 %%
 %% -------------------------------------------------------------------
 
--module(riak_dt_vvorset).
+-module(riak_dt_multi).
 
 -behaviour(riak_dt).
 
@@ -41,60 +41,63 @@
 -endif.
 
 new() ->
-    orddict:new().
+    {riak_dt_vvorset:new(), orddict:new()}.
 
-value(ORSet) ->
-    [K || {K, {Active, _Vclock}} <- orddict:to_list(ORSet), Active == true].
+value({ADict, RDict}) ->
+    orddict:fetch_keys(orddict:filter(fun(K, AClock) ->
+                                        case orddict:find(K, RDict) of
+                                            {ok, RClock} ->
+                                                %% The element is not in the set
+                                                %% if the remove clock descends the add clock
+                                                %% In this case descends just means equals.
+                                                (not vclock:descends(RClock, AClock));
+                                            error -> true
+                                        end
+                                end,
+                                ADict)).
 
-update({add, Elem}, Actor, ORSet) ->
-    add_elem(Actor, ORSet, Elem);
-update({remove, Elem}, _Actor, ORSet) ->
-    remove_elem(orddict:find(Elem, ORSet), Elem, ORSet).
+update({add, Elem}, Actor, {ADict0, RDict}) ->
+    ADict = add_elem(Actor, ADict0, Elem),
+    {ADict, RDict};
+update({remove, Elem}, _Actor, {ADict, RDict0}) ->
+    RDict = remove_elem(orddict:find(Elem, ADict), Elem, RDict0),
+    {ADict, RDict}.
+merge({ADict1, RDict1}, {ADict2, RDict2}) ->
+    MergedADict = merge_dicts(ADict1, ADict2),
+    MergedRDict = merge_dicts(RDict1, RDict2),
+    {MergedADict, MergedRDict}.
 
-merge(ORSet1, ORSet2) ->
-    merge_dicts(ORSet1, ORSet2).
-
-equal(ORSet1, ORSet2) ->
-    ORSet1 == ORSet2.
+equal({ADict1, RDict1}, {ADict2, RDict2}) ->
+    ADict1 == ADict2 andalso RDict1 == RDict2.
 
 %% Private
 add_elem(Actor, Dict, Elem) ->
     VC = vclock:fresh(),
-    InitialValue = {true, vclock:increment(Actor, VC)},
+    InitialValue = vclock:increment(Actor, VC),
     orddict:update(Elem, update_fun(Actor), InitialValue, Dict).
 
 update_fun(Actor) ->
-    fun({_, Vclock}) ->
-            {true, vclock:increment(Actor, Vclock)}
+    fun(Vclock) ->
+            vclock:increment(Actor, Vclock)
     end.
 
-remove_elem({ok, {true, Vclock}}, Elem, ORSet) ->
-    orddict:store(Elem, {false, Vclock}, ORSet);
-remove_elem(_, _Elem, ORSet) ->
+remove_elem({ok, Aclock}, Elem, RDict) ->
+    case orddict:find(Elem, RDict) of
+        {ok, Rclock} ->
+            orddict:store(Elem, vclock:merge([Aclock, Rclock]), RDict);
+        error ->
+            orddict:store(Elem, Aclock, RDict)
+    end;
+remove_elem(error, _Elem, RDict) ->
     %% What @TODO?
     %% Can't remove an element not in the ADict, warn??
     %% Should we add to the remove set with a fresh + actor+1 vclock?
     %% Throw an error? (seems best)
-    ORSet.
+    RDict.
 
 merge_dicts(Dict1, Dict2) ->
     %% for every key in dict1, merge its contents with dict2's content for same key
-    %% if the keys values are both active or both deleted, simply merge the clocks
-    %% if one is active and one is deleted, check that the deleted dominates the added
-    %% if so, set to that value and deleted, otherwise keep as is (no need to merge vclocks?)
-    orddict:merge(fun(_K, {Bool, V1}, {Bool, V2}) -> {Bool, vclock:merge([V1, V2])};
-                     (_K, {false, V1}, {true, V2}) -> is_active_or_removed(V1, V2);
-                     (_K, {true, V1}, {false, V2}) -> is_active_or_removed(V2, V1) end,
-                     Dict1, Dict2).
-%% @Doc determine if the entry is active or removed.
-%% First argument is a remove vclock, second is an active vclock
-is_active_or_removed(RemoveClock, AddClock) ->
-    case (not vclock:descends(RemoveClock, AddClock)) of
-        true ->
-            {true, AddClock};
-        false ->
-            {false, RemoveClock}
-    end.
+   orddict:merge(fun(_K, V1, V2) -> vclock:merge([V1, V2]) end, Dict1, Dict2).
 
 %% ===================================================================
 %% EUnit tests
