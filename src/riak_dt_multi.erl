@@ -20,6 +20,14 @@
 %%
 %% -------------------------------------------------------------------
 
+%% @Doc a multi CRDT holder.
+%% A Document-ish thing.
+%% Consists of two elements, a Schema and a value list.
+%% The schema is an OR-Set of {name, type} tuples that identify a field
+%% and it's type (type must be a CRDT module, yes, even this one.)
+%% The value list is a dict of {name, type} -> CRDT value mappings.
+%% The value list never shrinks (or can only shrink with consensus (garbage collection.)
+
 -module(riak_dt_multi).
 
 -behaviour(riak_dt).
@@ -50,6 +58,8 @@
 new() ->
     {riak_dt_vvorset:new(), orddict:new()}.
 
+%% @doc get the current set of values for this multi
+%% @TODO a way to get the value of a subset of fields.
 value({Schema, Values}) ->
     PresentFields = riak_dt_vvorset:value(Schema),
     values(PresentFields, Values).
@@ -65,6 +75,14 @@ values([{_Name, Mod}=Key | Rest], Values, Acc) ->
     Val = Mod:value(CRDT),
     values(Rest, Values, [{Key, Val} | Acc]).
 
+%% @Doc update the schema or a field in the schema.
+%% Ops is a list of one or more of the following ops:
+%% {update Key, Op} where Op is any operation supported by the CRDT mod
+%% referenced in the Key ({name, type}). The Op is applied to the value in the value list
+%% for the given key
+%% {add, field} where field is {name, type}.
+%% {remove, field} where field is {name, type}
+%% These last too are just the OR-Set operations add/remove on the schema.
 update({update, Ops}, Actor, {Schema, Values}) ->
     apply_ops(Ops, Actor, Schema, Values).
 
@@ -100,6 +118,7 @@ merge({Schema1, Values1}, {Schema2, Values2}) ->
     %% This merges _all_ values in the value list.
     %% Is that a good idea? It means merging items that maybe (long ago?!) deleted
     %% However, maybe that is good in case they get re-added.
+    %% @TODO Discuss this vs the above
     %% NewValues = orddict:merge(fun({_Name, Type}, V1, V2) -> Type:merge(V1, V2) end,
     %%                           Values1, Values2),
     {NewSchema, NewValues}.
@@ -107,9 +126,6 @@ merge({Schema1, Values1}, {Schema2, Values2}) ->
 merge_values([], _Values1, _Values2, Acc) ->
     orddict:from_list(Acc);
 merge_values([{_Name, Mod}=Key | Rest], Values1, Values2, Acc) ->
-    %% Safe fetch value from both dicts
-    %% Merge vaues
-    %% Add to acc under Key
     V1 = type_safe_fetch(Mod, orddict:find(Key, Values1)),
     V2 = type_safe_fetch(Mod, orddict:find(Key, Values2)),
     V = Mod:merge(V1, V2),
