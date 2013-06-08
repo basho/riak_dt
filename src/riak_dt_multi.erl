@@ -136,6 +136,8 @@ type_safe_fetch(_Mod, {ok, Value}) ->
 type_safe_fetch(Mod, error) ->
     Mod:new().
 
+%% @TODO compare equals on all present fields or all fields??
+%% NOTE: this fun is (probably) incorrect
 equal({Schema1, Values1}, {Schema2, Values2}) ->
     riak_dt_vvorset:equal(Schema1, Schema2)  andalso Values1 == Values2.
 
