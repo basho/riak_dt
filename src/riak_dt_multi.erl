@@ -139,7 +139,24 @@ type_safe_fetch(Mod, error) ->
 %% @TODO compare equals on all present fields or all fields??
 %% NOTE: this fun is (probably) incorrect
 equal({Schema1, Values1}, {Schema2, Values2}) ->
-    riak_dt_vvorset:equal(Schema1, Schema2)  andalso Values1 == Values2.
+    riak_dt_vvorset:equal(Schema1, Schema2)  andalso pairwise_equals(Values1, Values2).
+
+%% Note, only called when we know that 2 schema are equal.
+%% Both dicts therefore have the same set of keys.
+pairwise_equals(Values1, Values2) ->
+    short_cicuit_equals(orddict:to_list(Values1), Values2).
+
+%% Compare each value. Return false as soon as any pair are not equal.
+short_cicuit_equals([], _Values2) ->
+    true;
+short_cicuit_equals([{{_Name, Type}=Key, Val1} | Rest], Values2) ->
+    Val2 = orddict:fetch(Key, Values2),
+    case Type:equal(Val1, Val2) of
+        true ->
+            short_cicuit_equals(Rest, Values2);
+        false ->
+            false
+    end.
 
 %% ===================================================================
 %% EUnit tests
@@ -147,46 +164,46 @@ equal({Schema1, Values1}, {Schema2, Values2}) ->
 -ifdef(TEST).
 
 -ifdef(EQC).
-%% eqc_value_test_() ->
-%%     {timeout, 120, [?_assert(crdt_statem_eqc:prop_converge(init_state(), 1000, ?MODULE))]}.
+eqc_value_test_() ->
+    {timeout, 120, [?_assert(crdt_statem_eqc:prop_converge(init_state(), 1000, ?MODULE))]}.
 
-%% %% EQC generator
-%% gen_op() ->
-%%     ?LET({Add, Remove}, gen_elems(),
-%%          oneof([{add, Add}, {remove, Remove}])).
+%% EQC generator
+gen_op() ->
+    ?LET({Add, Remove}, gen_elems(),
+         oneof([{add, Add}, {remove, Remove}])).
 
-%% gen_elems() ->
-%%     ?LET(A, int(), {A, oneof([A, int()])}).
+gen_elems() ->
+    ?LET(A, int(), {A, oneof([A, int()])}).
 
-%% init_state() ->
-%%     {0, dict:new(), []}.
+init_state() ->
+    {0, dict:new(), []}.
 
-%% update_expected(ID, {add, Elem}, {Cnt0, Dict, L}) ->
-%%     Cnt = Cnt0+1,
-%%     ToAdd = {Elem, Cnt},
-%%     {A, R} = dict:fetch(ID, Dict),
-%%     {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict), [{ID, {add, Elem}}|L]};
-%% update_expected(ID, {remove, Elem}, {Cnt, Dict, L}) ->
-%%     {A, R} = dict:fetch(ID, Dict),
-%%     ToRem = [ {E, X} || {E, X} <- sets:to_list(A), E == Elem],
-%%     {Cnt, dict:store(ID, {A, sets:union(R, sets:from_list(ToRem))}, Dict), [{ID, {remove, Elem, ToRem}}|L]};
-%% update_expected(ID, {merge, SourceID}, {Cnt, Dict, L}) ->
-%%     {FA, FR} = dict:fetch(ID, Dict),
-%%     {TA, TR} = dict:fetch(SourceID, Dict),
-%%     MA = sets:union(FA, TA),
-%%     MR = sets:union(FR, TR),
-%%     {Cnt, dict:store(ID, {MA, MR}, Dict), [{ID,{merge, SourceID}}|L]};
-%% update_expected(ID, create, {Cnt, Dict, L}) ->
-%%     {Cnt, dict:store(ID, {sets:new(), sets:new()}, Dict), [{ID, create}|L]}.
+update_expected(ID, {add, Elem}, {Cnt0, Dict, L}) ->
+    Cnt = Cnt0+1,
+    ToAdd = {Elem, Cnt},
+    {A, R} = dict:fetch(ID, Dict),
+    {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict), [{ID, {add, Elem}}|L]};
+update_expected(ID, {remove, Elem}, {Cnt, Dict, L}) ->
+    {A, R} = dict:fetch(ID, Dict),
+    ToRem = [ {E, X} || {E, X} <- sets:to_list(A), E == Elem],
+    {Cnt, dict:store(ID, {A, sets:union(R, sets:from_list(ToRem))}, Dict), [{ID, {remove, Elem, ToRem}}|L]};
+update_expected(ID, {merge, SourceID}, {Cnt, Dict, L}) ->
+    {FA, FR} = dict:fetch(ID, Dict),
+    {TA, TR} = dict:fetch(SourceID, Dict),
+    MA = sets:union(FA, TA),
+    MR = sets:union(FR, TR),
+    {Cnt, dict:store(ID, {MA, MR}, Dict), [{ID,{merge, SourceID}}|L]};
+update_expected(ID, create, {Cnt, Dict, L}) ->
+    {Cnt, dict:store(ID, {sets:new(), sets:new()}, Dict), [{ID, create}|L]}.
 
-%% eqc_state_value({_Cnt, Dict, _L}) ->
-%%     {A, R} = dict:fold(fun(_K, {Add, Rem}, {AAcc, RAcc}) ->
-%%                                {sets:union(Add, AAcc), sets:union(Rem, RAcc)} end,
-%%                        {sets:new(), sets:new()},
-%%                        Dict),
-%%     Remaining = sets:subtract(A, R),
-%%     Values = [ Elem || {Elem, _X} <- sets:to_list(Remaining)],
-%%     lists:usort(Values).
+eqc_state_value({_Cnt, Dict, _L}) ->
+    {A, R} = dict:fold(fun(_K, {Add, Rem}, {AAcc, RAcc}) ->
+                               {sets:union(Add, AAcc), sets:union(Rem, RAcc)} end,
+                       {sets:new(), sets:new()},
+                       Dict),
+    Remaining = sets:subtract(A, R),
+    Values = [ Elem || {Elem, _X} <- sets:to_list(Remaining)],
+    lists:usort(Values).
 
 -endif.
 -endif.
