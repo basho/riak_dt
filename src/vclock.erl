@@ -2,7 +2,7 @@
 %%
 %% riak_core: Core Riak Application
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -32,7 +32,7 @@
 -module(vclock).
 
 -export([fresh/0,descends/2,merge/1,get_counter/2,
-	increment/2,all_nodes/1,equal/2]).
+	increment/2,all_nodes/1,equal/2, replace_actors/2, replace_actors/3]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -121,16 +121,33 @@ increment(Node, VClock) ->
 all_nodes(VClock) ->
     [X || {X, _} <- VClock].
 
--define(DAYS_FROM_GREGORIAN_BASE_TO_EPOCH, (1970*365+478)).
--define(SECONDS_FROM_GREGORIAN_BASE_TO_EPOCH,
-	(?DAYS_FROM_GREGORIAN_BASE_TO_EPOCH * 24*60*60)
-	%% == calendar:datetime_to_gregorian_seconds({{1970,1,1},{0,0,0}})
-       ).
-
 % @doc Compares two VClocks for equality.
 -spec equal(VClockA :: vclock(), VClockB :: vclock()) -> boolean().
 equal(VA,VB) ->
     lists:sort(VA) =:= lists:sort(VB).
+
+%% @doc replace actors in the vclock with those in the provided
+%% 2 tuple list, assumes the first element in the
+%% actor map is present in the clock, and the second will
+%% replace it.
+replace_actors(ActorMap, Vclock) ->
+    replace_actors(ActorMap, Vclock, 1).
+
+%% @doc replace the actors in the vclock with the actors
+%% in the provided actor map list.
+%% The element at `KeyPos` is the actor in the vclock
+%% the other element in the actor map 2 tuple replaces it.
+replace_actors(ActorMap, Vclock, KeyPos) ->
+    lists:foldl(fun({CurrActor, Cntr}, NewClock) ->
+                        Map = lists:keyfind(CurrActor, KeyPos, ActorMap),
+                        [{new_key(Map, KeyPos), Cntr} | NewClock] end,
+                [],
+                Vclock).
+
+new_key({_Old, New}, 1) ->
+    New;
+new_key({New, _Old}, 2) ->
+    New.
 
 %% ===================================================================
 %% EUnit tests

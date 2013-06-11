@@ -41,42 +41,82 @@
 -endif.
 
 new() ->
-    %% Use a list of actors, and represent the actors as ints
+    %% Use a dict of actors, and represent the actors as ints
     %% a sort of compression
-    {[], orddict:new()}.
+    {orddict:new(), orddict:new()}.
 
-value({_AL, ORSet}) ->
-    [K || {K, {Active, _Vclock}} <- orddict:to_list(ORSet), Active == 1].
+value({_Actors, Entries}) ->
+    [K || {K, {Active, _Vclock}} <- orddict:to_list(Entries), Active == 1].
 
 update({add, Elem}, Actor, ORSet) ->
     add_elem(Actor, ORSet, Elem);
-update({remove, Elem}, _Actor, ORSet) ->
-    remove_elem(orddict:find(Elem, ORSet), Elem, ORSet).
+update({remove, Elem}, _Actor, {_Actors, Entries}=ORSet) ->
+    remove_elem(orddict:find(Elem, Entries), Elem, ORSet).
 
-merge(ORSet1, ORSet2) ->
-    merge_dicts(ORSet1, ORSet2).
+merge({Actors1, Entries1}, {Actors2, Entries2}) ->
+    %% for every key in Entries1, merge its contents with Entries2's content for same key
+    %% if the keys values are both active or both deleted, simply merge the clocks
+    %% if one is active and one is deleted, check that the deleted dominates the added
+    %% if so, set to that value and deleted, otherwise keep as is (no need to merge vclocks?)
+    %% Either way we have to restructure _all_ the vclocks to reflect the merged actor ids
+    Actors = merge_actors(Actors1, Actors2),
+    {Actors, orddict:merge(fun(_K, {Bool, V1}, {Bool, V2}) ->
+                                   {Bool, vclock_merge(V1, V2, Actors1, Actors2, Actors)};
+                     (_K, {0, V1}, {1, V2}) ->
+                                   is_active_or_removed(V1, V2, Actors1, Actors2, Actors);
+                     (_K, {1, V1}, {0, V2}) ->
+                                   is_active_or_removed(V2, V1, Actors2, Actors1, Actors) end,
+                     Entries1, Entries2)}.
+
+merge_actors(Actors1, Actors2) ->
+    AL = [Actor || Actor <- orddict:fetch_keys(Actors1) ++ orddict:fetch_keys(Actors2)],
+    Sorted = lists:usort(AL),
+    {_Cnt, NewActors} = lists:foldl(fun(E, {Cnt, Dict}) ->
+                                            {Cnt+1, orddict:store(E, Cnt, Dict)} end,
+                                    {1, orddict:new()},
+                                    Sorted),
+    NewActors.
+
+vclock_merge(V10, V20, Actors1, Actors2, MergedActors) ->
+    V1 = vclock:replace_actors(orddict:to_list(Actors1), V10, 2),
+    V2 = vclock:replace_actors(orddict:to_list(Actors2), V20, 2),
+    Merged = vclock:merge([V1, V2]),
+    vclock:replace_actors(orddict:to_list(MergedActors), Merged).
+
+%% @Doc determine if the entry is active or removed.
+%% First argument is a remove vclock, second is an active vclock
+is_active_or_removed(RemoveClock0, AddClock0, RemActors, AddActors, MergedActors) ->
+    RemoveClock = vclock:replace_actors(orddict:to_list(RemActors), RemoveClock0, 2),
+    AddClock = vclock:replace_actors(orddict:to_list(AddActors), AddClock0, 2),
+    case (not vclock:descends(RemoveClock, AddClock)) of
+        true ->
+            {1, vclock:replace_actors(orddict:to_list(MergedActors), AddClock)};
+        false ->
+            {0, vclock:replace_actors(orddict:to_list(MergedActors), RemoveClock)}
+    end.
 
 equal(ORSet1, ORSet2) ->
     ORSet1 == ORSet2.
 
 %% Private
-add_elem(Actor, {AL, Dict}, Elem) ->
-    {AL1, Pos} = actor_pos(AL, Actor, 1, []),
-    InitialValue = {1, vclock:increment(Pos, vclock:fresh())},
-    {AL1, orddict:update(Elem, update_fun(Pos), InitialValue, Dict)}.
+add_elem(Actor, {Actors0, Entries}, Elem) ->
+    {Placeholder, Actors} = actor_placeholder(Actors0, Actor),
+    InitialValue = {1, vclock:increment(Placeholder, vclock:fresh())},
+    {Actors, orddict:update(Elem, update_fun(Placeholder), InitialValue, Entries)}.
 
 update_fun(Actor) ->
     fun({_, Vclock}) ->
             {1, vclock:increment(Actor, Vclock)}
     end.
 
-%% Get the index of the actor in the actor list
-actor_pos([], Actor, Elem, AL) ->
-    {AL ++ [Actor], Elem};
-actor_pos([Actor | _Rest], Actor, Elem, AL) ->
-    {AL, Elem};
-actor_pos([_NA | Rest], Actor, Elem, AL) ->
-    actor_pos(Rest, Actor, Elem+1, AL).
+actor_placeholder(Actors, Actor) ->
+    case orddict:find(Actor, Actors) of
+        {ok, Placeholder} ->
+            {Placeholder, Actors};
+        error ->
+            Placeholder = orddict:size(Actors) +1,
+            {Placeholder, orddict:store(Actor, Placeholder, Actors)}
+    end.
 
 remove_elem({ok, {1, Vclock}}, Elem, {AL, Dict}) ->
     {AL, orddict:store(Elem, {0, Vclock}, Dict)};
@@ -86,25 +126,6 @@ remove_elem(_, _Elem, ORSet) ->
     %% Should we add to the remove set with a fresh + actor+1 vclock?
     %% Throw an error? (seems best)
     ORSet.
-
-merge_dicts(Dict1, Dict2) ->
-    %% for every key in dict1, merge its contents with dict2's content for same key
-    %% if the keys values are both active or both deleted, simply merge the clocks
-    %% if one is active and one is deleted, check that the deleted dominates the added
-    %% if so, set to that value and deleted, otherwise keep as is (no need to merge vclocks?)
-    orddict:merge(fun(_K, {Bool, V1}, {Bool, V2}) -> {Bool, vclock:merge([V1, V2])};
-                     (_K, {0, V1}, {1, V2}) -> is_active_or_removed(V1, V2);
-                     (_K, {1, V1}, {0, V2}) -> is_active_or_removed(V2, V1) end,
-                     Dict1, Dict2).
-%% @Doc determine if the entry is active or removed.
-%% First argument is a remove vclock, second is an active vclock
-is_active_or_removed(RemoveClock, AddClock) ->
-    case (not vclock:descends(RemoveClock, AddClock)) of
-        true ->
-            {1, AddClock};
-        false ->
-            {0, RemoveClock}
-    end.
 
 %% ===================================================================
 %% EUnit tests
