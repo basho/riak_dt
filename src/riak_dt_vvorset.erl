@@ -41,10 +41,12 @@
 -endif.
 
 new() ->
-    orddict:new().
+    %% Use a list of actors, and represent the actors as ints
+    %% a sort of compression
+    {[], orddict:new()}.
 
-value(ORSet) ->
-    [K || {K, {Active, _Vclock}} <- orddict:to_list(ORSet), Active == true].
+value({_AL, ORSet}) ->
+    [K || {K, {Active, _Vclock}} <- orddict:to_list(ORSet), Active == 1].
 
 update({add, Elem}, Actor, ORSet) ->
     add_elem(Actor, ORSet, Elem);
@@ -58,18 +60,26 @@ equal(ORSet1, ORSet2) ->
     ORSet1 == ORSet2.
 
 %% Private
-add_elem(Actor, Dict, Elem) ->
-    VC = vclock:fresh(),
-    InitialValue = {true, vclock:increment(Actor, VC)},
-    orddict:update(Elem, update_fun(Actor), InitialValue, Dict).
+add_elem(Actor, {AL, Dict}, Elem) ->
+    {AL1, Pos} = actor_pos(AL, Actor, 1, []),
+    InitialValue = {1, vclock:increment(Pos, vclock:fresh())},
+    {AL1, orddict:update(Elem, update_fun(Pos), InitialValue, Dict)}.
 
 update_fun(Actor) ->
     fun({_, Vclock}) ->
-            {true, vclock:increment(Actor, Vclock)}
+            {1, vclock:increment(Actor, Vclock)}
     end.
 
-remove_elem({ok, {true, Vclock}}, Elem, ORSet) ->
-    orddict:store(Elem, {false, Vclock}, ORSet);
+%% Get the index of the actor in the actor list
+actor_pos([], Actor, Elem, AL) ->
+    {AL ++ [Actor], Elem};
+actor_pos([Actor | _Rest], Actor, Elem, AL) ->
+    {AL, Elem};
+actor_pos([_NA | Rest], Actor, Elem, AL) ->
+    actor_pos(Rest, Actor, Elem+1, AL).
+
+remove_elem({ok, {1, Vclock}}, Elem, {AL, Dict}) ->
+    {AL, orddict:store(Elem, {0, Vclock}, Dict)};
 remove_elem(_, _Elem, ORSet) ->
     %% What @TODO?
     %% Can't remove an element not in the ADict, warn??
@@ -83,17 +93,17 @@ merge_dicts(Dict1, Dict2) ->
     %% if one is active and one is deleted, check that the deleted dominates the added
     %% if so, set to that value and deleted, otherwise keep as is (no need to merge vclocks?)
     orddict:merge(fun(_K, {Bool, V1}, {Bool, V2}) -> {Bool, vclock:merge([V1, V2])};
-                     (_K, {false, V1}, {true, V2}) -> is_active_or_removed(V1, V2);
-                     (_K, {true, V1}, {false, V2}) -> is_active_or_removed(V2, V1) end,
+                     (_K, {0, V1}, {1, V2}) -> is_active_or_removed(V1, V2);
+                     (_K, {1, V1}, {0, V2}) -> is_active_or_removed(V2, V1) end,
                      Dict1, Dict2).
 %% @Doc determine if the entry is active or removed.
 %% First argument is a remove vclock, second is an active vclock
 is_active_or_removed(RemoveClock, AddClock) ->
     case (not vclock:descends(RemoveClock, AddClock)) of
         true ->
-            {true, AddClock};
+            {1, AddClock};
         false ->
-            {false, RemoveClock}
+            {0, RemoveClock}
     end.
 
 %% ===================================================================
