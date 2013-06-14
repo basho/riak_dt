@@ -2,7 +2,7 @@
 %%
 %% riak_dt_pncounter: A convergent, replicated, state based PN counter
 %%
-%% Copyright (c) 2007-2012 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -20,28 +20,117 @@
 %%
 %% -------------------------------------------------------------------
 
+%% @doc
+%% A PN-Counter CRDT. A PN-Counter is essentially two G-Counters: one for increments and
+%% one for decrements. The value of the counter is the difference between the value of the
+%% Positive G-Counter and the value of the Negative G-Counter.
+%%
+%% @see riak_kv_gcounter.erl
+%%
+%% @reference Marc Shapiro, Nuno Preguiça, Carlos Baquero, Marek Zawirski (2011) A comprehensive study of
+%% Convergent and Commutative Replicated Data Types. http://hal.upmc.fr/inria-00555588/
+%%
+%% @end
+
 -module(riak_dt_pncounter).
 
--behaviour(riak_dt).
+-export([new/0, new/2, value/1, update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
 
+%% EQC API
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
+-export([gen_op/0, update_expected/3, eqc_state_value/1]).
 -endif.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
-%% API
--export([new/0, value/1, update/3, merge/2, equal/2]).
+-export_type([pncounter/0, pncounter_op/0]).
 
-%% EQC API
+-opaque pncounter() :: {riak_dt_gcounter:gcounter(), riak_dt_gcounter:gcounter()}.
+-type pncounter_op() :: riak_dt_gcounter:gcounter_op() | decrement_op().
+-type decrement_op() :: decrement | {decrement, pos_integer()}.
+
+%% @doc Create a new, empty `pncounter()'
+-spec new() -> pncounter().
+new() ->
+    {riak_dt_gcounter:new(), riak_dt_gcounter:new()}.
+
+%% @doc Create a `pncounter()' with an initial `Value' for `Actor'.
+-spec new(term(), integer()) -> pncounter().
+new(Actor, Value) when Value > 0 ->
+    update({increment, Value}, Actor, new());
+new(Actor, Value) when Value < 0 ->
+    update({decrement, Value * -1}, Actor, new());
+new(_Actor, _Zero) ->
+    new().
+
+%% @doc The single, total value of a `pncounter()'
+-spec value(pncounter()) -> integer().
+value({Incr, Decr}) ->
+    riak_dt_gcounter:value(Incr) - riak_dt_gcounter:value(Decr).
+
+%% @doc Update a `pncounter()'. The first argument is either the atom
+%% `increment' or `decrement' or the two tuples `{increment, pos_integer()}' or
+%% `{decrement, pos_integer()}'. In the case of the former, the operation's amount
+%% is `1'. Otherwise it is the value provided in the tuple's second element.
+%% `Actor' is any term, and the 3rd argument is the `pncounter()' to update.
+%%
+%% returns the updated `pncounter()'
+-spec update(pncounter_op(), term(), pncounter()) -> pncounter().
+update(increment, Actor, {Incr, Decr}) ->
+    {riak_dt_gcounter:update(increment, Actor, Incr), Decr};
+update({increment, By}, Actor, {Incr, Decr}) when is_integer(By), By > 0 ->
+    {riak_dt_gcounter:update({increment, By}, Actor, Incr), Decr};
+update(decrement, Actor, {Incr, Decr}) ->
+    {Incr, riak_dt_gcounter:update(increment, Actor, Decr)};
+update({decrement, By}, Actor, {Incr, Decr}) when is_integer(By), By > 0 ->
+    {Incr, riak_dt_gcounter:update({increment, By}, Actor, Decr)}.
+
+%% @doc Merge two `pncounter()'s to a single `pncounter()'. This is the Least Upper Bound
+%% function described in the literature.
+-spec merge(pncounter(), pncounter()) -> pncounter().
+merge({Incr1, Decr1}, {Incr2, Decr2}) ->
+    MergedIncr =  riak_dt_gcounter:merge(Incr1, Incr2),
+    MergedDecr =  riak_dt_gcounter:merge(Decr1, Decr2),
+    {MergedIncr, MergedDecr}.
+
+%% @doc Are two `pncounter()'s structurally equal? This is not `value/1' equality.
+%% Two counters might represent the total `-42', and not be `equal/2'. Equality here is
+%% that both counters represent exactly the same information.
+-spec equal(pncounter(), pncounter()) -> boolean().
+equal({Incr1, Decr1}, {Incr2, Decr2}) ->
+    riak_dt_gcounter:equal(Incr1, Incr2) andalso riak_dt_gcounter:equal(Decr1, Decr2).
+
+-define(TAG, 71).
+-define(V1_VERS, 1).
+
+%% @doc Encode an effecient binary representation of `pncounter()'
+-spec to_binary(pncounter()) -> binary().
+to_binary({P, N}) ->
+    PBin = riak_dt_gcounter:to_binary(P),
+    NBin = riak_dt_gcounter:to_binary(N),
+    PBinLen = byte_size(PBin),
+    NBinLen = byte_size(NBin),
+    <<?TAG:8/integer, ?V1_VERS:8/integer,
+      PBinLen:32/integer, PBin:PBinLen/binary,
+      NBinLen:32/integer, NBin:NBinLen/binary>>.
+
+%% @doc Decode a binary encoded PN-Counter
+-spec from_binary(binary()) -> pncounter().
+from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer,
+              PBinLen:32/integer, PBin:PBinLen/binary,
+              NBinLen:32/integer, NBin:NBinLen/binary>>) ->
+    {riak_dt_gcounter:from_binary(PBin), riak_dt_gcounter:from_binary(NBin)}.
+
+%% ===================================================================
+%% EUnit tests
+%% ===================================================================
+-ifdef(TEST).
+
 -ifdef(EQC).
--export([gen_op/0, update_expected/3, eqc_state_value/1]).
--endif.
-
 %% EQC generator
--ifdef(EQC).
 gen_op() ->
     oneof([increment, {increment, gen_pos()}, decrement, {decrement, gen_pos()} ]).
 
@@ -61,37 +150,7 @@ update_expected(_ID, _Op, Prev) ->
 
 eqc_state_value(S) ->
     S.
--endif.
 
-new() ->
-    {riak_dt_gcounter:new(), riak_dt_gcounter:new()}.
-
-value({Incr, Decr}) ->
-    riak_dt_gcounter:value(Incr) -  riak_dt_gcounter:value(Decr).
-
-update(increment, Actor, {Incr, Decr}) ->
-    {riak_dt_gcounter:update(increment, Actor, Incr), Decr};
-update({increment, By}, Actor, {Incr, Decr}) when is_integer(By), By > 0 ->
-    {riak_dt_gcounter:update({increment, By}, Actor, Incr), Decr};
-update(decrement, Actor, {Incr, Decr}) ->
-    {Incr, riak_dt_gcounter:update(increment, Actor, Decr)};
-update({decrement, By}, Actor, {Incr, Decr}) when is_integer(By), By > 0 ->
-    {Incr, riak_dt_gcounter:update({increment, By}, Actor, Decr)}.
-
-merge({Incr1, Decr1}, {Incr2, Decr2}) ->
-    MergedIncr =  riak_dt_gcounter:merge(Incr1, Incr2),
-    MergedDecr =  riak_dt_gcounter:merge(Decr1, Decr2),
-    {MergedIncr, MergedDecr}.
-
-equal({Incr1, Decr1}, {Incr2, Decr2}) ->
-    riak_dt_gcounter:equal(Incr1, Incr2) andalso riak_dt_gcounter:equal(Decr1, Decr2).
-
-%% ===================================================================
-%% EUnit tests
-%% ===================================================================
--ifdef(TEST).
-
--ifdef(EQC).
 eqc_value_test_() ->
     {timeout, 120, [?_assert(crdt_statem_eqc:prop_converge(0, 1000, ?MODULE))]}.
 -endif.
@@ -172,5 +231,15 @@ usage_test() ->
     PNCnt2_3 = update(decrement, a2, PNCnt2_2),
     ?assertEqual({[{a1, 3}, {a4, 1}, {a2, 1}, {a3, 3}], [{a5, 2}, {a2, 1}]},
                  merge(PNCnt3_3, PNCnt2_3)).
+
+roundtrip_bin_test() ->
+    PN = new(),
+    PN1 = update({increment, 2}, <<"a1">>, PN),
+    PN2 = update({decrement, 1000000000000000000000000}, douglas_Actor, PN1),
+    PN3 = update(increment, [{very, ["Complex"], <<"actor">>}, honest], PN2),
+    PN4 = update(decrement, "another_acotr", PN3),
+    Bin = to_binary(PN4),
+    Decoded = from_binary(Bin),
+    ?assert(equal(PN4, Decoded)).
 
 -endif.
