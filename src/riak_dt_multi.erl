@@ -169,20 +169,25 @@ eqc_value_test_() ->
 
 %% EQC generator
 gen_op() ->
-    ?LET({Add, Remove}, gen_elems(),
-         oneof([{add, Add}, {remove, Remove}])).
+    ?LET(Ops, list(gen_update), {update, Ops}).
 
-gen_elems() ->
-    ?LET(A, int(), {A, oneof([A, int()])}).
+gen_update() ->
+    ?LET(Field, gen_field(),
+         oneof([{add, Field}, {remove, Field}, {update, Field, gen_field_op(Field)}])).
+
+gen_field() ->
+    {binary(), oneof([riak_dt_pncounter, riak_dt_vvorset, riak_dt_gcounter])}.
+
+gen_field_op({_Name, Type}) ->
+    Type:gen_op().
 
 init_state() ->
-    {0, dict:new(), []}.
+    orddict:new().
 
-update_expected(ID, {add, Elem}, {Cnt0, Dict, L}) ->
-    Cnt = Cnt0+1,
-    ToAdd = {Elem, Cnt},
-    {A, R} = dict:fetch(ID, Dict),
-    {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict), [{ID, {add, Elem}}|L]};
+update_expected(ID, {add, {_Name, Type}=Elem}, Dict) ->
+    %% If we already have the item, do nothing
+    %% otherwise store a new Type
+    orddict:update(Elem, fun(V) -> V end, Type:new(), Dict);
 update_expected(ID, {remove, Elem}, {Cnt, Dict, L}) ->
     {A, R} = dict:fetch(ID, Dict),
     ToRem = [ {E, X} || {E, X} <- sets:to_list(A), E == Elem],
