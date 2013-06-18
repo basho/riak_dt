@@ -21,8 +21,7 @@
 %% -------------------------------------------------------------------
 
 %% @doc
-%% An LWW Register CRDT. Uses the DVVSet and it's lww function
-%%
+%% An LWW Register CRDT.
 %%
 %% @reference Marc Shapiro, Nuno Preguiça, Carlos Baquero, Marek Zawirski (2011) A comprehensive study of
 %% Convergent and Commutative Replicated Data Types. http://hal.upmc.fr/inria-00555588/
