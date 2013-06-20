@@ -35,7 +35,7 @@
 %% EQC API
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
--export([gen_op/0, update_expected/3, eqc_state_value/1]).
+-export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0]).
 -endif.
 
 -ifdef(TEST).
@@ -144,6 +144,9 @@ ts_to_binary(TS) ->
 
 -ifdef(EQC).
 %% EQC generator
+init_state() ->
+    {undefined, 0}.
+
 gen_op() ->
     ?LET(TS, largeint(), {assign, binary(), abs(TS)}).
 
@@ -161,7 +164,7 @@ eqc_state_value({Val, _TS}) ->
     Val.
 
 eqc_value_test_() ->
-    {timeout, 120, [?_assert(crdt_statem_eqc:prop_converge({undefined, 0}, 1000, ?MODULE))]}.
+    {timeout, 120, [?_assert(crdt_statem_eqc:prop_converge(init_state(), 1000, ?MODULE))]}.
 -endif.
 
 new_test() ->

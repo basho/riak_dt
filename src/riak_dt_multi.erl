@@ -77,7 +77,7 @@ values([{_Name, Mod}=Key | Rest], Values, Acc) ->
 
 %% @Doc update the schema or a field in the schema.
 %% Ops is a list of one or more of the following ops:
-%% {update Key, Op} where Op is any operation supported by the CRDT mod
+%% {update, Key, Op} where Op is any operation supported by the CRDT mod
 %% referenced in the Key ({name, type}). The Op is applied to the value in the value list
 %% for the given key
 %% {add, field} where field is {name, type}.
@@ -98,7 +98,8 @@ apply_ops([{update, {_Name, Mod}=Key, Op} | Rest], Actor, Schema, Values) ->
     apply_ops(Rest, Actor, NewSchema, NewValues);
 apply_ops([{remove, Key} | Rest], Actor, Schema, Values) ->
     NewSchema = riak_dt_vvorset:update({remove, Key}, Actor, Schema),
-    apply_ops(Rest, Actor, NewSchema, Values);
+    NewValues = orddict:erase(Key, Values),
+    apply_ops(Rest, Actor, NewSchema, NewValues);
 apply_ops([{add, {_Name, Mod}=Key} | Rest], Actor, Schema, Values) ->
     %% Add the key to schema
     NewSchema = riak_dt_vvorset:update({add, Key}, Actor, Schema),
@@ -169,46 +170,78 @@ eqc_value_test_() ->
 
 %% EQC generator
 gen_op() ->
-    ?LET(Ops, list(gen_update), {update, Ops}).
+    ?LET(Ops, non_empty(list(gen_update())), {update, Ops}).
 
 gen_update() ->
     ?LET(Field, gen_field(),
          oneof([{add, Field}, {remove, Field}, {update, Field, gen_field_op(Field)}])).
 
 gen_field() ->
-    {binary(), oneof([riak_dt_pncounter, riak_dt_vvorset, riak_dt_gcounter])}.
+    {binary(), oneof([riak_dt_pncounter, riak_dt_vvorset, riak_dt_lwwreg, riak_dt_multi, riak_dt_gcounter])}.
 
 gen_field_op({_Name, Type}) ->
     Type:gen_op().
 
 init_state() ->
-    orddict:new().
+    {0, dict:new()}.
 
-update_expected(ID, {add, {_Name, Type}=Elem}, Dict) ->
-    %% If we already have the item, do nothing
-    %% otherwise store a new Type
-    orddict:update(Elem, fun(V) -> V end, Type:new(), Dict);
-update_expected(ID, {remove, Elem}, {Cnt, Dict, L}) ->
+update_expected(ID, {update, Ops}, Values) ->
+    lists:foldl(fun(Op, V) ->
+                        update_expected(ID, Op, V) end,
+                Values,
+                Ops);
+
+update_expected(ID, {add, {_Name, Type}=Elem}, {Cnt0, Dict}) ->
+    Cnt = Cnt0+1,
+    ToAdd = {Elem, Type:new(), Cnt},
     {A, R} = dict:fetch(ID, Dict),
-    ToRem = [ {E, X} || {E, X} <- sets:to_list(A), E == Elem],
-    {Cnt, dict:store(ID, {A, sets:union(R, sets:from_list(ToRem))}, Dict), [{ID, {remove, Elem, ToRem}}|L]};
-update_expected(ID, {merge, SourceID}, {Cnt, Dict, L}) ->
+    {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)};
+update_expected(ID, {remove, Elem}, {Cnt, Dict}) ->
+    {A, R} = dict:fetch(ID, Dict),
+    ToRem = [ {E, V, X} || {E, V, X} <- sets:to_list(A), E == Elem],
+    {Cnt, dict:store(ID, {A, sets:union(R, sets:from_list(ToRem))}, Dict)};
+update_expected(ID, {merge, SourceID}, {Cnt, Dict}) ->
     {FA, FR} = dict:fetch(ID, Dict),
     {TA, TR} = dict:fetch(SourceID, Dict),
     MA = sets:union(FA, TA),
     MR = sets:union(FR, TR),
-    {Cnt, dict:store(ID, {MA, MR}, Dict), [{ID,{merge, SourceID}}|L]};
-update_expected(ID, create, {Cnt, Dict, L}) ->
-    {Cnt, dict:store(ID, {sets:new(), sets:new()}, Dict), [{ID, create}|L]}.
+    {Cnt, dict:store(ID, {MA, MR}, Dict)};
+update_expected(ID, create, {Cnt, Dict}) ->
+    {Cnt, dict:store(ID, {sets:new(), sets:new()}, Dict)};
+update_expected(ID, {update, {_Name, Type}=Key, Op}, {Cnt0, Dict}) ->
+    CurrentValue = get_for_key(Key, ID,  Dict),
+    Updated = Type:update(Op, ID, CurrentValue),
+    Cnt = Cnt0+1,
+    ToAdd = {Key, Updated, Cnt},
+    {A, R} = dict:fetch(ID, Dict),
+    {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)}.
 
-eqc_state_value({_Cnt, Dict, _L}) ->
+eqc_state_value({_Cnt, Dict}) ->
     {A, R} = dict:fold(fun(_K, {Add, Rem}, {AAcc, RAcc}) ->
                                {sets:union(Add, AAcc), sets:union(Rem, RAcc)} end,
                        {sets:new(), sets:new()},
                        Dict),
     Remaining = sets:subtract(A, R),
-    Values = [ Elem || {Elem, _X} <- sets:to_list(Remaining)],
-    lists:usort(Values).
+    Res = lists:foldl(fun({{_Name, Type}=Key, Value, _X}, Acc) ->
+                        %% if key is in Acc merge with it and replace
+                        dict:update(Key, fun(V) ->
+                                                 Type:merge(V, Value) end,
+                                    Value, Acc) end,
+                dict:new(),
+                sets:to_list(Remaining)),
+    [{K, Type:value(V)} || {{_Name, Type}=K, V} <- dict:to_list(Res)].
+
+get_for_key({_N, T}=K, ID, Dict) ->
+    {A, R} = dict:fetch(ID, Dict),
+    Remaining = sets:subtract(A, R),
+    Res = lists:foldl(fun({{_Name, Type}=Key, Value, _X}, Acc) ->
+                        %% if key is in Acc merge with it and replace
+                        dict:update(Key, fun(V) ->
+                                                 Type:merge(V, Value) end,
+                                    Value, Acc) end,
+                dict:new(),
+                sets:to_list(Remaining)),
+    proplists:get_value(K, dict:to_list(Res), T:new()).
 
 -endif.
 -endif.

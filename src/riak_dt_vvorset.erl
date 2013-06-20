@@ -120,6 +120,8 @@ actor_placeholder(Actors, Actor) ->
 
 remove_elem({ok, {1, Vclock}}, Elem, {AL, Dict}) ->
     {AL, orddict:store(Elem, {0, Vclock}, Dict)};
+remove_elem({ok, {0, _Vclock}}, _Elem, ORSet) ->
+    ORSet;
 remove_elem(_, _Elem, ORSet) ->
     %% What @TODO?
     %% Can't remove an element not in the ADict, warn??
