@@ -29,4 +29,6 @@ behaviour_info(callbacks) ->
      {value, 1},
      {update, 3},
      {merge, 2},
-     {equal, 2}].
+     {equal, 2},
+     {to_binary, 1},
+     {from_binary, 1}].

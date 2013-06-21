@@ -20,13 +20,15 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @Doc a multi CRDT holder.
-%% A Document-ish thing.
-%% Consists of two elements, a Schema and a value list.
-%% The schema is an OR-Set of {name, type} tuples that identify a field
-%% and it's type (type must be a CRDT module, yes, even this one.)
-%% The value list is a dict of {name, type} -> CRDT value mappings.
-%% The value list never shrinks (or can only shrink with consensus (garbage collection.)
+%% @doc a multi CRDT holder.  A Document-ish thing.  Consists of two
+%% elements, a Schema and a value list. The schema is an OR-Set of
+%% {name, type} tuples that identify a field and it's type (type must
+%% be a CRDT module, yes, even this one.)  The value list is a dict of
+%% {name, type} -> CRDT value mappings.  The value list may have it's
+%% CRDT value removed as soon as the key is removed from the
+%% keyset. The Keyset requries consensus for GC.
+%%
+%% @end
 
 -module(riak_dt_multi).
 
@@ -41,7 +43,7 @@
 -endif.
 
 %% API
--export([new/0, value/1, update/3, merge/2, equal/2]).
+-export([new/0, value/1, update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
 
 %% EQC API
 -ifdef(EQC).
@@ -158,6 +160,17 @@ short_cicuit_equals([{{_Name, Type}=Key, Val1} | Rest], Values2) ->
         false ->
             false
     end.
+
+-define(TAG, 77).
+-define(V1_VERS, 1).
+
+to_binary(Map) ->
+    %% @TODO something smarter (recurse down valulist calling to_binary?)
+    <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(Map))/binary>>.
+
+from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
+    %% @TODO something smarter
+    binary_to_term(Bin).
 
 %% ===================================================================
 %% EUnit tests
