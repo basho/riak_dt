@@ -93,7 +93,7 @@
 %% knowledge about adds / removes than a UUID per add.
 -type entries() :: orddict:orddict().
 
--type member_info() :: {boolean(), vclock:vclock()}.
+-type member_info() :: {boolean(), riak_dt_vclock:vclock()}.
 -type member() :: term().
 
 -spec new() -> vvorset().
@@ -138,26 +138,26 @@ merge_actors(Actors1, Actors2) ->
                                     Sorted),
     NewActors.
 
--spec vclock_merge(vclock:vclock(), vclock:vclock(),
-                   actorlist(), actorlist(), actorlist()) -> vclock:vclock().
+-spec vclock_merge(riak_dt_vclock:vclock(), riak_dt_vclock:vclock(),
+                   actorlist(), actorlist(), actorlist()) -> riak_dt_vclock:vclock().
 vclock_merge(V10, V20, Actors1, Actors2, MergedActors) ->
-    V1 = vclock:replace_actors(orddict:to_list(Actors1), V10, 2),
-    V2 = vclock:replace_actors(orddict:to_list(Actors2), V20, 2),
-    Merged = vclock:merge([V1, V2]),
-    vclock:replace_actors(orddict:to_list(MergedActors), Merged).
+    V1 = riak_dt_vclock:replace_actors(orddict:to_list(Actors1), V10, 2),
+    V2 = riak_dt_vclock:replace_actors(orddict:to_list(Actors2), V20, 2),
+    Merged = riak_dt_vclock:merge([V1, V2]),
+    riak_dt_vclock:replace_actors(orddict:to_list(MergedActors), Merged).
 
 %% @Doc determine if the entry is active or removed.
 %% First argument is a remove vclock, second is an active vclock
--spec is_active_or_removed(vclock:vclock(), vclock:vclock(),
+-spec is_active_or_removed(riak_dt_vclock:vclock(), riak_dt_vclock:vclock(),
                            actorlist(), actorlist(), actorlist()) -> member_info().
 is_active_or_removed(RemoveClock0, AddClock0, RemActors, AddActors, MergedActors) ->
-    RemoveClock = vclock:replace_actors(orddict:to_list(RemActors), RemoveClock0, 2),
-    AddClock = vclock:replace_actors(orddict:to_list(AddActors), AddClock0, 2),
-    case (not vclock:descends(RemoveClock, AddClock)) of
+    RemoveClock = riak_dt_vclock:replace_actors(orddict:to_list(RemActors), RemoveClock0, 2),
+    AddClock = riak_dt_vclock:replace_actors(orddict:to_list(AddActors), AddClock0, 2),
+    case (not riak_dt_vclock:descends(RemoveClock, AddClock)) of
         true ->
-            {1, vclock:replace_actors(orddict:to_list(MergedActors), AddClock)};
+            {1, riak_dt_vclock:replace_actors(orddict:to_list(MergedActors), AddClock)};
         false ->
-            {0, vclock:replace_actors(orddict:to_list(MergedActors), RemoveClock)}
+            {0, riak_dt_vclock:replace_actors(orddict:to_list(MergedActors), RemoveClock)}
     end.
 
 -spec equal(vvorset(), vvorset()) -> boolean().
@@ -168,13 +168,13 @@ equal(ORSet1, ORSet2) ->
 -spec add_elem(actor(), vvorset(), member()) -> vvorset().
 add_elem(Actor, {Actors0, Entries}, Elem) ->
     {Placeholder, Actors} = actor_placeholder(Actor, Actors0),
-    InitialValue = {1, vclock:increment(Placeholder, vclock:fresh())},
+    InitialValue = {1, riak_dt_vclock:increment(Placeholder, riak_dt_vclock:fresh())},
     {Actors, orddict:update(Elem, update_fun(Placeholder), InitialValue, Entries)}.
 
 -spec update_fun(actor()) -> function().
 update_fun(Actor) ->
     fun({_, Vclock}) ->
-            {1, vclock:increment(Actor, Vclock)}
+            {1, riak_dt_vclock:increment(Actor, Vclock)}
     end.
 
 -spec actor_placeholder(actor(), actorlist()) -> {non_neg_integer(), actorlist()}.

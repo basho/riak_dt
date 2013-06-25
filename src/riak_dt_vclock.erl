@@ -29,7 +29,7 @@
 %% Distributed Systems". Workshop on Parallel and Distributed Algorithms:
 %% pp. 215-226
 
--module(vclock).
+-module(riak_dt_vclock).
 
 -export([fresh/0,descends/2,merge/1,get_counter/2,
 	increment/2,all_nodes/1,equal/2, replace_actors/2, replace_actors/3]).
@@ -156,20 +156,20 @@ new_key({New, _Old}, 2) ->
 
 % doc Serves as both a trivial test and some example code.
 example_test() ->
-    A = vclock:fresh(),
-    B = vclock:fresh(),
-    A1 = vclock:increment(a, A),
-    B1 = vclock:increment(b, B),
-    true = vclock:descends(A1,A),
-    true = vclock:descends(B1,B),
-    false = vclock:descends(A1,B1),
-    A2 = vclock:increment(a, A1),
-    C = vclock:merge([A2, B1]),
-    C1 = vclock:increment(c, C),
-    true = vclock:descends(C1, A2),
-    true = vclock:descends(C1, B1),
-    false = vclock:descends(B1, C1),
-    false = vclock:descends(B1, A1),
+    A = riak_dt_vclock:fresh(),
+    B = riak_dt_vclock:fresh(),
+    A1 = riak_dt_vclock:increment(a, A),
+    B1 = riak_dt_vclock:increment(b, B),
+    true = riak_dt_vclock:descends(A1,A),
+    true = riak_dt_vclock:descends(B1,B),
+    false = riak_dt_vclock:descends(A1,B1),
+    A2 = riak_dt_vclock:increment(a, A1),
+    C = riak_dt_vclock:merge([A2, B1]),
+    C1 = riak_dt_vclock:increment(c, C),
+    true = riak_dt_vclock:descends(C1, A2),
+    true = riak_dt_vclock:descends(C1, B1),
+    false = riak_dt_vclock:descends(B1, C1),
+    false = riak_dt_vclock:descends(B1, A1),
     ok.
 
 accessor_test() ->
@@ -186,7 +186,7 @@ merge_test() ->
            {<<"4">>,  4}],
     VC2 = [{<<"3">>,  3},
            {<<"4">>,  3}],
-    ?assertEqual([], merge(vclock:fresh())),
+    ?assertEqual([], merge(riak_dt_vclock:fresh())),
     ?assertEqual([{<<"1">>,1},{<<"2">>,2},{<<"3">>,3},{<<"4">>,4}],
                  merge([VC1, VC2])).
 
@@ -194,18 +194,18 @@ merge_less_left_test() ->
     VC1 = [{<<"5">>, 5}],
     VC2 = [{<<"6">>,  6}, {<<"7">>,  7}],
     ?assertEqual([{<<"5">>, 5},{<<"6">>, 6}, {<<"7">>, 7}],
-                 vclock:merge([VC1, VC2])).
+                 riak_dt_vclock:merge([VC1, VC2])).
 
 merge_less_right_test() ->
     VC1 = [{<<"6">>, 6}, {<<"7">>,  7}],
     VC2 = [{<<"5">>, 5}],
     ?assertEqual([{<<"5">>, 5},{<<"6">>,  6}, {<<"7">>,  7}],
-                 vclock:merge([VC1, VC2])).
+                 riak_dt_vclock:merge([VC1, VC2])).
 
 merge_same_id_test() ->
     VC1 = [{<<"1">>, 1},{<<"2">>,1}],
     VC2 = [{<<"1">>, 1},{<<"3">>,1}],
     ?assertEqual([{<<"1">>, 1},{<<"2">>,1},{<<"3">>,1}],
-                 vclock:merge([VC1, VC2])).
+                 riak_dt_vclock:merge([VC1, VC2])).
 
 -endif.
