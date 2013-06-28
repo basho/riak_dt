@@ -27,6 +27,7 @@
 behaviour_info(callbacks) ->
     [{new, 0},
      {value, 1},
+     {value, 2},
      {update, 3},
      {merge, 2},
      {equal, 2},

@@ -34,7 +34,8 @@
 
 -module(riak_dt_pncounter).
 
--export([new/0, new/2, value/1, update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
+-export([new/0, new/2, value/1, value/2,
+         update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
 
 %% EQC API
 -ifdef(EQC).
@@ -51,6 +52,7 @@
 -opaque pncounter() :: {riak_dt_gcounter:gcounter(), riak_dt_gcounter:gcounter()}.
 -type pncounter_op() :: riak_dt_gcounter:gcounter_op() | decrement_op().
 -type decrement_op() :: decrement | {decrement, pos_integer()}.
+-type pncounter_q()  :: positive | negative.
 
 %% @doc Create a new, empty `pncounter()'
 -spec new() -> pncounter().
@@ -70,6 +72,14 @@ new(_Actor, _Zero) ->
 -spec value(pncounter()) -> integer().
 value({Incr, Decr}) ->
     riak_dt_gcounter:value(Incr) - riak_dt_gcounter:value(Decr).
+
+%% @doc query the parts of a `pncounter()'
+%% valid queries are `positive' or `negative'.
+-spec value(pncounter_q(), pncounter()) -> pncounter().
+value(positive, {P, _N}) ->
+    riak_dt_gcounter:value(P);
+value(negative, {_P, N}) ->
+    riak_dt_gcounter:value(N).
 
 %% @doc Update a `pncounter()'. The first argument is either the atom
 %% `increment' or `decrement' or the two tuples `{increment, pos_integer()}' or
@@ -245,5 +255,15 @@ roundtrip_bin_test() ->
     Bin = to_binary(PN4),
     Decoded = from_binary(Bin),
     ?assert(equal(PN4, Decoded)).
+
+query_test() ->
+    PN = new(),
+    PN1 = update({increment, 50}, a1, PN),
+    PN2 = update({increment, 50}, a2, PN1),
+    PN3 = update({decrement, 15}, a3, PN2),
+    PN4 = update({decrement, 10}, a4, PN3),
+    ?assertEqual(75, value(PN4)),
+    ?assertEqual(100, value(positive, PN4)),
+    ?assertEqual(25, value(negative, PN4)).
 
 -endif.

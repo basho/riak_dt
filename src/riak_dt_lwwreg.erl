@@ -30,7 +30,7 @@
 
 -module(riak_dt_lwwreg).
 
--export([new/0, value/1, update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
+-export([new/0, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
 
 %% EQC API
 -ifdef(EQC).
@@ -44,9 +44,11 @@
 
 -export_type([lwwreg/0, lwwreg_op/0]).
 
--opaque lwwreg() :: dvvset:dvvset().
+-opaque lwwreg() :: {term(), non_neg_integer()}.
 
 -type lwwreg_op() :: {assign, term(), non_neg_integer()}.
+
+-type lww_q() :: timestamp.
 
 %% @doc Create a new, empty `lwwreg()'
 -spec new() -> lwwreg().
@@ -57,6 +59,12 @@ new() ->
 -spec value(lwwreg()) -> term().
 value({Value, _TS}) ->
     Value.
+
+%% @doc query for this `lwwreg()'.
+%% `timestamp' is the only query option.
+-spec value(lww_q(), lwwreg()) -> non_neg_integer().
+value(timestamp, {_V, TS}) ->
+    TS.
 
 %% @doc Assign a `Value' to the `lwwreg()'
 %% associating the update with time `TS'
@@ -216,5 +224,10 @@ roundtrip_bin_test() ->
     Bin = to_binary(LWW4),
     Decoded = from_binary(Bin),
     ?assert(equal(LWW4, Decoded)).
+
+query_test() ->
+    LWW = new(),
+    LWW1 = update({assign, value, 100}, a1, LWW),
+    ?assertEqual(100, value(timestamp, LWW1)).
 
 -endif.

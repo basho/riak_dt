@@ -36,7 +36,7 @@
 
 -module(riak_dt_gcounter).
 
--export([new/0, new/2, value/1, update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
+-export([new/0, new/2, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
 
 %% EQC API
 -ifdef(EQC).
@@ -69,6 +69,11 @@ new(Id, Count) when is_integer(Count), Count > 0 ->
 -spec value(gcounter()) -> non_neg_integer().
 value(GCnt) ->
     lists:sum([ Cnt || {_Act, Cnt} <- GCnt]).
+
+%% @doc `value/2' is just `value/1' for a `gcounter()'
+-spec value(any(), gcounter()) -> non_neg_integer().
+value(_, GCnt) ->
+    value(GCnt).
 
 %% @doc `increment' the entry in `GCnt' for `Actor' by 1 or `{increment, Amt}'.
 %% returns an updated `gcounter()' or error if `Amt' is not a `pos_integer()'

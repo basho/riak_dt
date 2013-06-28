@@ -43,7 +43,7 @@
 -endif.
 
 %% API
--export([new/0, value/1, update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
+-export([new/0, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
 
 %% EQC API
 -ifdef(EQC).
@@ -55,6 +55,9 @@
 -type field() :: {Name::term(), Type::crdt_mod()}.
 -type crdt_mod() :: module(). %% @TODO add them all?
 -type valuelist() :: [{field(), Value::term()}]. %% @TODO add all the crdt types?
+
+-type multi_q() :: size | {get, field()} | {get_crdt, field()} |
+                   keyset | {contains, field()}.
 
 -spec new() -> multi().
 new() ->
@@ -76,6 +79,26 @@ values([{_Name, Mod}=Key | Rest], Values, Acc) ->
     CRDT = orddict:fetch(Key, Values),
     Val = Mod:value(CRDT),
     values(Rest, Values, [{Key, Val} | Acc]).
+
+-spec value(multi_q(), multi()) -> term().
+value(size, {Schema, _Values}) ->
+    riak_dt_vvorset:value(size, Schema);
+value({get, {_Name, Mod}=Field}, Map) ->
+    case value({get_crdt, Field}, Map) of
+        error -> error;
+        CRDT -> Mod:value(CRDT)
+    end;
+value({get_crdt, Field}, {Schema, Values}) ->
+    case riak_dt_vvorset:value({contains, Field}, Schema) of
+        true ->
+            orddict:fetch(Field, Values);
+        false ->
+            error
+    end;
+value(keyset, {Schema, _Values}) ->
+    riak_dt_vvorset:value(Schema);
+value({contains, Field}, {Schema, _Values}) ->
+    riak_dt_vvorset:value({contains, Field}, Schema).
 
 %% @Doc update the schema or a field in the schema.
 %% Ops is a list of one or more of the following ops:
@@ -257,4 +280,31 @@ get_for_key({_N, T}=K, ID, Dict) ->
     proplists:get_value(K, dict:to_list(Res), T:new()).
 
 -endif.
+
+query_test() ->
+    Map = new(),
+    Map1 = update({update, [{add, {c, riak_dt_pncounter}},
+                            {add, {s, riak_dt_vvorset}},
+                            {add, {m, riak_dt_multi}},
+                            {add, {l, riak_dt_lwwreg}},
+                            {add, {l2, riak_dt_lwwreg}}]}, a1, Map),
+    ?assertEqual(5, value(size, Map1)),
+
+    Map2 = update({update, [{remove, {l2, riak_dt_lwwreg}}]}, a2, Map1),
+    ?assertEqual(4, value(size, Map2)),
+
+    ?assertEqual([{c, riak_dt_pncounter},
+                  {l, riak_dt_lwwreg},
+                  {m, riak_dt_multi},
+                  {s, riak_dt_vvorset}], value(keyset, Map2)),
+
+    ?assert(value({contains, {c, riak_dt_pncounter}}, Map2)),
+    ?assertNot(value({contains, {l2, riak_dt_lwwreg}}, Map2)),
+
+    Map3 = update({update, [{update, {c, riak_dt_pncounter}, {increment, 33}},
+                            {update, {l, riak_dt_lwwreg}, {assign, lww_val, 77}}]}, a3, Map2),
+
+    ?assertEqual(33, value({get, {c, riak_dt_pncounter}}, Map3)),
+    ?assertEqual({lww_val, 77}, value({get_crdt, {l, riak_dt_lwwreg}}, Map3)).
+
 -endif.

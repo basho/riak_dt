@@ -68,7 +68,9 @@
 -endif.
 
 %% API
--export([new/0, value/1, update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
+-export([new/0, value/1, value/2]).
+-export([update/3, merge/2, equal/2]).
+-export([to_binary/1, from_binary/1]).
 
 %% EQC API
 -ifdef(EQC).
@@ -80,6 +82,7 @@
 -opaque vvorset() :: {actorlist(), entries()}.
 
 -type vvorset_op() :: {add, member()} | {remove, member()}.
+-type vvorset_q()  :: size | {contains, term()} | tombstones.
 
 %% a dict of actor() -> Alias::integer() mappings
 %% Reason being to keep the vector clocks as small as
@@ -105,6 +108,15 @@ new() ->
 -spec value(vvorset()) -> [member()].
 value({_Actors, Entries}) ->
     [K || {K, {Active, _Vclock}} <- orddict:to_list(Entries), Active == 1].
+
+%% @doc Query `OR-Set`
+-spec value(vvorset_q(), vvorset()) -> term().
+value(size, ORset) ->
+    length(value(ORset));
+value({contains, Elem}, ORset) ->
+    lists:member(Elem, value(ORset));
+value(tombstones, {_Actors, Entries}) ->
+        [K || {K, {Active, _Vclock}} <- orddict:to_list(Entries), Active == 0].
 
 -spec update(vvorset_op(), actor(), vvorset()) -> vvorset().
 update({add, Elem}, Actor, ORSet) ->
@@ -258,4 +270,18 @@ eqc_state_value({_Cnt, Dict}) ->
     lists:usort(Values).
 
 -endif.
+
+query_test() ->
+    Set = new(),
+    Set2 = update({add, bob}, a1, Set),
+    Set3 = update({add, pete}, a2, Set2),
+    Set4 = update({add, sheila}, a3, Set3),
+    Set5 = update({remove, pete}, a3, Set4),
+    Set6 = update({remove, bob}, a2, Set5),
+    Set7 = update({add, dave}, a1, Set6),
+    ?assertEqual(2, value(size, Set7)),
+    ?assert(value({contains, sheila}, Set7)),
+    ?assertNot(value({contains, bob}, Set7)),
+    ?assertEqual([bob, pete], value(tombstones, Set7)).
+
 -endif.
