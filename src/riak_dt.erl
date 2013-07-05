@@ -24,6 +24,16 @@
 
 -export([behaviour_info/1]).
 
+-ifndef(EQC).
+-define(EQC_DT_CALLBACKS, []).
+-else.
+% Extra callbacks for any crdt_statem_eqc tests
+-define(EQC_DT_CALLBACKS, [{gen_op, 0}, 
+                           {update_expected, 3}, 
+                           {eqc_state_value, 1}, 
+                           {init_state, 0}]).
+-endif.
+
 behaviour_info(callbacks) ->
     [{new, 0},
      {value, 1},
@@ -32,4 +42,4 @@ behaviour_info(callbacks) ->
      {merge, 2},
      {equal, 2},
      {to_binary, 1},
-     {from_binary, 1}].
+     {from_binary, 1} | ?EQC_DT_CALLBACKS ].
