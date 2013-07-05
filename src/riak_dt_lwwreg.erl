@@ -151,6 +151,9 @@ ts_to_binary(TS) ->
 -ifdef(TEST).
 
 -ifdef(EQC).
+eqc_value_test_() ->
+    crdt_statem_eqc:run(?MODULE, 1000).
+
 %% EQC generator
 init_state() ->
     {undefined, 0}.
@@ -170,9 +173,6 @@ update_expected(_ID, _Op, Prev) ->
 
 eqc_state_value({Val, _TS}) ->
     Val.
-
-eqc_value_test_() ->
-    {timeout, 120, [?_assert(crdt_statem_eqc:prop_converge(init_state(), 1000, ?MODULE))]}.
 -endif.
 
 new_test() ->
