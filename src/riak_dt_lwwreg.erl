@@ -35,7 +35,7 @@
 %% EQC API
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
--export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0]).
+-export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0, generate/0]).
 -endif.
 
 -ifdef(TEST).
@@ -152,6 +152,10 @@ ts_to_binary(TS) ->
 
 -ifdef(EQC).
 %% EQC generator
+generate() ->
+    ?LET({Op, Actor}, {gen_op(), char()},
+         riak_dt_lwwreg:update(Op, Actor, riak_dt_lwwreg:new())).
+
 init_state() ->
     {undefined, 0}.
 

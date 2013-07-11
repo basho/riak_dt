@@ -74,7 +74,7 @@
 
 %% EQC API
 -ifdef(EQC).
--export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0]).
+-export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0, generate/0]).
 -endif.
 
 -export_type([vvorset/0, vvorset_op/0]).
@@ -230,6 +230,13 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
 -ifdef(EQC).
 eqc_value_test_() ->
     {timeout, 120, [?_assert(crdt_statem_eqc:prop_converge(init_state(), 1000, ?MODULE))]}.
+
+generate() ->
+    ?LET(Members, list(int()),
+         lists:foldl(fun(M, Set) ->
+                            riak_dt_vvorset:update({add, M}, choose(1, 50), Set) end,
+                    riak_dt_vvorset:new(),
+                    Members)).
 
 %% EQC generator
 gen_op() ->

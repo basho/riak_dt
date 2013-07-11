@@ -63,8 +63,17 @@ next_state(S, _V, _C) ->
     S.
 
 %% Precondition, checked before command is added to the command sequence
-precondition(_S,{call,_,_,_}) ->
+precondition(S, {call,?MODULE, update, [_Mod, _Op, Vnode]}) ->
+    #state{vnodes=Vnodes} = S,
+    is_member(Vnode, Vnodes);
+precondition(S, {call,?MODULE, Fun, [_Mod, Vnode1, Vnode2]}) when Fun /= create ->
+    #state{vnodes=Vnodes} = S,
+    is_member(Vnode1, Vnodes) and is_member(Vnode2, Vnodes);
+precondition(_S, {call, _Mod, _Fun, _Args}) ->
     true.
+
+is_member(Vnode, Vnodes) ->
+    lists:keyfind(Vnode, 1, Vnodes) /= false.
 
 %% Postcondition, checked after command has been evaluated
 %% OBS: S is the state before next_state(S,_,<command>)
@@ -87,7 +96,7 @@ prop_converge(InitialValue, Mod) ->
                    %% History: ~p\nState: ~p\ H,S,
                    io:format("History: ~p\nState: ~p", [H,S]),
                    conjunction([{res, equals(Res, ok)},
-                                {total, equals(sort(MergedVal), sort(ExpectedValue))}]))
+                                {total, equals(sort(Mod, MergedVal), sort(Mod, ExpectedValue))}]))
             end).
 
 merge_crdts(Mod, []) ->
@@ -115,9 +124,9 @@ crdt_equals(Mod, {_IDS, CS}, {_IDD, CD}) ->
 %% Helpers
 %% The orset CRDT returns a list, it has no guarantees about order
 %% list equality expects lists in order
-sort(L) when is_list(L) ->
+sort(Mod, L) when Mod == riak_dt_vvorset; Mod == riak_dt_multi  ->
     lists:sort(L);
-sort(Other) ->
+sort(_, Other) ->
     Other.
 
 -endif. % EQC

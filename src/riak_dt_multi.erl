@@ -43,18 +43,37 @@
 -endif.
 
 %% API
--export([new/0, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
+-export([new/0, value/1, value/2, update/3, merge/2,
+         equal/2, to_binary/1, from_binary/1]).
 
 %% EQC API
 -ifdef(EQC).
--export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0]).
+-export([gen_op/0, update_expected/3, eqc_state_value/1,
+         init_state/0, generate/0]).
 -endif.
 
 -opaque multi() :: {schema(), valuelist()}.
 -type schema() :: riak_dt_vvorset:vvorset().
 -type field() :: {Name::term(), Type::crdt_mod()}.
--type crdt_mod() :: module(). %% @TODO add them all?
--type valuelist() :: [{field(), Value::term()}]. %% @TODO add all the crdt types?
+-type crdt_mod() :: riak_dt_gcounter | riak_dt_pncounter | riak_dt_lwwreg |
+                    riak_dt_orset | riak_dt_vvorset | riak_dt_zorset |
+                    riak_dt_multi.
+-type valuelist() :: [{field(), crdt()}].
+
+-type crdt()  :: riak_dt_gcounter:gcounter() | riak_dt_pncounter:pncounter() |
+                 riak_dt_lwwreg:lwwreg() | riak_dt_orset:orset() |
+                 riak_dt_vvorset:vvorset() | riak_dt_zorset:zorset() |
+                 riak_dt_multi:multi().
+
+-type multi_op() :: {update, [multi_field_update() | multi_field_op()]}.
+
+-type multi_field_op() :: {add, field()} | {remove, field()}.
+-type multi_field_update() :: {update, field(), crdt_op()}.
+
+-type crdt_op() :: riak_dt_gcounter:gcounter_op() | riak_dt_pncounter:pncounter_op() |
+                   riak_dt_lwwreg:lwwreg_op() | riak_dt_orset:orset_op() |
+                   riak_dt_vvorset:vvorset_op() | riak_dt_zorset:zorset_op() |
+                   riak_dt_multi:multi_op().
 
 -type multi_q() :: size | {get, field()} | {get_crdt, field()} |
                    keyset | {contains, field()}.
@@ -64,15 +83,15 @@ new() ->
     {riak_dt_vvorset:new(), orddict:new()}.
 
 %% @doc get the current set of values for this multi
-%% @TODO a way to get the value of a subset of fields.
 value({Schema, Values}) ->
     PresentFields = riak_dt_vvorset:value(Schema),
     values(PresentFields, Values).
 
-%% private
+%% @private
 values(PresentFields, Values) ->
     values(PresentFields, Values, []).
 
+%% @private
 values([], _Values, Acc) ->
     Acc;
 values([{_Name, Mod}=Key | Rest], Values, Acc) ->
@@ -80,6 +99,10 @@ values([{_Name, Mod}=Key | Rest], Values, Acc) ->
     Val = Mod:value(CRDT),
     values(Rest, Values, [{Key, Val} | Acc]).
 
+%% @doc execute the given `multi_q()' against the given
+%% `multi()'.
+%% @TODO add a query for getting a subset of fields
+%% including submap fields (Maybe kvc like?)
 -spec value(multi_q(), multi()) -> term().
 value(size, {Schema, _Values}) ->
     riak_dt_vvorset:value(size, Schema);
@@ -100,17 +123,22 @@ value(keyset, {Schema, _Values}) ->
 value({contains, Field}, {Schema, _Values}) ->
     riak_dt_vvorset:value({contains, Field}, Schema).
 
-%% @Doc update the schema or a field in the schema.
-%% Ops is a list of one or more of the following ops:
-%% {update, Key, Op} where Op is any operation supported by the CRDT mod
-%% referenced in the Key ({name, type}). The Op is applied to the value in the value list
-%% for the given key
-%% {add, field} where field is {name, type}.
-%% {remove, field} where field is {name, type}
+%% @Doc update the `multi()' or a field in the `multi()' by executing
+%% the `multi_op()'.
+%% `Ops' is a list of one or more of the following ops:
+%% `{update, field(), Op}' where `Op' is any operation supported by the CRDT mod
+%% referenced in the `field()' (`{name, type}'). The `Op' is applied to the value in the value list
+%% for the given key.
+%% `{insert, field(), `Value'} where Value is a `CRDT' of type `Mod' from the `Key' pair
+%% `{Name, Mod}' If there is no local value for `Key' the CRDT is inserted
+%% otherwise, it is merged with the local value.
+%% `{add, field}' where field is `{name, type}'.
+%% `{remove, field}' where field is `{name, type}'
 %% These last too are just the OR-Set operations add/remove on the schema.
 update({update, Ops}, Actor, {Schema, Values}) ->
     apply_ops(Ops, Actor, Schema, Values).
 
+%% @Private
 apply_ops([], _Actor, Schema, Values) ->
     {Schema, Values};
 apply_ops([{update, {_Name, Mod}=Key, Op} | Rest], Actor, Schema, Values) ->
@@ -130,25 +158,34 @@ apply_ops([{add, {_Name, Mod}=Key} | Rest], Actor, Schema, Values) ->
     NewSchema = riak_dt_vvorset:update({add, Key}, Actor, Schema),
     %% Update the value, adding an empty crdt if not present
     NewValues = orddict:update(Key, fun(V) -> V end, Mod:new(), Values),
+    apply_ops(Rest, Actor, NewSchema, NewValues);
+apply_ops([{insert, {_Name, Mod}=Key, CRDT} | Rest], Actor, Schema, Values) ->
+    %% Add the key to the schema
+    %% Update the value, setting value to `CRDT' or Merging
+    %% if key is already present
+    NewSchema = riak_dt_vvorset:update({add, Key}, Actor, Schema),
+    NewValues = orddict:update(Key, fun(V) -> Mod:merge(V, CRDT) end,
+                               CRDT, Values),
     apply_ops(Rest, Actor, NewSchema, NewValues).
 
+%% @Private
 update_fun(Mod, Op, Actor) ->
     fun(CRDT) ->
             Mod:update(Op, Actor, CRDT)
     end.
 
+%% @Doc merge two `multi()'s.
+%% Performs a merge on the key set (schema) and then a pairwise
+%% merge on all values in the value list.
+%% This is the LUB function.
+-spec merge(multi(), multi()) -> multi().
 merge({Schema1, Values1}, {Schema2, Values2}) ->
     NewSchema = riak_dt_vvorset:merge(Schema1, Schema2),
     PresentFields = riak_dt_vvorset:value(NewSchema),
     NewValues = merge_values(PresentFields, Values1, Values2, []),
-    %% This merges _all_ values in the value list.
-    %% Is that a good idea? It means merging items that maybe (long ago?!) deleted
-    %% However, maybe that is good in case they get re-added.
-    %% @TODO Discuss this vs the above
-    %% NewValues = orddict:merge(fun({_Name, Type}, V1, V2) -> Type:merge(V1, V2) end,
-    %%                           Values1, Values2),
     {NewSchema, NewValues}.
 
+%% @Private
 merge_values([], _Values1, _Values2, Acc) ->
     orddict:from_list(Acc);
 merge_values([{_Name, Mod}=Key | Rest], Values1, Values2, Acc) ->
@@ -157,21 +194,27 @@ merge_values([{_Name, Mod}=Key | Rest], Values1, Values2, Acc) ->
     V = Mod:merge(V1, V2),
     merge_values(Rest, Values1, Values2, [{Key, V} | Acc]).
 
+%% @Private
 type_safe_fetch(_Mod, {ok, Value}) ->
     Value;
 type_safe_fetch(Mod, error) ->
     Mod:new().
 
-%% @TODO compare equals on all present fields or all fields??
-%% NOTE: this fun is (probably) incorrect
+
+%% @Doc compare two `multi()'s for equality of  structure
+%% Both schemas and value list must be equal.
+%% Performs a pariwise equals for all values in the value lists
+-spec equal(multi(), multi()) -> boolean().
 equal({Schema1, Values1}, {Schema2, Values2}) ->
     riak_dt_vvorset:equal(Schema1, Schema2)  andalso pairwise_equals(Values1, Values2).
 
+%% @Private
 %% Note, only called when we know that 2 schema are equal.
 %% Both dicts therefore have the same set of keys.
 pairwise_equals(Values1, Values2) ->
     short_cicuit_equals(orddict:to_list(Values1), Values2).
 
+%% @Private
 %% Compare each value. Return false as soon as any pair are not equal.
 short_cicuit_equals([], _Values2) ->
     true;
@@ -210,13 +253,31 @@ gen_op() ->
 
 gen_update() ->
     ?LET(Field, gen_field(),
-         oneof([{add, Field}, {remove, Field}, {update, Field, gen_field_op(Field)}])).
+         oneof([{add, Field}, {remove, Field},
+                {insert, Field, gen_field_insert(Field)},
+                {update, Field, gen_field_op(Field)}])).
 
 gen_field() ->
-    {binary(), oneof([riak_dt_pncounter, riak_dt_vvorset, riak_dt_lwwreg, riak_dt_multi, riak_dt_gcounter])}.
+    {binary(), oneof([riak_dt_pncounter, riak_dt_vvorset, riak_dt_lwwreg,
+                       riak_dt_gcounter, riak_dt_zorset, riak_dt_multi])}.
 
 gen_field_op({_Name, Type}) ->
     Type:gen_op().
+
+gen_field_insert({_Name, Type}) ->
+     Type:generate().
+
+generate() ->
+    ?LET(Fields, list(gen_field()),
+         begin
+             Values = [{F, Type:generate()} || {_Name, Type}=F <- Fields, Type /= riak_dt_multi], %% @TODO fix this, deadlocks otherwise
+             lists:foldl(fun({K, V}, {FSet, VDict}) ->
+                                 Fields2 = riak_dt_vvorset:update({add, K}, choose(1, 50), FSet),
+                                 Values2 = orddict:store(K, V, VDict),
+                                 {Fields2, Values2} end,
+                         riak_dt_multi:new(),
+                         Values)
+                 end).
 
 init_state() ->
     {0, dict:new()}.
@@ -250,6 +311,13 @@ update_expected(ID, {update, {_Name, Type}=Key, Op}, {Cnt0, Dict}) ->
     Cnt = Cnt0+1,
     ToAdd = {Key, Updated, Cnt},
     {A, R} = dict:fetch(ID, Dict),
+    {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)};
+update_expected(ID, {insert, {_Name, Type}=Key, Value}, {Cnt0, Dict}) ->
+    CurrentValue = get_for_key(Key, ID,  Dict),
+    Updated = Type:merge(Value, CurrentValue),
+    Cnt = Cnt0+1,
+    ToAdd = {Key, Updated, Cnt},
+    {A, R} = dict:fetch(ID, Dict),
     {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)}.
 
 eqc_state_value({_Cnt, Dict}) ->
@@ -267,6 +335,26 @@ eqc_state_value({_Cnt, Dict}) ->
                 sets:to_list(Remaining)),
     [{K, Type:value(V)} || {{_Name, Type}=K, V} <- dict:to_list(Res)].
 
+%% On shrinking this fails with some badarge shit
+%% {'EXIT',
+%%     {badarg,
+%%         [{dict,fetch,
+%%              [5,
+%%               {dict,1,16,16,8,80,48,
+%%                   {[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[]},
+%%                   {{[[0|
+%%                       {{set,0,16,16,8,80,48,
+%%                            {[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[]},
+%%                            {{[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],
+%%                              []}}},
+%%                        {set,0,16,16,8,80,48,
+%%                            {[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[]},
+%%                            {{[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],
+%%                              []}}}}]],
+%%                     [],[],[],[],[],[],[],[],[],[],[],[],[],[],[]}}}],
+%%              [{file,"dict.erl"},{line,125}]},
+%%          {riak_dt_multi,get_for_key,3,
+%%              [{file,"src/riak_dt_multi.erl"},{line,307}]},
 get_for_key({_N, T}=K, ID, Dict) ->
     {A, R} = dict:fetch(ID, Dict),
     Remaining = sets:subtract(A, R),

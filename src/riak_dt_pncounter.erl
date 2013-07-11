@@ -40,7 +40,7 @@
 %% EQC API
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
--export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0]).
+-export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0, generate/0]).
 -endif.
 
 -ifdef(TEST).
@@ -141,6 +141,13 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer,
 
 -ifdef(EQC).
 %% EQC generator
+
+generate() ->
+    ?LET(Ops, list(gen_op()),
+         lists:foldl(fun(Op, Cntr) ->
+                             riak_dt_pncounter:update(Op, choose(1, 50), Cntr) end,
+                     riak_dt_pncounter:new(),
+                     Ops)).
 
 init_state() ->
     0.
