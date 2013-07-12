@@ -29,6 +29,7 @@
 -behaviour(riak_dt).
 
 -export([new/0, value/1, update/3, merge/2, equal/2]).
+-export([gc_propose/2, gc_execute/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -88,6 +89,20 @@ merge([{Actor1, Cnt1}=AC1|Rest], Clock2, Acc) ->
 
 equal(VA,VB) ->
     lists:sort(VA) =:= lists:sort(VB).
+    
+-define(GC_THRESHOLD, 2).
+gc_propose(_Actor, GCnt) when length(GCnt) < ?GC_THRESHOLD ->
+    dont_gc_me_bro;
+gc_propose(Actor, GCnt) ->
+    ActorCnt = proplists:get_value(Actor, GCnt, 0),
+    Addition = value(GCnt) - ActorCnt,
+    RemovedActors = [Act || {Act, _Cnt} <- GCnt, Act /= Actor ],
+    {?MODULE, Actor, Addition, RemovedActors}.
+
+gc_execute({?MODULE, Actor, Addition, RemovedActors}, GCnt0) ->
+    GCnt1 = [Pair || {Act,_}=Pair <- GCnt0, not lists:member(Act,RemovedActors)],
+    increment_by(Addition, Actor, GCnt1).
+    
 
 %% priv
 increment_by(Amount, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
