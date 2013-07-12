@@ -35,6 +35,9 @@
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) ->
                               io:format(user, Str, Args) end, P)).
+                              
+run(Module, Count) ->
+    {atom_to_list(Module), {timeout, 120, [?_assert(prop_converge(Count, Module))]}}.
 
 %% Initialize the state
 initial_state() ->
@@ -82,11 +85,11 @@ postcondition(_S,{call,?MODULE, crdt_equals, _},Res) ->
 postcondition(_S,{call,_,_,_},_Res) ->
     true.
 
-prop_converge(InitialValue, NumTests, Mod) ->
-    eqc:quickcheck(eqc:numtests(NumTests, ?QC_OUT(prop_converge(InitialValue, Mod)))).
+prop_converge(NumTests, Mod) ->
+    eqc:quickcheck(eqc:numtests(NumTests, ?QC_OUT(prop_converge(Mod)))).
 
-prop_converge(InitialValue, Mod) ->
-    ?FORALL(Cmds,commands(?MODULE, #state{mod=Mod, mod_state=InitialValue}),
+prop_converge(Mod) ->
+    ?FORALL(Cmds,commands(?MODULE, #state{mod=Mod, mod_state=Mod:init_state()}),
             begin
                 {H,S,Res} = run_commands(?MODULE,Cmds),
                 Merged = merge_crdts(Mod, S#state.vnodes),

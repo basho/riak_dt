@@ -37,7 +37,7 @@
 
 %% EQC API
 -ifdef(EQC).
--export([gen_op/0, update_expected/3, eqc_state_value/1]).
+-export([init_state/0, gen_op/0, update_expected/3, eqc_state_value/1]).
 -endif.
 
 %% EQC generator
@@ -163,6 +163,6 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
 
 -ifdef(EQC).
 eqc_value_test_() ->
-    {timeout, 120, [?_assert(crdt_statem_eqc:prop_converge(init_state(), 1000, ?MODULE))]}.
+    crdt_statem_eqc:run(?MODULE, 1000).
 -endif.
 -endif.

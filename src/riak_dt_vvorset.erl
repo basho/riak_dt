@@ -229,7 +229,7 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
 
 -ifdef(EQC).
 eqc_value_test_() ->
-    {timeout, 120, [?_assert(crdt_statem_eqc:prop_converge(init_state(), 1000, ?MODULE))]}.
+    crdt_statem_eqc:run(?MODULE, 1000).
 
 generate() ->
     ?LET(Members, list(int()),
