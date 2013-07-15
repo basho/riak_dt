@@ -86,8 +86,8 @@ equal(#dt_withgc{mod=Mod, dt=Inner1, epoch=Ep1},
 -spec gc_meta(actor(), [actor()], [actor()], float()) -> gc_meta().
 gc_meta(Actor, PActors, ROActors, CompactProportion) ->
     ?GC_META{actor=Actor,
-             primary_actors=PActors, 
-             readonly_actors=ROActors,
+             primary_actors=ordsets:add_element(Actor, ordsets:from_list(PActors)), 
+             readonly_actors=ordsets:from_list(ROActors),
              compact_proportion=CompactProportion}.
 
 % Check if the GC should be performed, using the provided metadata + threshold

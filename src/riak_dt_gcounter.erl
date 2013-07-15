@@ -29,7 +29,9 @@
 -behaviour(riak_dt).
 
 -export([new/0, value/1, update/3, merge/2, equal/2]).
--export([gc_propose/2, gc_execute/2]).
+-export([gc_ready/2, gc_propose/2, gc_execute/2]).
+
+-include("riak_dt_gc.hrl").
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -39,6 +41,8 @@
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
+
+-type gcounter() :: [{actor(), pos_integer()}].
 
 %% EQC generator
 -ifdef(EQC).
@@ -89,20 +93,53 @@ merge([{Actor1, Cnt1}=AC1|Rest], Clock2, Acc) ->
 
 equal(VA,VB) ->
     lists:sort(VA) =:= lists:sort(VB).
-    
--define(GC_THRESHOLD, 2).
-gc_propose(_Actor, GCnt) when length(GCnt) < ?GC_THRESHOLD ->
-    dont_gc_me_bro;
-gc_propose(Actor, GCnt) ->
-    ActorCnt = proplists:get_value(Actor, GCnt, 0),
-    Addition = value(GCnt) - ActorCnt,
-    RemovedActors = [Act || {Act, _Cnt} <- GCnt, Act /= Actor ],
-    {?MODULE, Actor, Addition, RemovedActors}.
 
-gc_execute({?MODULE, Actor, Addition, RemovedActors}, GCnt0) ->
-    GCnt1 = [Pair || {Act,_}=Pair <- GCnt0, not lists:member(Act,RemovedActors)],
-    increment_by(Addition, Actor, GCnt1).
+%%% GC
+
+-type gc_op() :: term().
+
+% We're ready to GC if the actors we can't compact make up more than `compact_proportion` of
+% the actors in this GCounter.
+-spec gc_ready(gc_meta(), gcounter()) -> boolean().
+gc_ready(Meta, GCnt) ->
+    ROActors = length(ro_actors(Meta, GCnt)),
+    TotalActors = length(GCnt),
+    Proportion = Meta?GC_META.compact_proportion,
+    TotalActors * Proportion > ROActors.
+
+
+-spec gc_propose(gc_meta(), gcounter()) -> gc_op().
+gc_propose(Meta, GCnt) ->
+    Actor = ?GC_META_ACTOR(Meta),
+    ROActors = ro_actors(Meta, GCnt),
+    {ActorAdd, DeadActors} = make_proposal(Actor, ROActors, GCnt),
+    {?MODULE, Actor, ActorAdd, DeadActors}.
+
+-spec gc_execute(gc_op(), gcounter()) -> gcounter().
+gc_execute({?MODULE, Actor, ActorAdd, DeadActors}, GCnt0) ->
+    GCnt1 = [Pair || {Act,_}=Pair <- GCnt0, not lists:member(Act, DeadActors)],
+    increment_by(ActorAdd, Actor, GCnt1).
+
+make_proposal(Actor, ROActors, GCnt) ->
+    make_proposal(Actor, ROActors, GCnt, {0, []}).
+
+make_proposal(_Actor, _ROActors, [], Rtn) ->
+    Rtn;
+make_proposal(Actor, ROActors, [{Act,_Cnt}|GCnt], Rtn) when Actor == Act ->
+    make_proposal(Actor, ROActors, GCnt, Rtn);
+make_proposal(Actor, ROActors, [{Act,Cnt}|GCnt], {Add0, Dead0}=Rtn) ->
+    case ordsets:is_element(Act, ROActors) of
+        true -> make_proposal(Actor, ROActors, GCnt, Rtn);
+        false -> make_proposal(Actor, ROActors, GCnt, {Add0 + Cnt, [Act|Dead0]})
+    end.
     
+% Returns the actors from GCnt that we can't get rid of during compaction.
+ro_actors(Meta, GCnt) ->
+    PAs = ordsets:from_list(Meta?GC_META.primary_actors),
+    RoAs = ordsets:from_list(Meta?GC_META.readonly_actors),
+    CounterActors = ordsets:from_list([Actor || {Actor, _} <- GCnt]),
+    ordsets:intersection(ordsets:union(PAs, RoAs), CounterActors).
+
 
 %% priv
 increment_by(Amount, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
