@@ -34,6 +34,8 @@
 % -export([gen_op/0, update_expected/3, eqc_state_value/1]).
 -endif.
 
+
+
 -record(dt_withgc, {
     mod :: module(),    % The "type" of the inner CRDT
     dt :: term(),       % The inner CRDT
@@ -41,6 +43,7 @@
                         % Operations carried out in previous GCs
     epoch = undefined :: term()     % The id of the most recent GC
     }).
+-opaque dt_withgc() :: #dt_withgc{}.
 
 new(Mod) ->
     #dt_withgc{mod=Mod, dt=Mod:new()}.
@@ -76,22 +79,30 @@ equal(#dt_withgc{mod=Mod, dt=Inner1, epoch=Ep1},
     epoch_compare(Ep1,Ep2) == eq andalso Mod:equal(Inner1, Inner2).
 
 %%% GC. Yay!
+
+-type gc_op() :: {?MODULE, epoch(), term()}.
+
+% construct a metadata object for all the info needed to do a GC
+-spec gc_meta(actor(), [actor()], [actor()], float()) -> gc_meta().
 gc_meta(Actor, PActors, ROActors, CompactProportion) ->
     ?GC_META{actor=Actor,
              primary_actors=PActors, 
              readonly_actors=ROActors,
              compact_proportion=CompactProportion}.
 
-% Check if the GC should be performed, using an external threshold
+% Check if the GC should be performed, using the provided metadata + threshold
 % I'm imagining the threshold object to be more than just a single value
+-spec gc_ready(gc_meta(), dt_withgc()) -> boolean().
 gc_ready(Meta, #dt_withgc{mod=Mod, dt=Inner}) ->
     Mod:gc_ready(Meta, Inner).
 
+-spec gc_propose(gc_meta(), dt_withgc()) -> gc_op().
 gc_propose(Meta, #dt_withgc{mod=Mod, dt=Inner}) ->
     GCOperation = Mod:gc_propose(Meta, Inner),
     Actor = ?GC_META_ACTOR(Meta),
     {?MODULE, new_epoch(Actor), GCOperation}.
 
+-spec gc_execute(gc_op(), dt_withgc()) -> dt_withgc().
 gc_execute({?MODULE, Epoch, Op}=GcOp,
            #dt_withgc{mod=Mod, dt=Inner0, gc_log=Log}=DT) ->
     Inner1 = Mod:gc_execute(Op, Inner0),
@@ -134,12 +145,15 @@ compact_log(Log) ->
     
 %%% Epochs
 
+-spec new_epoch(actor()) -> epoch().
 new_epoch(Actor) ->
     {Actor, erlang:now()}.
 
+-spec epoch_actor(epoch()) -> actor().
 epoch_actor({Actor, _TS}) ->
     Actor.
 
+-spec epoch_compare(epoch(), epoch()) -> lt | eq | gt.
 epoch_compare({_Actor1, TS1}=_Epoch1, {_Actor2, TS2}=_Epoch2) ->
     if
         TS1 < TS2 -> lt;
