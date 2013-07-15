@@ -24,8 +24,10 @@
 -module(riak_dt_withgc).
 
 -export([new/1, value/1, value/2, update/3, merge/2, equal/2]).
--export([gc_propose/2, gc_execute/2]).
+-export([gc_threshold/2, gc_ready/2, gc_propose/2, gc_execute/2]).
 -export([new_epoch/1, epoch_actor/1]).
+
+-include("riak_dt_gc.hrl").
 
 -ifdef(EQC).
 % -include_lib("eqc/include/eqc.hrl").
@@ -73,31 +75,30 @@ equal(#dt_withgc{mod=Mod, dt=Inner1, epoch=Ep1},
       #dt_withgc{mod=Mod, dt=Inner2, epoch=Ep2}) ->
     epoch_compare(Ep1,Ep2) == eq andalso Mod:equal(Inner1, Inner2).
 
-gc_propose(Actor, #dt_withgc{mod=Mod, dt=Inner}) ->
-    case Mod:gc_propose(Actor, Inner) of
-        dont_gc_me_bro -> dont_gc_me_bro;
-        GCOperation -> {?MODULE, new_epoch(Actor), GCOperation}
-    end.
+%%% GC. Yay!
+gc_threshold(PrimaryActors, UnneededProportion) ->
+    ?GC_THRESHOLD{primary_actors=PrimaryActors, max_unneeded=UnneededProportion}.
 
-gc_execute(dont_gc_me_bro, DT) ->
-    DT;
+% Check if the GC should be performed, using an external threshold
+% I'm imagining the threshold object to be more than just a single value
+gc_ready(Threshold, #dt_withgc{mod=Mod, dt=Inner}) ->
+    Mod:gc_ready(Threshold, Inner).
+
+gc_propose(Actor, #dt_withgc{mod=Mod, dt=Inner}) ->
+    GCOperation = Mod:gc_propose(Actor, Inner),
+    {?MODULE, new_epoch(Actor), GCOperation}.
+
 gc_execute({?MODULE, Epoch, Op}=GcOp,
            #dt_withgc{mod=Mod, dt=Inner0, gc_log=Log}=DT) ->
     Inner1 = Mod:gc_execute(Op, Inner0),
-    Log1 = compact([GcOp | Log]),
+    Log1 = compact_log([GcOp | Log]),
     DT#dt_withgc{dt=Inner1, epoch=Epoch, gc_log=Log1}.
-
-%% This is only an idea right now, but could be interesting.
-% gc_undo(OldEpoch,
-%         #dt_withgc{}=DT) ->
-%     DT.
 
 -ifdef(EQC).
 %% ---
 % [EQC Goes Here]
 %% ---
 -endif.
-
 
 % So this function is used by merge to get a sibling to catch up with another
 % before we can do a merge of the inner data types.
@@ -117,9 +118,9 @@ prepare_catchup_log(Epoch, [{?MODULE, GcEpoch,_}=GcOp|Rest], CatchupLog) ->
 prepare_catchup_log(Epoch, [_Invalid | Rest], CatchupLog) ->
     prepare_catchup_log(Epoch, Rest, CatchupLog).
 
-% Here we have the opportunity to get rid of old logs, or to compress them to
+% Here we have the opportunity to get rid of old logs, or (to compress them to
 % save space.
-compact(Log) ->
+compact_log(Log) ->
     Log.
 
 new_epoch(Actor) ->
