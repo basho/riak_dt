@@ -113,25 +113,28 @@ gc_ready(Meta, GCnt) ->
 gc_propose(Meta, GCnt) ->
     Actor = ?GC_META_ACTOR(Meta),
     ROActors = ro_actors(Meta, GCnt),
-    {ActorAdd, DeadActors} = make_proposal(Actor, ROActors, GCnt),
-    {?MODULE, Actor, ActorAdd, DeadActors}.
+    DeadActors = make_proposal(Actor, ROActors, GCnt),
+    {?MODULE, Actor, DeadActors}.
 
 -spec gc_execute(gc_op(), gcounter()) -> gcounter().
-gc_execute({?MODULE, Actor, ActorAdd, DeadActors}, GCnt0) ->
-    GCnt1 = [Pair || {Act,_}=Pair <- GCnt0, not lists:member(Act, DeadActors)],
+gc_execute({?MODULE, Actor, DeadActors}, GCnt0) ->
+    GCnt1 = [Pair || {Act,_}=Pair <- GCnt0, not lists:member(Act, [A || {A,_} <- DeadActors])],
+    ActorAdd = lists:foldl(fun({_,Cnt}, Sum) ->
+                                Sum + Cnt
+                           end, 0, DeadActors),
     increment_by(ActorAdd, Actor, GCnt1).
 
 make_proposal(Actor, ROActors, GCnt) ->
-    make_proposal(Actor, ROActors, GCnt, {0, []}).
+    make_proposal(Actor, ROActors, GCnt, []).
 
-make_proposal(_Actor, _ROActors, [], Rtn) ->
-    Rtn;
-make_proposal(Actor, ROActors, [{Act,_Cnt}|GCnt], Rtn) when Actor == Act ->
-    make_proposal(Actor, ROActors, GCnt, Rtn);
-make_proposal(Actor, ROActors, [{Act,Cnt}|GCnt], {Add0, Dead0}=Rtn) ->
+make_proposal(_Actor, _ROActors, [], Dead) ->
+    Dead;
+make_proposal(Actor, ROActors, [{Act,_Cnt}|GCnt], Dead) when Actor == Act ->
+    make_proposal(Actor, ROActors, GCnt, Dead);
+make_proposal(Actor, ROActors, [{Act,Cnt}|GCnt], Dead) ->
     case ordsets:is_element(Act, ROActors) of
-        true -> make_proposal(Actor, ROActors, GCnt, Rtn);
-        false -> make_proposal(Actor, ROActors, GCnt, {Add0 + Cnt, [Act|Dead0]})
+        true -> make_proposal(Actor, ROActors, GCnt, Dead);
+        false -> make_proposal(Actor, ROActors, GCnt, [{Act,Cnt}|Dead])
     end.
     
 % Returns the actors from GCnt that we can't get rid of during compaction.

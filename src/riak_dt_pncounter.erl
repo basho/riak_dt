@@ -100,7 +100,8 @@ equal({Incr1, Decr1}, {Incr2, Decr2}) ->
 % the actors in this GCounter.
 -spec gc_ready(gc_meta(), pncounter()) -> boolean().
 gc_ready(Meta, {Incr,Decr}=_PNCnt) ->
-    riak_dt_gcounter:gc_ready(Meta, Incr) or riak_dt_pncounter:gc_ready(Meta, Decr).
+    riak_dt_gcounter:gc_ready(Meta, Incr) 
+    orelse riak_dt_gcounter:gc_ready(Meta, Decr).
 
 -spec gc_propose(gc_meta(), pncounter()) -> gc_op().
 gc_propose(Meta, {Incr,Decr}=_PNCnt) ->
