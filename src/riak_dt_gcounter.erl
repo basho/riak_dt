@@ -113,19 +113,21 @@ gc_ready(Meta, GCnt) ->
 gc_propose(Meta, GCnt) ->
     Actor = ?GC_META_ACTOR(Meta),
     ROActors = ro_actors(Meta, GCnt),
-    DeadActors = make_proposal(Actor, ROActors, GCnt),
+    DeadActors = make_proposal(Actor, ROActors, GCnt, []),
     {?MODULE, Actor, DeadActors}.
 
 -spec gc_execute(gc_op(), gcounter()) -> gcounter().
 gc_execute({?MODULE, Actor, DeadActors}, GCnt0) ->
-    GCnt1 = [Pair || {Act,_}=Pair <- GCnt0, not lists:member(Act, [A || {A,_} <- DeadActors])],
-    ActorAdd = lists:foldl(fun({_,Cnt}, Sum) ->
-                                Sum + Cnt
-                           end, 0, DeadActors),
-    increment_by(ActorAdd, Actor, GCnt1).
-
-make_proposal(Actor, ROActors, GCnt) ->
-    make_proposal(Actor, ROActors, GCnt, []).
+    {ActorAdd, GCnt1} = subtract_dead(DeadActors, GCnt0, 0),
+    GCnt2 = prune_empty_nodes(GCnt1),
+    increment_by(ActorAdd, Actor, GCnt2).
+    
+% Returns the actors from GCnt that we can't get rid of during compaction.
+ro_actors(Meta, GCnt) ->
+    PAs = ordsets:from_list(Meta?GC_META.primary_actors),
+    RoAs = ordsets:from_list(Meta?GC_META.readonly_actors),
+    CounterActors = ordsets:from_list([Actor || {Actor, _} <- GCnt]),
+    ordsets:intersection(ordsets:union(PAs, RoAs), CounterActors).
 
 make_proposal(_Actor, _ROActors, [], Dead) ->
     Dead;
@@ -136,14 +138,20 @@ make_proposal(Actor, ROActors, [{Act,Cnt}|GCnt], Dead) ->
         true -> make_proposal(Actor, ROActors, GCnt, Dead);
         false -> make_proposal(Actor, ROActors, GCnt, [{Act,Cnt}|Dead])
     end.
-    
-% Returns the actors from GCnt that we can't get rid of during compaction.
-ro_actors(Meta, GCnt) ->
-    PAs = ordsets:from_list(Meta?GC_META.primary_actors),
-    RoAs = ordsets:from_list(Meta?GC_META.readonly_actors),
-    CounterActors = ordsets:from_list([Actor || {Actor, _} <- GCnt]),
-    ordsets:intersection(ordsets:union(PAs, RoAs), CounterActors).
 
+subtract_dead([], GCnt, Sum) ->
+    {Sum, GCnt};
+subtract_dead([{Actor,Subtract}|Dead], GCnt, Sum) ->
+    {Ctr, NewGCnt} = case lists:keytake(Actor, 1, GCnt) of
+                        false ->
+                            {-Subtract, GCnt};
+                        {value, {_,C}, ModGCnt} ->
+                            {C-Subtract, ModGCnt}
+                     end,
+    subtract_dead(Dead, [{Actor,Ctr}|NewGCnt], Sum+Subtract).
+
+prune_empty_nodes(GCnt) ->
+    [Pair || {_,Cnt}=Pair <- GCnt, Cnt =/= 0].
 
 %% priv
 increment_by(Amount, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
