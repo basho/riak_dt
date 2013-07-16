@@ -43,7 +43,9 @@
 -export([gen_op/0, update_expected/3, eqc_state_value/1]).
 -endif.
 
+-define(GC_TAG, pncounter_gc_proposal).
 -type pncounter() :: {riak_dt_gcounter:gcounter(),riak_dt_gcounter:gcounter()}.
+-opaque gc_op() :: {?GC_TAG, riak_dt_gcounter:gc_op(), riak_dt_gcounter:gc_op()}.
 -export_type([pncounter/0]).
 
 %% EQC generator
@@ -94,7 +96,6 @@ equal({Incr1, Decr1}, {Incr2, Decr2}) ->
 
 %%% GC    
 
--type gc_op() :: term().
 
 % We're ready to GC if the actors we can't compact make up more than `compact_proportion` of
 % the actors in this GCounter.
@@ -107,10 +108,10 @@ gc_ready(Meta, {Incr,Decr}=_PNCnt) ->
 gc_propose(Meta, {Incr,Decr}=_PNCnt) ->
     IncrOp = riak_dt_gcounter:gc_propose(Meta, Incr),
     DecrOp = riak_dt_gcounter:gc_propose(Meta, Decr),
-    {?MODULE, IncrOp, DecrOp}.
+    {?GC_TAG, IncrOp, DecrOp}.
 
 -spec gc_execute(gc_op(), pncounter()) -> pncounter().
-gc_execute({?MODULE, IncrOp, DecrOp}, {Incr0,Decr0}=_PNCnt) ->
+gc_execute({?GC_TAG, IncrOp, DecrOp}, {Incr0,Decr0}=_PNCnt) ->
     Incr1 = riak_dt_gcounter:gc_execute(IncrOp, Incr0),
     Decr1 = riak_dt_gcounter:gc_execute(DecrOp, Decr0),
     {Incr1, Decr1}.

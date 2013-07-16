@@ -42,8 +42,11 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
+-define(GC_TAG, gcounter_gc_proposal).
+
 -type gcounter() :: [{actor(), pos_integer()}].
--export_type([gcounter/0]).
+-opaque gc_op() :: {?GC_TAG, actor(), [{actor(),integer()}]}.
+-export_type([gcounter/0, gc_op/0]).
 
 %% EQC generator
 -ifdef(EQC).
@@ -97,8 +100,6 @@ equal(VA,VB) ->
 
 %%% GC
 
--type gc_op() :: term().
-
 % We're ready to GC if the actors we can't compact make up more than `compact_proportion` of
 % the actors in this GCounter.
 -spec gc_ready(gc_meta(), gcounter()) -> boolean().
@@ -114,10 +115,10 @@ gc_propose(Meta, GCnt) ->
     Actor = ?GC_META_ACTOR(Meta),
     ROActors = ro_actors(Meta, GCnt),
     DeadActors = make_proposal(Actor, ROActors, GCnt, []),
-    {?MODULE, Actor, DeadActors}.
+    {?GC_TAG, Actor, DeadActors}.
 
 -spec gc_execute(gc_op(), gcounter()) -> gcounter().
-gc_execute({?MODULE, Actor, DeadActors}, GCnt0) ->
+gc_execute({?GC_TAG, Actor, DeadActors}, GCnt0) ->
     {ActorAdd, GCnt1} = subtract_dead(DeadActors, GCnt0, 0),
     GCnt2 = prune_empty_nodes(GCnt1),
     increment_by(ActorAdd, Actor, GCnt2).
