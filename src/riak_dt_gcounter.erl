@@ -43,6 +43,7 @@
 -endif.
 
 -type gcounter() :: [{actor(), pos_integer()}].
+-export_type([gcounter/0]).
 
 %% EQC generator
 -ifdef(EQC).
