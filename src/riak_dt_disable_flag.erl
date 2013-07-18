@@ -30,6 +30,9 @@
 -behaviour(riak_dt).
 
 -export([new/0, value/1, update/3, merge/2, equal/2]).
+-export([gc_ready/2, gc_propose/2, gc_execute/2]).
+
+-include("riak_dt_gc.hrl").
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -39,6 +42,8 @@
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
+
+-opaque flag() :: on | off.
 
 %% EQC generator
 -ifdef(EQC).
@@ -68,6 +73,22 @@ merge(FA, FB) ->
 
 equal(FA,FB) ->
     FA =:= FB.
+
+%%% GC
+
+-type gc_op() :: {}.    
+
+-spec gc_ready(gc_meta(), flag()) -> boolean().
+gc_ready(_Meta, _Flag) ->
+    false.
+
+-spec gc_propose(gc_meta(), flag()) -> gc_op().
+gc_propose(_Meta, _Flag) ->
+    {}.
+
+-spec gc_execute(gc_op(), flag()) -> flag().
+gc_execute({}, Flag) ->
+    Flag.
 
 %% priv
 flag_and(on, on) ->

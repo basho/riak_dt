@@ -34,11 +34,19 @@
 
 %% API
 -export([new/0, value/1, update/3, merge/2, equal/2]).
+-export([gc_ready/2, gc_propose/2, gc_execute/2]).
+
+-include("riak_dt_gc.hrl").
 
 %% EQC API
 -ifdef(EQC).
 -export([gen_op/0, update_expected/3, eqc_state_value/1]).
 -endif.
+
+-define(GC_TAG, pncounter_gc_proposal).
+-type pncounter() :: {riak_dt_gcounter:gcounter(),riak_dt_gcounter:gcounter()}.
+-opaque gc_op() :: {?GC_TAG, riak_dt_gcounter:gc_op(), riak_dt_gcounter:gc_op()}.
+-export_type([pncounter/0]).
 
 %% EQC generator
 -ifdef(EQC).
@@ -85,6 +93,28 @@ merge({Incr1, Decr1}, {Incr2, Decr2}) ->
 
 equal({Incr1, Decr1}, {Incr2, Decr2}) ->
     riak_dt_gcounter:equal(Incr1, Incr2) andalso riak_dt_gcounter:equal(Decr1, Decr2).
+
+%%% GC    
+
+
+% We're ready to GC if the actors we can't compact make up more than `compact_proportion` of
+% the actors in this GCounter.
+-spec gc_ready(gc_meta(), pncounter()) -> boolean().
+gc_ready(Meta, {Incr,Decr}=_PNCnt) ->
+    riak_dt_gcounter:gc_ready(Meta, Incr) 
+    orelse riak_dt_gcounter:gc_ready(Meta, Decr).
+
+-spec gc_propose(gc_meta(), pncounter()) -> gc_op().
+gc_propose(Meta, {Incr,Decr}=_PNCnt) ->
+    IncrOp = riak_dt_gcounter:gc_propose(Meta, Incr),
+    DecrOp = riak_dt_gcounter:gc_propose(Meta, Decr),
+    {?GC_TAG, IncrOp, DecrOp}.
+
+-spec gc_execute(gc_op(), pncounter()) -> pncounter().
+gc_execute({?GC_TAG, IncrOp, DecrOp}, {Incr0,Decr0}=_PNCnt) ->
+    Incr1 = riak_dt_gcounter:gc_execute(IncrOp, Incr0),
+    Decr1 = riak_dt_gcounter:gc_execute(DecrOp, Decr0),
+    {Incr1, Decr1}.
 
 %% ===================================================================
 %% EUnit tests
