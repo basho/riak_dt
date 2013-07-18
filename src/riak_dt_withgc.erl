@@ -85,7 +85,7 @@ equal(#dt_withgc{mod=Mod, dt=Inner1, epoch=Ep1},
 % construct a metadata object for all the info needed to do a GC
 -spec gc_meta(actor(), [actor()], [actor()], float()) -> gc_meta().
 gc_meta(Epoch, PActors, ROActors, CompactProportion) ->
-    ?GC_META{epoch=Epoch),
+    ?GC_META{epoch=Epoch,
              actor=epoch_actor(Epoch),
              primary_actors=ordsets:from_list(PActors), 
              readonly_actors=ordsets:from_list(ROActors),

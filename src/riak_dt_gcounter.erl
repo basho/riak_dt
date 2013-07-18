@@ -104,10 +104,11 @@ equal(VA,VB) ->
 % the actors in this GCounter.
 -spec gc_ready(gc_meta(), gcounter()) -> boolean().
 gc_ready(Meta, GCnt) ->
+    GCActors = length([Act || {{gc, _Epoch}=Act,_Cnt} <- GCnt]),
     ROActors = length(ro_actors(Meta, GCnt)),
     TotalActors = length(GCnt),
     Proportion = Meta?GC_META.compact_proportion,
-    TotalActors * Proportion > ROActors.
+    (GCActors > 1) or (TotalActors * Proportion > ROActors).
 
 
 -spec gc_propose(gc_meta(), gcounter()) -> gc_op().
@@ -132,8 +133,9 @@ ro_actors(Meta, GCnt) ->
 make_proposal(_ROActors, [], Dead) ->
     Dead;
 % Ensure previous GCs are all removed.
-make_proposal(ROActors, [{{gc, Epoch}=Act,Cnt}|GCnt], Dead) ->
+make_proposal(ROActors, [{{gc, _Epoch}=Act,Cnt}|GCnt], Dead) ->
     make_proposal(ROActors, GCnt, [{Act,Cnt}|Dead]);
+% And ensure any non-read-only actors are removed too
 make_proposal(ROActors, [{Act,Cnt}|GCnt], Dead) ->
     case ordsets:is_element(Act, ROActors) of
         true ->  make_proposal(ROActors, GCnt, Dead);
@@ -158,7 +160,7 @@ prune_empty_nodes(GCnt) ->
 
 % Assume gc actors are write-once.
 increment_by(_Amount, {gc, _Epoch}, GCnt) ->
-    GCnt.
+    GCnt;
 increment_by(Amount, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
     {Ctr, NewGCnt} = case lists:keytake(Actor, 1, GCnt) of
                          false ->
