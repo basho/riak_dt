@@ -84,9 +84,10 @@ equal(#dt_withgc{mod=Mod, dt=Inner1, epoch=Ep1},
 
 % construct a metadata object for all the info needed to do a GC
 -spec gc_meta(actor(), [actor()], [actor()], float()) -> gc_meta().
-gc_meta(Actor, PActors, ROActors, CompactProportion) ->
-    ?GC_META{actor=Actor,
-             primary_actors=ordsets:add_element(Actor, ordsets:from_list(PActors)), 
+gc_meta(Epoch, PActors, ROActors, CompactProportion) ->
+    ?GC_META{epoch=Epoch),
+             actor=epoch_actor(Epoch),
+             primary_actors=ordsets:from_list(PActors), 
              readonly_actors=ordsets:from_list(ROActors),
              compact_proportion=CompactProportion}.
 
@@ -99,8 +100,7 @@ gc_ready(Meta, #dt_withgc{mod=Mod, dt=Inner}) ->
 -spec gc_propose(gc_meta(), dt_withgc()) -> gc_op().
 gc_propose(Meta, #dt_withgc{mod=Mod, dt=Inner}) ->
     GCOperation = Mod:gc_propose(Meta, Inner),
-    Actor = ?GC_META_ACTOR(Meta),
-    {?MODULE, new_epoch(Actor), GCOperation}.
+    {?MODULE, Meta?GC_META.epoch, GCOperation}.
 
 -spec gc_execute(gc_op(), dt_withgc()) -> dt_withgc().
 gc_execute({?MODULE, Epoch, Op}=GcOp,

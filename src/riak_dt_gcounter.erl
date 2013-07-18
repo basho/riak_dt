@@ -45,7 +45,7 @@
 -define(GC_TAG, gcounter_gc_proposal).
 
 -type gcounter() :: [{actor(), pos_integer()}].
--opaque gc_op() :: {?GC_TAG, actor(), [{actor(),integer()}]}.
+-opaque gc_op() :: {?GC_TAG, epoch(), [{actor(),integer()}]}.
 -export_type([gcounter/0, gc_op/0]).
 
 %% EQC generator
@@ -112,17 +112,16 @@ gc_ready(Meta, GCnt) ->
 
 -spec gc_propose(gc_meta(), gcounter()) -> gc_op().
 gc_propose(Meta, GCnt) ->
-    Actor = ?GC_META_ACTOR(Meta),
     ROActors = ro_actors(Meta, GCnt),
-    DeadActors = make_proposal(Actor, ROActors, GCnt, []),
-    {?GC_TAG, Actor, DeadActors}.
+    DeadActors = make_proposal(ROActors, GCnt, []),
+    {?GC_TAG, Meta?GC_META.epoch, DeadActors}.
 
 -spec gc_execute(gc_op(), gcounter()) -> gcounter().
-gc_execute({?GC_TAG, Actor, DeadActors}, GCnt0) ->
+gc_execute({?GC_TAG, Epoch, DeadActors}, GCnt0) ->
     {ActorAdd, GCnt1} = subtract_dead(DeadActors, GCnt0, 0),
     GCnt2 = prune_empty_nodes(GCnt1),
-    increment_by(ActorAdd, Actor, GCnt2).
-    
+    [{{gc, Epoch},ActorAdd} | GCnt2].
+
 % Returns the actors from GCnt that we can't get rid of during compaction.
 ro_actors(Meta, GCnt) ->
     PAs = ordsets:from_list(Meta?GC_META.primary_actors),
@@ -130,14 +129,15 @@ ro_actors(Meta, GCnt) ->
     CounterActors = ordsets:from_list([Actor || {Actor, _} <- GCnt]),
     ordsets:intersection(ordsets:union(PAs, RoAs), CounterActors).
 
-make_proposal(_Actor, _ROActors, [], Dead) ->
+make_proposal(_ROActors, [], Dead) ->
     Dead;
-make_proposal(Actor, ROActors, [{Act,_Cnt}|GCnt], Dead) when Actor == Act ->
-    make_proposal(Actor, ROActors, GCnt, Dead);
-make_proposal(Actor, ROActors, [{Act,Cnt}|GCnt], Dead) ->
+% Ensure previous GCs are all removed.
+make_proposal(ROActors, [{{gc, Epoch}=Act,Cnt}|GCnt], Dead) ->
+    make_proposal(ROActors, GCnt, [{Act,Cnt}|Dead]);
+make_proposal(ROActors, [{Act,Cnt}|GCnt], Dead) ->
     case ordsets:is_element(Act, ROActors) of
-        true -> make_proposal(Actor, ROActors, GCnt, Dead);
-        false -> make_proposal(Actor, ROActors, GCnt, [{Act,Cnt}|Dead])
+        true ->  make_proposal(ROActors, GCnt, Dead);
+        false -> make_proposal(ROActors, GCnt, [{Act,Cnt}|Dead])
     end.
 
 subtract_dead([], GCnt, Sum) ->
@@ -155,6 +155,10 @@ prune_empty_nodes(GCnt) ->
     [Pair || {_,Cnt}=Pair <- GCnt, Cnt =/= 0].
 
 %% priv
+
+% Assume gc actors are write-once.
+increment_by(_Amount, {gc, _Epoch}, GCnt) ->
+    GCnt.
 increment_by(Amount, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
     {Ctr, NewGCnt} = case lists:keytake(Actor, 1, GCnt) of
                          false ->

@@ -6,6 +6,7 @@
 -define(GC_META_ACTOR(GM), GM#riak_dt_gc_meta.actor).
 -record(riak_dt_gc_meta,
         {
+          epoch :: epoch(),             % Epoch of GC
           actor :: actor(),             % Actor performing the GC
           primary_actors :: [actor()],  % Actors most likely to be involved in operations
           readonly_actors :: [actor()], % Actors that can't be GCd (ie cluster remotes)
