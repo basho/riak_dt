@@ -38,7 +38,7 @@
 -endif.
 
 %% API
--export([new/0, value/1, value/2]).
+-export([new/0, value/1, value/2, reset/2]).
 -export([update/3, merge/2, equal/2]).
 -export([to_binary/1, from_binary/1]).
 
@@ -99,6 +99,18 @@ merge(ZORSet1, ZORSet2) ->
 -spec equal(zorset(), zorset()) -> boolean().
 equal(ZORSet1, ZORSet2) ->
     riak_dt_multi:equal(ZORSet1, ZORSet2).
+
+%% @Doc reset to 'empty' by having
+%% `Actor' remove all entries
+-spec reset(zorset(), term()) -> zorset().
+reset(ZSet, Actor) ->
+    Members = value(ZSet),
+    reset(Members, Actor, ZSet).
+
+reset([], _Actor, ZSet) ->
+    ZSet;
+reset([{_Score, Name} | Rest], Actor, ZSet) ->
+    reset(Rest, Actor, update({remove, Name}, Actor, ZSet)).
 
 -define(TAG, 78).
 -define(V1_VERS, 1).

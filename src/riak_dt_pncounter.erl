@@ -34,7 +34,7 @@
 
 -module(riak_dt_pncounter).
 
--export([new/0, new/2, value/1, value/2,
+-export([new/0, new/2, value/1, value/2, reset/2,
          update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
 
 %% EQC API
@@ -112,6 +112,20 @@ merge({Incr1, Decr1}, {Incr2, Decr2}) ->
 -spec equal(pncounter(), pncounter()) -> boolean().
 equal({Incr1, Decr1}, {Incr2, Decr2}) ->
     riak_dt_gcounter:equal(Incr1, Incr2) andalso riak_dt_gcounter:equal(Decr1, Decr2).
+
+%% @Doc reset the PN-Counter to zero (based on it's current value) by
+%% writing an increment in `Actor''s name.
+-spec reset(pncounter(), term()) -> pncounter().
+reset(Cntr, Actor) ->
+    Amt = value(Cntr),
+    reset(Amt, Actor, Cntr).
+
+reset(0, _Actor, Cntr) ->
+    Cntr;
+reset(Amt, Actor, Cntr) when Amt > 0 ->
+    update({decrement, Amt}, Actor, Cntr);
+reset(Amt, Actor, Cntr)  ->
+    update({increment, Amt}, Actor, Cntr).
 
 -define(TAG, 71).
 -define(V1_VERS, 1).

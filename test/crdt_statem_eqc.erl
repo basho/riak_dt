@@ -35,7 +35,7 @@
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) ->
                               io:format(user, Str, Args) end, P)).
-                              
+
 run(Module, Count) ->
     {atom_to_list(Module), {timeout, 120, [?_assert(prop_converge(Count, Module))]}}.
 
