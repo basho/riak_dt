@@ -27,8 +27,14 @@
 -module(riak_dt_gcounter).
 
 -behaviour(riak_dt).
+-behaviour(riak_dt_gc).
 
 -export([new/0, value/1, update/3, merge/2, equal/2]).
+-export([gc_epoch/1, gc_ready/2, gc_get_fragment/2, gc_replace_fragment/3]).
+
+-include("riak_dt_gc_meta.hrl").
+
+-type gcounter() :: [{actor(),pos_integer()}].
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -88,6 +94,72 @@ merge([{Actor1, Cnt1}=AC1|Rest], Clock2, Acc) ->
 
 equal(VA,VB) ->
     lists:sort(VA) =:= lists:sort(VB).
+
+%%% GC
+
+-type gc_fragment() :: gcounter().
+
+% We're ready to GC if the actors we can't compact make up more than `compact_proportion` of
+% the actors in this GCounter.
+-spec gc_ready(gc_meta(), gcounter()) -> boolean().
+gc_ready(Meta, GCnt) ->
+    GCActors = length([Act || {{gc, _Epoch}=Act,_Cnt} <- GCnt]),
+    ROActors = length(ro_actors(Meta, GCnt)),
+    TotalActors = length(GCnt),
+    Proportion = Meta?GC_META.compact_proportion,
+    (GCActors > 1) or (TotalActors * Proportion > ROActors).
+
+-spec gc_epoch(gcounter()) -> epoch().
+gc_epoch(GCnt) ->
+    GCActors = [Act || {{gc, _Epoch}=Act,_Cnt} <- GCnt],
+    {gc, Epoch} = hd(GCActors),
+    Epoch.
+
+-spec gc_get_fragment(gc_meta(), gcounter()) -> gc_fragment().
+gc_get_fragment(Meta, GCnt) ->
+    ROActors = ro_actors(Meta, GCnt),
+    DeadActors = make_fragment(ROActors, GCnt, []),
+    DeadActors.
+
+-spec gc_replace_fragment(gc_meta(), gc_fragment(), gcounter()) -> gcounter().
+gc_replace_fragment(Meta, DeadActors, GCnt0) ->
+    Epoch = Meta?GC_META.epoch,
+    {ActorAdd, GCnt1} = subtract_dead(DeadActors, GCnt0, 0),
+    GCnt2 = prune_empty_nodes(GCnt1),
+    [{{gc, Epoch},ActorAdd} | GCnt2].
+
+% Returns the actors from GCnt that we won't get rid of during compaction.
+ro_actors(Meta, GCnt) ->
+    PAs = ordsets:from_list(Meta?GC_META.primary_actors),
+    RoAs = ordsets:from_list(Meta?GC_META.readonly_actors),
+    CounterActors = ordsets:from_list([Actor || {Actor, _} <- GCnt]),
+    ordsets:intersection(ordsets:union(PAs, RoAs), CounterActors).
+
+make_fragment(_ROActors, [], Dead) ->
+    Dead;
+% Ensure previous GCs are all removed.
+make_fragment(ROActors, [{{gc, _Epoch}=Act,Cnt}|GCnt], Dead) ->
+    make_fragment(ROActors, GCnt, [{Act,Cnt}|Dead]);
+% And ensure any non-read-only actors are removed too
+make_fragment(ROActors, [{Act,Cnt}|GCnt], Dead) ->
+    case ordsets:is_element(Act, ROActors) of
+        true ->  make_fragment(ROActors, GCnt, Dead);
+        false -> make_fragment(ROActors, GCnt, [{Act,Cnt}|Dead])
+    end.
+
+subtract_dead([], GCnt, Sum) ->
+    {Sum, GCnt};
+subtract_dead([{Actor,Subtract}|Dead], GCnt, Sum) ->
+    {Ctr, NewGCnt} = case lists:keytake(Actor, 1, GCnt) of
+                        false ->
+                            {-Subtract, GCnt};
+                        {value, {_,C}, ModGCnt} ->
+                            {C-Subtract, ModGCnt}
+                     end,
+    subtract_dead(Dead, [{Actor,Ctr}|NewGCnt], Sum+Subtract).
+
+prune_empty_nodes(GCnt) ->
+    [Pair || {_,Cnt}=Pair <- GCnt, Cnt =/= 0].
 
 %% priv
 increment_by(Amount, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
