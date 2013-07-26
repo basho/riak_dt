@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_dt_multi: OR-Set schema based multi CRDT container
+%% riak_dt_vvorset: Another convergent, replicated, state based observe remove set
 %%
 %% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -20,14 +20,6 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc a multi CRDT holder.  A Document-ish thing.  Consists of two
-%% elements, a Schema and a value list. The schema is an OR-Set of
-%% {name, type} tuples that identify a field and it's type (type must
-%% be a CRDT module, yes, even this one.)  The value list is a dict of
-%% {name, type} -> CRDT value mappings.  Concurrent removes win over updates
-%%
-%% @end
-
 -module(riak_dt_rwmap).
 
 -behaviour(riak_dt).
@@ -41,209 +33,135 @@
 -endif.
 
 %% API
--export([new/0, value/1, value/2, update/3, merge/2, reset/2,
-         equal/2, to_binary/1, from_binary/1]).
+-export([new/0, value/1, value/2]).
+-export([update/3, merge/2, equal/2]).
+-export([to_binary/1, from_binary/1]).
 
 %% EQC API
 -ifdef(EQC).
--export([gen_op/0, update_expected/3, eqc_state_value/1,
-         init_state/0, generate/0]).
+-export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0, generate/0]).
 -endif.
 
--opaque multi() :: {schema(), valuelist()}.
--type schema() :: riak_dt_vvorset:vvorset().
--type field() :: {Name::term(), Type::crdt_mod()}.
--type crdt_mod() :: riak_dt_gcounter | riak_dt_pncounter | riak_dt_lwwreg |
-                    riak_dt_orset | riak_dt_vvorset | riak_dt_zorset |
-                    riak_dt_multi.
--type valuelist() :: [{field(), crdt()}].
+-record(field, {active=true,
+                clock,
+                value,
+                tombstone=riak_dt_vclock:fresh()}).
 
--type crdt()  :: riak_dt_gcounter:gcounter() | riak_dt_pncounter:pncounter() |
-                 riak_dt_lwwreg:lwwreg() | riak_dt_orset:orset() |
-                 riak_dt_vvorset:vvorset() | riak_dt_zorset:zorset() |
-                 riak_dt_multi:multi().
-
--type multi_op() :: {update, [multi_field_update() | multi_field_op()]}.
-
--type multi_field_op() :: {add, field()} | {remove, field()}.
--type multi_field_update() :: {update, field(), crdt_op()}.
-
--type crdt_op() :: riak_dt_gcounter:gcounter_op() | riak_dt_pncounter:pncounter_op() |
-                   riak_dt_lwwreg:lwwreg_op() | riak_dt_orset:orset_op() |
-                   riak_dt_vvorset:vvorset_op() | riak_dt_zorset:zorset_op() |
-                   riak_dt_multi:multi_op().
-
--type multi_q() :: size | {get, field()} | {get_crdt, field()} |
-                   keyset | {contains, field()}.
-
-
--define(TOMBSTONE, 0).
-
--spec new() -> multi().
 new() ->
-    {riak_dt_vvorset:new(), orddict:new()}.
+    orddict:new().
 
-%% @doc get the current set of values for this multi
-value({Schema, Values}) ->
-    PresentFields = riak_dt_vvorset:value(Schema),
-    values(PresentFields, Values).
+value(Map) ->
+    [{K, Type:value(Field#field.value)} || {{_Name, Type}=K, Field} <- orddict:to_list(Map),
+                                           Field#field.active].
 
-%% @private
-values(PresentFields, Values) ->
-    values(PresentFields, Values, []).
+value(_, Map) ->
+    value(Map).
 
-%% @private
-values([], _Values, Acc) ->
-    Acc;
-values([{_Name, Mod}=Key | Rest], Values, Acc) ->
-    CRDT = orddict:fetch(Key, Values),
-    Val = Mod:value(CRDT),
-    values(Rest, Values, [{Key, Val} | Acc]).
+update({update, Ops}, Actor, Map) ->
+    apply_ops(Ops, Actor, Map).
 
-%% @doc execute the given `multi_q()' against the given
-%% `multi()'.
-%% @TODO add a query for getting a subset of fields
-%% including submap fields (Maybe kvc like?)
--spec value(multi_q(), multi()) -> term().
-value(size, {Schema, _Values}) ->
-    riak_dt_vvorset:value(size, Schema);
-value({get, {_Name, Mod}=Field}, Map) ->
-    case value({get_crdt, Field}, Map) of
-        error -> error;
-        CRDT -> Mod:value(CRDT)
-    end;
-value({get_crdt, Field}, {Schema, Values}) ->
-    case riak_dt_vvorset:value({contains, Field}, Schema) of
-        true ->
-            orddict:fetch(Field, Values);
-        false ->
-            error
-    end;
-value(keyset, {Schema, _Values}) ->
-    riak_dt_vvorset:value(Schema);
-value({contains, Field}, {Schema, _Values}) ->
-    riak_dt_vvorset:value({contains, Field}, Schema).
 
-%% @Doc update the `multi()' or a field in the `multi()' by executing
-%% the `multi_op()'.
-%% `Ops' is a list of one or more of the following ops:
-%% `{update, field(), Op}' where `Op' is any operation supported by the CRDT mod
-%% referenced in the `field()' (`{name, type}'). The `Op' is applied to the value in the value list
-%% for the given key.
-%% `{insert, field(), `Value'} where Value is a `CRDT' of type `Mod' from the `Key' pair
-%% `{Name, Mod}' If there is no local value for `Key' the CRDT is inserted
-%% otherwise, it is merged with the local value.
-%% `{add, field}' where field is `{name, type}'.
-%% `{remove, field}' where field is `{name, type}'
-%% These last too are just the OR-Set operations add/remove on the schema.
-update({update, Ops}, Actor, {Schema, Values}) ->
-    apply_ops(Ops, Actor, Schema, Values).
+apply_ops([], _Actor, Map) ->
+    Map;
+apply_ops([{update, {_Name, Mod}=Key, Op} | Rest], Actor, Map) ->
+    InitialValueClock =  riak_dt_vclock:increment(Actor, riak_dt_vclock:fresh()),
+    InitialValue = Mod:update(Op, Actor, Mod:new()),
+    Initial = #field{value=InitialValue, clock=InitialValueClock},
+    Map2 = orddict:update(Key, update_fun(Mod, Op, Actor), Initial, Map),
+    apply_ops(Rest, Actor, Map2);
+apply_ops([{remove, Key} | Rest], Actor, Map) ->
+    Map2 = tombstone_field(orddict:find(Key, Map), Actor, Key, Map),
+    apply_ops(Rest, Actor, Map2).
 
-%% @Private
-apply_ops([], _Actor, Schema, Values) ->
-    {Schema, Values};
-apply_ops([{update, {_Name, Mod}=Key, Op} | Rest], Actor, Schema, Values) ->
-    %% Add the key to schema
-    NewSchema = riak_dt_vvorset:update({add, Key}, Actor, Schema),
-    %% Update the value
-    InitialValue0 = Mod:new(),
-    InitialValue = Mod:update(Op, Actor, InitialValue0),
-    NewValues = orddict:update(Key, update_fun(Mod, Op, Actor), InitialValue, Values),
-    apply_ops(Rest, Actor, NewSchema, NewValues);
-apply_ops([{remove, Key} | Rest], Actor, Schema, Values) ->
-    NewSchema = riak_dt_vvorset:update({remove, Key}, Actor, Schema),
-    Current = value({get_crdt, Key}, {Schema, Values}),
-    NewValues = case Current of
-                error -> Values;
-                _CRDT ->
-                    orddict:store(Key, ?TOMBSTONE, Values)
-            end,
-    apply_ops(Rest, Actor, NewSchema, NewValues);
-apply_ops([{insert, {_Name, Mod}=Key, CRDT} | Rest], Actor, Schema, Values) ->
-    %% Add the key to the schema
-    %% Update the value, setting value to `CRDT' or Merging
-    %% if key is already present
-    NewSchema = riak_dt_vvorset:update({add, Key}, Actor, Schema),
-    NewValues = orddict:update(Key, fun(V) -> Mod:merge(V, CRDT) end,
-                               CRDT, Values),
-    apply_ops(Rest, Actor, NewSchema, NewValues).
-
-%% @Private
+%% Private
 update_fun(Mod, Op, Actor) ->
-    fun(CRDT) ->
-            Mod:update(Op, Actor, CRDT)
+    fun(Field=#field{clock=Clock, value=V}) ->
+            Field#field{clock=riak_dt_vclock:increment(Actor, Clock),
+                        value=Mod:update(Op, Actor, V),
+                        active=true}
     end.
 
-%% @Doc merge two `multi()'s.
-%% Performs a merge on the key set (schema) and then a pairwise
-%% merge on all values in the value list.
-%% This is the LUB function.
--spec merge(multi(), multi()) -> multi().
-merge({Schema1, Values1}, {Schema2, Values2}) ->
-    NewSchema = riak_dt_vvorset:merge(Schema1, Schema2),
-    PresentFields = riak_dt_vvorset:value(NewSchema),
-    NewValues = merge_values(PresentFields, Values1, Values2, []),
-    {NewSchema, NewValues}.
+tombstone_field({ok, Field=#field{active=true}}, Actor, {_Name, Type}=Key, Map) ->
+    #field{clock=Clock} = Field,
+    F2 = Field#field{active=false,
+                     value=Type:new(),
+                     tombstone=riak_dt_vclock:increment(Actor, Clock)}, %% Removes win
+    orddict:store(Key, F2, Map);
+tombstone_field({ok, #field{active=false}}, _Actor, _Key, Map) ->
+    %% Can't remove a field that's removed, right?
+    Map;
+tombstone_field(_, _Actor, _Key, Map) ->
+    %% What @TODO? when you remove a field that isn't present??
+    %% Throw an error? (seems best)
+    Map.
 
-%% @Private
-merge_values([], _Values1, _Values2, Acc) ->
-    orddict:from_list(Acc);
-merge_values([{_Name, Mod}=Key | Rest], Values1, Values2, Acc) ->
-    V1 = type_safe_fetch(Mod, orddict:find(Key, Values1)),
-    V2 = type_safe_fetch(Mod, orddict:find(Key, Values2)),
-    V = Mod:merge(V1, V2),
-    merge_values(Rest, Values1, Values2, [{Key, V} | Acc]).
+merge(Map1, Map2) ->
+    %% for every field:
+    %% if both are removed, bueno!
+    %% otherwise
+    %%    merge clocks and tombstones, active?
+    %%    (Active is defined as clock dominating tombstone)
+    orddict:merge(fun(_K, F1=#field{active=false}, F2=#field{active=false}) ->
+                          #field{clock=VC1, tombstone=TS1} = F1,
+                          #field{clock=VC2, tombstone=TS2} = F2,
+                          VC3 = riak_dt_vclock:merge(VC1, VC2),
+                          TS3 = riak_dt_vclock:merge(TS1, TS2),
+                          #field{active=false, clock=VC3, tombstone=TS3};
+                     ({_Name, Type}, F1, F2) ->
+                          #field{clock=VC1, value=V1, tombstone=TS1} = F1,
+                          #field{clock=VC2, value=V2, tombstone=TS2} = F2,
+                          VC3 = riak_dt_vclock:merge(VC1, VC2),
+                          TS3 = riak_dt_vclock:merge(TS1, TS2),
+                          case riak_dt_vclock:descends(VC3, TS3) of
+                              true ->
+                                  #field{clock=VC3,
+                                         value=Type:merge(V1, V2),
+                                         tombstone=TS3,
+                                         active=true};
+                              false ->
+                                    #field{clock=VC3,
+                                           value=Type:new(),
+                                           active=false,
+                                           tombstone=TS3}
+                          end
+                  end,
+                  Map1, Map2).
 
-%% @Private
-type_safe_fetch(_Mod, {ok, Value}) ->
-    Value;
-type_safe_fetch(Mod, error) ->
-    Mod:new().
+equal(Map1, Map2) ->
+    orddict:fetch_keys(Map1) == orddict:fetch_keys(Map2) andalso pairwise_equals(Map1, Map2).
 
-
-%% @Doc compare two `multi()'s for equality of  structure
-%% Both schemas and value list must be equal.
-%% Performs a pariwise equals for all values in the value lists
--spec equal(multi(), multi()) -> boolean().
-equal({Schema1, Values1}, {Schema2, Values2}) ->
-    riak_dt_vvorset:equal(Schema1, Schema2)  andalso pairwise_equals(Values1, Values2).
-
-%% @Private
 %% Note, only called when we know that 2 schema are equal.
 %% Both dicts therefore have the same set of keys.
-pairwise_equals(Values1, Values2) ->
-    short_cicuit_equals(orddict:to_list(Values1), Values2).
+pairwise_equals(Map1, Map2) ->
+    short_cicuit_equals(orddict:to_list(Map1), Map2).
 
 %% @Private
 %% Compare each value. Return false as soon as any pair are not equal.
-short_cicuit_equals([], _Values2) ->
+short_cicuit_equals([], _Map2) ->
     true;
-short_cicuit_equals([{{_Name, Type}=Key, Val1} | Rest], Values2) ->
-    Val2 = orddict:fetch(Key, Values2),
-    case Type:equal(Val1, Val2) of
+short_cicuit_equals([{{_Name, Type}=Key, F1} | Rest], Map2) ->
+    F2 = orddict:fetch(Key, Map2),
+    case field_equal(Type, F1, F2) of
         true ->
-            short_cicuit_equals(Rest, Values2);
+            short_cicuit_equals(Rest, Map2);
         false ->
             false
     end.
 
-%% @Doc reset the Map as though it were empty.
-%% Essentially remove all present fields.
--spec reset(multi(), term()) -> multi().
-reset(Map, Actor) ->
-    Fields = value(keyset, Map),
-    reset(Fields, Actor, Map).
+field_equal(Type, F1, F2) ->
+    #field{clock=VC1, value=V1, active=A1, tombstone=TS1} = F1,
+    #field{clock=VC2, value=V2, active=A2, tombstone=TS2} = F2,
+    riak_dt_vclock:equal(VC1, VC2) andalso
+        riak_dt_vclock:equal(TS1, TS2) andalso
+        A1 == A2 andalso
+        Type:equal(V1, V2).
 
-reset([], _Actor, Map) ->
-    Map;
-reset([Field | Rest], Actor, Map) ->
-    reset(Rest, Actor, update({remove, Field}, Actor, Map)).
-
--define(TAG, 77).
+-define(TAG, 75).
 -define(V1_VERS, 1).
 
+
 to_binary(Map) ->
-    %% @TODO something smarter (recurse down valulist calling to_binary?)
+    %% @TODO something smarter
     <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(Map))/binary>>.
 
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
@@ -259,55 +177,32 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
 eqc_value_test_() ->
     crdt_statem_eqc:run(?MODULE, 1000).
 
+generate() ->
+    ?LET(Members, list(int()),
+         lists:foldl(fun(M, Set) ->
+                            riak_dt_vvorset:update({add, M}, choose(1, 50), Set) end,
+                    riak_dt_vvorset:new(),
+                    Members)).
+
 %% EQC generator
 gen_op() ->
-    ?LET(Ops, non_empty(list(gen_update())), {update, Ops}).
+    ?LET({Add, Remove}, gen_elems(),
+         oneof([{add, Add}, {remove, Remove}])).
 
-gen_update() ->
-    ?LET(Field, gen_field(),
-         oneof([{add, Field}, {remove, Field},
-                {insert, Field, gen_field_insert(Field)},
-                {update, Field, gen_field_op(Field)}])).
-
-gen_field() ->
-    {binary(), oneof([riak_dt_pncounter, riak_dt_vvorset, riak_dt_lwwreg,
-                       riak_dt_zorset, riak_dt_multi])}.%%riak_dt_gcounter])}.
-
-gen_field_op({_Name, Type}) ->
-    Type:gen_op().
-
-gen_field_insert({_Name, Type}) ->
-     Type:generate().
-
-generate() ->
-    ?LET(Fields, list(gen_field()),
-         begin
-             Values = [{F, Type:generate()} || {_Name, Type}=F <- Fields, Type /= riak_dt_multi], %% @TODO fix this, deadlocks otherwise
-             lists:foldl(fun({K, V}, {FSet, VDict}) ->
-                                 Fields2 = riak_dt_vvorset:update({add, K}, choose(1, 50), FSet),
-                                 Values2 = orddict:store(K, V, VDict),
-                                 {Fields2, Values2} end,
-                         riak_dt_multi:new(),
-                         Values)
-                 end).
+gen_elems() ->
+    ?LET(A, int(), {A, oneof([A, int()])}).
 
 init_state() ->
     {0, dict:new()}.
 
-update_expected(ID, {update, Ops}, Values) ->
-    lists:foldl(fun(Op, V) ->
-                        update_expected(ID, Op, V) end,
-                Values,
-                Ops);
-
-update_expected(ID, {add, {_Name, Type}=Elem}, {Cnt0, Dict}) ->
+update_expected(ID, {add, Elem}, {Cnt0, Dict}) ->
     Cnt = Cnt0+1,
-    ToAdd = {Elem, Type:new(), Cnt},
+    ToAdd = {Elem, Cnt},
     {A, R} = dict:fetch(ID, Dict),
     {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)};
 update_expected(ID, {remove, Elem}, {Cnt, Dict}) ->
     {A, R} = dict:fetch(ID, Dict),
-    ToRem = [ {E, V, X} || {E, V, X} <- sets:to_list(A), E == Elem],
+    ToRem = [ {E, X} || {E, X} <- sets:to_list(A), E == Elem],
     {Cnt, dict:store(ID, {A, sets:union(R, sets:from_list(ToRem))}, Dict)};
 update_expected(ID, {merge, SourceID}, {Cnt, Dict}) ->
     {FA, FR} = dict:fetch(ID, Dict),
@@ -316,21 +211,7 @@ update_expected(ID, {merge, SourceID}, {Cnt, Dict}) ->
     MR = sets:union(FR, TR),
     {Cnt, dict:store(ID, {MA, MR}, Dict)};
 update_expected(ID, create, {Cnt, Dict}) ->
-    {Cnt, dict:store(ID, {sets:new(), sets:new()}, Dict)};
-update_expected(ID, {update, {_Name, Type}=Key, Op}, {Cnt0, Dict}) ->
-    CurrentValue = get_for_key(Key, ID,  Dict),
-    Updated = Type:update(Op, ID, CurrentValue),
-    Cnt = Cnt0+1,
-    ToAdd = {Key, Updated, Cnt},
-    {A, R} = dict:fetch(ID, Dict),
-    {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)};
-update_expected(ID, {insert, {_Name, Type}=Key, Value}, {Cnt0, Dict}) ->
-    CurrentValue = get_for_key(Key, ID,  Dict),
-    Updated = Type:merge(Value, CurrentValue),
-    Cnt = Cnt0+1,
-    ToAdd = {Key, Updated, Cnt},
-    {A, R} = dict:fetch(ID, Dict),
-    {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)}.
+    {Cnt, dict:store(ID, {sets:new(), sets:new()}, Dict)}.
 
 eqc_state_value({_Cnt, Dict}) ->
     {A, R} = dict:fold(fun(_K, {Add, Rem}, {AAcc, RAcc}) ->
@@ -338,73 +219,9 @@ eqc_state_value({_Cnt, Dict}) ->
                        {sets:new(), sets:new()},
                        Dict),
     Remaining = sets:subtract(A, R),
-    Res = lists:foldl(fun({{_Name, Type}=Key, Value, _X}, Acc) ->
-                        %% if key is in Acc merge with it and replace
-                        dict:update(Key, fun(V) ->
-                                                 Type:merge(V, Value) end,
-                                    Value, Acc) end,
-                dict:new(),
-                sets:to_list(Remaining)),
-    [{K, Type:value(V)} || {{_Name, Type}=K, V} <- dict:to_list(Res)].
-
-%% On shrinking this fails with some badarge shit
-%% {'EXIT',
-%%     {badarg,
-%%         [{dict,fetch,
-%%              [5,
-%%               {dict,1,16,16,8,80,48,
-%%                   {[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[]},
-%%                   {{[[0|
-%%                       {{set,0,16,16,8,80,48,
-%%                            {[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[]},
-%%                            {{[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],
-%%                              []}}},
-%%                        {set,0,16,16,8,80,48,
-%%                            {[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[]},
-%%                            {{[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],
-%%                              []}}}}]],
-%%                     [],[],[],[],[],[],[],[],[],[],[],[],[],[],[]}}}],
-%%              [{file,"dict.erl"},{line,125}]},
-%%          {riak_dt_multi,get_for_key,3,
-%%              [{file,"src/riak_dt_multi.erl"},{line,307}]},
-get_for_key({_N, T}=K, ID, Dict) ->
-    {A, R} = dict:fetch(ID, Dict),
-    Remaining = sets:subtract(A, R),
-    Res = lists:foldl(fun({{_Name, Type}=Key, Value, _X}, Acc) ->
-                        %% if key is in Acc merge with it and replace
-                        dict:update(Key, fun(V) ->
-                                                 Type:merge(V, Value) end,
-                                    Value, Acc) end,
-                dict:new(),
-                sets:to_list(Remaining)),
-    proplists:get_value(K, dict:to_list(Res), T:new()).
+    Values = [ Elem || {Elem, _X} <- sets:to_list(Remaining)],
+    lists:usort(Values).
 
 -endif.
-
-query_test() ->
-    Map = new(),
-    Map1 = update({update, [{add, {c, riak_dt_pncounter}},
-                            {add, {s, riak_dt_vvorset}},
-                            {add, {m, riak_dt_multi}},
-                            {add, {l, riak_dt_lwwreg}},
-                            {add, {l2, riak_dt_lwwreg}}]}, a1, Map),
-    ?assertEqual(5, value(size, Map1)),
-
-    Map2 = update({update, [{remove, {l2, riak_dt_lwwreg}}]}, a2, Map1),
-    ?assertEqual(4, value(size, Map2)),
-
-    ?assertEqual([{c, riak_dt_pncounter},
-                  {l, riak_dt_lwwreg},
-                  {m, riak_dt_multi},
-                  {s, riak_dt_vvorset}], value(keyset, Map2)),
-
-    ?assert(value({contains, {c, riak_dt_pncounter}}, Map2)),
-    ?assertNot(value({contains, {l2, riak_dt_lwwreg}}, Map2)),
-
-    Map3 = update({update, [{update, {c, riak_dt_pncounter}, {increment, 33}},
-                            {update, {l, riak_dt_lwwreg}, {assign, lww_val, 77}}]}, a3, Map2),
-
-    ?assertEqual(33, value({get, {c, riak_dt_pncounter}}, Map3)),
-    ?assertEqual({lww_val, 77}, value({get_crdt, {l, riak_dt_lwwreg}}, Map3)).
 
 -endif.
