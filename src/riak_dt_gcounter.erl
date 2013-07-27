@@ -35,6 +35,7 @@
 -include("riak_dt_gc_meta.hrl").
 
 -type gcounter() :: [{actor(),pos_integer()}].
+-export_type([gcounter/0]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
