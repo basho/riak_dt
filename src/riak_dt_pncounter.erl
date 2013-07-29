@@ -93,10 +93,14 @@ value(negative, PNCnt) ->
 -spec update(pncounter_op(), term(), pncounter()) -> pncounter().
 update(increment, Actor, PNCnt) ->
     update({increment, 1}, Actor, PNCnt);
-update({increment, By}, Actor, PNCnt) when is_integer(By), By > 0 ->
-    increment_by(By, Actor, PNCnt);
 update(decrement, Actor, PNCnt) ->
     update({decrement, 1}, Actor, PNCnt);
+update({_IncrDecr, 0}, _Actor, PNCnt) ->
+    PNCnt;
+update({increment, By}, Actor, PNCnt) when is_integer(By), By > 0 ->
+    increment_by(By, Actor, PNCnt);
+update({increment, By}, Actor, PNCnt) when is_integer(By), By < 0 ->
+    update({decrement, By}, Actor, PNCnt);
 update({decrement, By}, Actor, PNCnt) when is_integer(By), By > 0 ->
     decrement_by(By, Actor, PNCnt).
 
@@ -104,7 +108,6 @@ update({decrement, By}, Actor, PNCnt) when is_integer(By), By > 0 ->
 %% function described in the literature.
 -spec merge(pncounter(), pncounter()) -> pncounter().
 merge(PNCntA, PNCntB) ->
-    % TODO
     merge(PNCntA, PNCntB, []).
 
 merge([],[],Acc) ->
