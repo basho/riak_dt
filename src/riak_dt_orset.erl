@@ -23,6 +23,7 @@
 -module(riak_dt_orset).
 
 -behaviour(riak_dt).
+-behaviour(riak_dt_gc).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -34,6 +35,10 @@
 
 %% API
 -export([new/0, value/1, update/3, merge/2, equal/2]).
+-export([gc_epoch/1, gc_ready/2, gc_get_fragment/2, gc_replace_fragment/3]).
+
+-include("riak_dt_gc_meta.hrl").
+-opaque orset() :: {orddict:orddict(), orddict:orddict()}.
 
 %% EQC API
 -ifdef(EQC).
@@ -112,6 +117,44 @@ merge({ADict1, RDict1}, {ADict2, RDict2}) ->
 
 equal({ADict1, RDict1}, {ADict2, RDict2}) ->
     ADict1 == ADict2 andalso RDict1 == RDict2.
+    
+%%% GC
+
+-type gc_fragment() :: orset().
+
+% We're ready to GC if the actors we can't compact make up more than `compact_proportion` of
+% the actors in this GCounter.
+-spec gc_ready(gc_meta(), orset()) -> boolean().
+gc_ready(Meta, {Add,Remove}=_ORSet) ->
+    % These folds add {elem, token} to a set, on the off-chance that two tokens
+    % for seperate keys are the same.
+    Additions = orddict:fold(fun ordsets_union_prefix/3, ordsets:new(),Add),
+    Removals = orddict:fold(fun ordsets_union_prefix/3, ordsets:new(),Remove),
+    TotalTokens = ordsets:size(ordsets:union(Additions,Removals)),
+    TombstoneTokens = ordsets:size(ordsets:intersection(Additions,Removals)),
+    (TombstoneTokens / TotalTokens) > Meta?GC_META.compact_proportion.
+
+-spec gc_epoch(orset()) -> epoch().
+gc_epoch(_ORSet) ->
+    {}.
+
+-spec gc_get_fragment(gc_meta(), orset()) -> gc_fragment().
+gc_get_fragment(_Meta, {Add,Rem}=_ORSet) ->
+    Additions = orddict:fold(fun ordsets_union_prefix/3, ordsets:new(), Add),
+    Removals = orddict:fold(fun ordsets_union_prefix/3,  ordsets:new(), Rem),
+    TombstoneTokens = ordsets:intersection(Additions,Removals),
+    ordsets:fold(fun({Elem,Token},{Add0,Rem0}) ->
+                    % For add we need to bypass token generation. Le Sigh
+                    Add1 = add_unique(orddict:find(Elem,Add0), Add0, Elem, Token),
+                    Rem1 = remove_elem(orddict:find(Elem,Add1), Elem, Rem0),
+                    {Add1, Rem1}
+                 end, new(), TombstoneTokens).
+
+-spec gc_replace_fragment(gc_meta(), gc_fragment(), orset()) -> orset().
+gc_replace_fragment(_Meta, {AddFrag,RemFrag}=_ORFrag, {Add0,Rem0}=_ORSet) ->
+    Add1 = orddict:merge(fun ordsets_subtract/3, Add0, AddFrag),
+    Rem1 = orddict:merge(fun ordsets_subtract/3, Rem0, RemFrag),
+    {filter_empty(Add1), filter_empty(Rem1)}.
 
 %% Private
 add_elem(Actor, Dict, Elem) ->
@@ -141,7 +184,23 @@ unique(Actor) ->
 
 merge_dicts(Dict1, Dict2) ->
     %% for every key in dict1, merge its contents with dict2's content for same key
-   orddict:merge(fun(_K, V1, V2) -> ordsets:union(V1, V2) end, Dict1, Dict2).
+   orddict:merge(fun ordsets_union/3, Dict1, Dict2).
+
+ordsets_union(_K, V1, V2) ->
+    ordsets:union(V1, V2).
+
+ordsets_union_prefix(K, V, KTokenSet) ->
+    KTs = ordsets:from_list([{K,Token} || Token <- V]),
+    ordsets:union(KTs, KTokenSet).
+
+% Subtracts the elements in V2 from V1
+ordsets_subtract(_K, V1, V2) ->
+    ordsets:subtract(V1, V2).
+
+filter_empty(OrdDict) ->
+    orddict:filter(fun(_K,[]) -> false;
+                      (_K,_V) -> true
+                  end, OrdDict).
 
 %% ===================================================================
 %% EUnit tests
