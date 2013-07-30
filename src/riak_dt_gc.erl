@@ -23,7 +23,7 @@
 -module(riak_dt_gc).
 
 -export([behaviour_info/1]).
--export([gc_meta/4]).
+-export([meta/4]).
 -export([new_epoch/1, epoch_actor/1, epoch_compare/2]).
 
 -include("riak_dt_gc_meta.hrl").
@@ -34,8 +34,8 @@ behaviour_info(callbacks) ->
      {gc_get_fragment, 2},
      {gc_replace_fragment, 3}].
 
--spec gc_meta(actor(), [actor()], [actor()], float()) -> gc_meta().
-gc_meta(Epoch, PActors, ROActors, CompactProportion) ->
+-spec meta(actor(), [actor()], [actor()], float()) -> gc_meta().
+meta(Epoch, PActors, ROActors, CompactProportion) ->
     ?GC_META{epoch=Epoch,
              actor=epoch_actor(Epoch),
              primary_actors=ordsets:from_list(PActors),
