@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_dt_oe_flag: a flag that can be enabled and disabled as many times as you want, disabling wins, starts enabled.
+%% riak_dt_od_flag: a flag that can be enabled and disabled as many times as you want, enabling wins, starts disabled.
 %%
 %% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -20,7 +20,7 @@
 %%
 %% -------------------------------------------------------------------
 
--module(riak_dt_oe_flag).
+-module(riak_dt_od_flag).
 
 -behaviour(riak_dt).
 
@@ -44,7 +44,7 @@ init_state() ->
     orddict:new().
 
 update_expected(ID, create, Dict) ->
-    orddict:store(ID, on, Dict);
+    orddict:store(ID, off, Dict);
 update_expected(ID, enable, Dict) ->
     orddict:store(ID, on, Dict);
 update_expected(ID, disable, Dict) ->
@@ -52,42 +52,42 @@ update_expected(ID, disable, Dict) ->
 update_expected(ID, {merge, SourceID}, Dict) ->
     Mine = orddict:fetch(ID, Dict),
     Theirs = orddict:fetch(SourceID, Dict),
-    Merged = flag_and(Mine,Theirs),
+    Merged = flag_or(Mine,Theirs),
     orddict:store(ID, Merged, Dict).
 
-flag_and(on, on) ->
-    on;
-flag_and(_, _) ->
-    off.
+flag_or(off, off) ->
+    off;
+flag_or(_, _) ->
+    on.
 
 eqc_state_value(Dict) ->
     orddict:fold(fun(_K,V,Acc) ->
-            flag_and(V,Acc)
-        end, on, Dict).
+            flag_or(V,Acc)
+        end, off, Dict).
 -endif.
 
 % {Enables,Disables}
 new() ->
     {ordsets:new(),ordsets:new()}.
 
-value({Disables,Enables}=_Flag) ->
-    Winners = ordsets:subtract(Disables,Enables),
+value({Enables,Disables}=_Flag) ->
+    Winners = ordsets:subtract(Enables,Disables),
     case ordsets:size(Winners) of
-        0 -> on;
-        _ -> off
+        0 -> off;
+        _ -> on
     end.
 
-update(disable, Actor, {Disables,Enables}=_Flag) ->
+update(enable, Actor, {Enables,Disables}=_Flag) ->
     Token = unique_token(Actor),
-    Disables1 = ordsets:add_element(Token,Disables),
-    {Disables1, Enables};
-update(enable, _Actor, {Disables,Enables}=_Flag) ->
-    {Disables,ordsets:union(Disables,Enables)}.
+    Enables1 = ordsets:add_element(Token,Enables),
+    {Enables1, Disables};
+update(disable, _Actor, {Enables,Disables}=_Flag) ->
+    {Enables,ordsets:union(Enables,Disables)}.
 
-merge({DA,EA}=_FA, {DB,EB}=_FB) ->
-    Disables = ordsets:union(DA,DB),
+merge({EA,DA}=_FA, {EB,DB}=_FB) ->
     Enables = ordsets:union(EA,EB),
-    {Disables, Enables}.
+    Disables = ordsets:union(DA,DB),
+    {Enables, Disables}.
 
 equal(FlagA,FlagB) ->
     FlagA == FlagB.
@@ -108,38 +108,38 @@ eqc_value_test_() ->
 -endif.
 
 new_test() ->
-    ?assertEqual(on, value(new())).
+    ?assertEqual(off, value(new())).
 
 update_enable_test() ->
     F0 = new(),
-    F1 = update(disable, 1, F0),
-    ?assertEqual(off, value(F1)).
+    F1 = update(enable, 1, F0),
+    ?assertEqual(on, value(F1)).
 
 update_enable_multi_test() ->
     F0 = new(),
-    F1 = update(disable, 1, F0),
-    F2 = update(enable, 1, F1),
-    F3 = update(disable, 1, F2),
-    ?assertEqual(off, value(F3)).
+    F1 = update(enable, 1, F0),
+    F2 = update(disable, 1, F1),
+    F3 = update(enable, 1, F2),
+    ?assertEqual(on, value(F3)).
 
 merge_offs_test() ->
     F0 = new(),
-    ?assertEqual(on, value(merge(F0, F0))).
+    ?assertEqual(off, value(merge(F0, F0))).
 
 merge_simple_test() ->
     F0 = new(),
-    F1 = update(disable, 1, F0),
-    ?assertEqual(off, value(merge(F1, F0))),
-    ?assertEqual(off, value(merge(F0, F1))),
-    ?assertEqual(off, value(merge(F1, F1))).
+    F1 = update(enable, 1, F0),
+    ?assertEqual(on, value(merge(F1, F0))),
+    ?assertEqual(on, value(merge(F0, F1))),
+    ?assertEqual(on, value(merge(F1, F1))).
 
 merge_concurrent_test() ->
     F0 = new(),
-    F1 = update(disable, 1, F0),
-    F2 = update(enable, 1, F1),
-    F3 = update(disable, 1, F1),
-    ?assertEqual(off, value(merge(F1,F3))),
-    ?assertEqual(on, value(merge(F1,F2))),
-    ?assertEqual(off, value(merge(F2,F3))).
+    F1 = update(enable, 1, F0),
+    F2 = update(disable, 1, F1),
+    F3 = update(enable, 1, F1),
+    ?assertEqual(on, value(merge(F1,F3))),
+    ?assertEqual(off, value(merge(F1,F2))),
+    ?assertEqual(on, value(merge(F2,F3))).
 
 -endif.
