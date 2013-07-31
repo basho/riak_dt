@@ -26,10 +26,10 @@
 
 -export([new/0, value/1, update/3, merge/2, equal/2]).
 
-% -ifdef(EQC).
-% -include_lib("eqc/include/eqc.hrl").
-% -export([gen_op/0, update_expected/3, eqc_state_value/1]).
-% -endif.
+-ifdef(EQC).
+-include_lib("eqc/include/eqc.hrl").
+-export([gen_op/0, update_expected/3, eqc_state_value/1]).
+-endif.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -37,21 +37,33 @@
 
 % EQC generator
 -ifdef(EQC).
-% gen_op() ->
-%     oneof([disable,enable]).
-%     
-% init_state() ->
-%     {0, dict:new()}.
-% 
-% update_expected(ID, create, {Cnt, Dict}) ->
-%     {Cnt, dict:store(ID, sets:new())};
-% update_expected(_ID, disable, _Prev) ->
-%     off;
-% update_expected(_ID, enable, Prev) ->
-%     on.
-% 
-% eqc_state_value(S) ->
-%     S.
+gen_op() ->
+    oneof([disable,enable]).
+    
+init_state() ->
+    orddict:new().
+
+update_expected(ID, create, Dict) ->
+    orddict:store(ID, off, Dict);
+update_expected(ID, enable, Dict) ->
+    orddict:store(ID, on, Dict);
+update_expected(ID, disable, Dict) ->
+    orddict:store(ID, off, Dict);
+update_expected(ID, {merge, SourceID}, Dict) ->
+    Mine = orddict:fetch(ID, Dict),
+    Theirs = orddict:fetch(SourceID, Dict),
+    Merged = flag_or(Mine,Theirs),
+    orddict:store(ID, Merged, Dict).
+
+flag_or(off, off) ->
+    off;
+flag_or(_, _) ->
+    on.
+
+eqc_state_value(Dict) ->
+    orddict:fold(fun(_K,V,Acc) ->
+            flag_or(V,Acc)
+        end, off, Dict).
 -endif.
 
 % {Enables,Disables}
@@ -91,8 +103,8 @@ unique_token(Actor) ->
 -ifdef(TEST).
 
 -ifdef(EQC).
-% eqc_value_test_() ->
-%     {timeout, 120, [?_assert(crdt_statem_eqc:prop_converge(init_state(), 1000, ?MODULE))]}.
+eqc_value_test_() ->
+    {timeout, 120, [?_assert(crdt_statem_eqc:prop_converge(init_state(), 1000, ?MODULE))]}.
 -endif.
 
 new_test() ->
