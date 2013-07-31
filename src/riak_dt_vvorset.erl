@@ -73,23 +73,28 @@ equal({ADict1, RDict1}, {ADict2, RDict2}) ->
 
 -type gc_fragment() :: vvorset().
 
-% We're ready to GC if the actors we can't compact make up more than `compact_proportion` of
-% the actors in this GCounter.
+% We want to gc if Tombstone Elements make up more than `compact_proportion` of the elements in the vvorset.
 -spec gc_ready(gc_meta(), vvorset()) -> boolean().
 gc_ready(Meta, {Add,_Remove}=VVORSet) ->
     TombstoneCount = orddict:size(tombstones(VVORSet)),
     ElementCount   = orddict:size(Add),
     (TombstoneCount / ElementCount) > Meta?GC_META.compact_proportion.
 
+% I don't know how we find the epoch
 -spec gc_epoch(vvorset()) -> epoch().
 gc_epoch(_ORSet) ->
     {}.
 
+% Just two copies of all Elements that were present but are no longer, complete
+% with their vclocks.
 -spec gc_get_fragment(gc_meta(), vvorset()) -> gc_fragment().
 gc_get_fragment(_Meta, VVORSet) ->
     Tombstones = tombstones(VVORSet),
     {Tombstones,Tombstones}.
 
+% Remove all tombstones, but only if the vclock in the fragment is not 
+% dominated by the vclock in the vvorset (the if dominated, suggests updates 
+% have happened since)
 -spec gc_replace_fragment(gc_meta(), gc_fragment(), vvorset()) -> vvorset().
 gc_replace_fragment(_Meta, {AddFrag,RemFrag}=_VVORFrag, {Add0,Rem0}=_VVORSet) ->
     Add1 = orddict:filter(remove_fragment_filter(AddFrag), Add0),

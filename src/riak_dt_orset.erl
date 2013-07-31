@@ -122,8 +122,7 @@ equal({ADict1, RDict1}, {ADict2, RDict2}) ->
 
 -type gc_fragment() :: orset().
 
-% We're ready to GC if the actors we can't compact make up more than `compact_proportion` of
-% the actors in this GCounter.
+% We're Ready to GC if Tombstones make up more than compact_proportion of the total number of tokens.
 -spec gc_ready(gc_meta(), orset()) -> boolean().
 gc_ready(Meta, {Add,Remove}=_ORSet) ->
     % These folds add {elem, token} to a set, on the off-chance that two tokens
@@ -134,10 +133,13 @@ gc_ready(Meta, {Add,Remove}=_ORSet) ->
     TombstoneTokens = ordsets:size(ordsets:intersection(Additions,Removals)),
     (TombstoneTokens / TotalTokens) > Meta?GC_META.compact_proportion.
 
+% Gulp, I literally have no idea, one reason is we don't embed the epoch in 
 -spec gc_epoch(orset()) -> epoch().
 gc_epoch(_ORSet) ->
     {}.
 
+% The fragment is just an ORSet with all invalidated tokens removed (but using 
+% the same tokens as the original ORSet).
 -spec gc_get_fragment(gc_meta(), orset()) -> gc_fragment().
 gc_get_fragment(_Meta, {Add,Rem}=_ORSet) ->
     Additions = orddict:fold(fun ordsets_union_prefix/3, ordsets:new(), Add),
@@ -150,6 +152,7 @@ gc_get_fragment(_Meta, {Add,Rem}=_ORSet) ->
                     {Add1, Rem1}
                  end, new(), TombstoneTokens).
 
+% Now we go through the orset removing all tokens present in the fragment.
 -spec gc_replace_fragment(gc_meta(), gc_fragment(), orset()) -> orset().
 gc_replace_fragment(_Meta, {AddFrag,RemFrag}=_ORFrag, {Add0,Rem0}=_ORSet) ->
     Add1 = orddict:merge(fun ordsets_subtract/3, Add0, AddFrag),
