@@ -89,20 +89,26 @@ eqc_state_value({_Cnt, Dict, _L}) ->
 %% GC Property
 
 create_gc_expected() ->
-    ordsets:new().
+    {ordsets:new(), ordsets:new()}.
 
-update_gc_expected({add, X}, _Actor, State) ->
-    ordsets:add_element(X, State);
-update_gc_expected({remove, X}, _Actor, State) ->
-    ordsets:del_element(X, State).
+update_gc_expected({add, X}, Actor, {Add,Remove}) ->
+    Unique = erlang:phash2({Actor, erlang:now()}),
+    {ordsets:add_element({X, Unique}, Add), ordsets:del_element(X,Remove)};
+update_gc_expected({remove, X}, _Actor, {Add,Remove}) ->
+    ToRem = [{A,Elem} || {A,Elem} <- ordsets:to_list(Add), Elem == X],
+    Remove1 = ordsets:union(ordsets:from_list(ToRem),Remove),
+    {Add, Remove1}.
 % update_gc_expected(_Operation, _Actor, State) ->
 %     State.
 
-merge_gc_expected(State1, State2) ->
-    ordsets:union(State1, State2).
+merge_gc_expected({A1,R1}, {A2,R2}) ->
+    A3 = ordsets:union(A1,A2),
+    R3 = ordsets:union(R1,R2),
+    {A3,R3}.
 
-realise_gc_expected(State) ->
-    ordsets:to_list(State).
+realise_gc_expected({Add,Remove}) ->
+    Values = [ X || {X, _A} <- ordsets:to_list(ordsets:subtract(Add,Remove))],
+    lists:usort(Values).
     
 eqc_gc_ready(_S) ->
     false.

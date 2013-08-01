@@ -28,6 +28,8 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -compile(export_all).
+-behaviour(eqc_statem).
+-export([initial_state/0, command/1, precondition/2, next_state/3, postcondition/3]).
 
 -record(state,{
     mod, % Module Under Test
