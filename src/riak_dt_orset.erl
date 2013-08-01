@@ -43,6 +43,7 @@
 %% EQC API
 -ifdef(EQC).
 -export([gen_op/0, update_expected/3, eqc_state_value/1]).
+-compile(export_all).
 -endif.
 
 %% EQC generator
@@ -84,6 +85,27 @@ eqc_state_value({_Cnt, Dict, _L}) ->
     Remaining = sets:subtract(A, R),
     Values = [ Elem || {Elem, _X} <- sets:to_list(Remaining)],
     lists:usort(Values).
+
+%% GC Property
+
+create_gc_expected() ->
+    ordsets:new().
+
+update_gc_expected({add, X}, _Actor, State) ->
+    ordsets:add_element(X, State);
+update_gc_expected({remove, X}, _Actor, State) ->
+    ordsets:del_element(X, State).
+% update_gc_expected(_Operation, _Actor, State) ->
+%     State.
+
+merge_gc_expected(State1, State2) ->
+    ordsets:union(State1, State2).
+
+realise_gc_expected(State) ->
+    ordsets:to_list(State).
+    
+eqc_gc_ready(_S) ->
+    false.
 
 -endif.
 
