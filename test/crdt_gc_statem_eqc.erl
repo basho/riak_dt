@@ -72,26 +72,6 @@ precondition(#state{replicas=Replicas}, {call, ?MODULE, merge, [_, ReplicaTriple
 precondition(_S,_Command) ->
     true.
 
-%% Next state transformation, S is the current state
-next_state(State = #state{replicas=Replicas, actor_id=AId}, V, {call, ?MODULE, create, [Mod]}) ->
-    Replicas1 = [{AId, Mod:create_gc_expected(), V} | Replicas],
-    State#state{replicas=Replicas1, actor_id=AId+1};
-
-next_state(State = #state{replicas=Replicas}, V, {call, ?MODULE, update, [Mod, Operation, {AId, SymbState, _ConcreteState}]}) ->
-    {value, _, Replicas1} = lists:keytake(AId, 1, Replicas),
-    NewVal = {AId, Mod:update_gc_expected(Operation, AId, SymbState), V},
-    State#state{replicas=[NewVal|Replicas1]};
-
-next_state(State = #state{replicas=Replicas}, V,
-           {call, ?MODULE, merge, [Mod, {AId1, SymbState1, _CS1}, {_AId2, SymbState2, _CS2}]}) ->
-    {value, _, Replicas1} = lists:keytake(AId1, 1, Replicas),
-    MergedSymbState = Mod:merge_gc_expected(SymbState1, SymbState2),
-    NewVal = {AId1, MergedSymbState, V},
-    State#state{replicas=[NewVal|Replicas1]};
-
-next_state(S, _V, _Command) ->
-    S.
-
 %% Postcondition, checked after command has been evaluated
 postcondition(_S, {call, ?MODULE, update, [Mod, Operation, {AId, SymbState, _}]}, Updated) ->
     CRDTVal = value(Mod,Updated),
@@ -113,6 +93,26 @@ postcondition(_S, {call, ?MODULE, merge, [Mod, ReplicaTriple1, ReplicaTriple2]},
 
 postcondition(_S,_Command,_CommandRes) ->
     true.
+
+%% Next state transformation, S is the current state
+next_state(State = #state{replicas=Replicas, actor_id=AId}, V, {call, ?MODULE, create, [Mod]}) ->
+    Replicas1 = [{AId, Mod:create_gc_expected(), V} | Replicas],
+    State#state{replicas=Replicas1, actor_id=AId+1};
+
+next_state(State = #state{replicas=Replicas}, V, {call, ?MODULE, update, [Mod, Operation, {AId, SymbState, _ConcreteState}]}) ->
+    {value, _, Replicas1} = lists:keytake(AId, 1, Replicas),
+    NewVal = {AId, Mod:update_gc_expected(Operation, AId, SymbState), V},
+    State#state{replicas=[NewVal|Replicas1]};
+
+next_state(State = #state{replicas=Replicas}, V,
+           {call, ?MODULE, merge, [Mod, {AId1, SymbState1, _CS1}, {_AId2, SymbState2, _CS2}]}) ->
+    {value, _, Replicas1} = lists:keytake(AId1, 1, Replicas),
+    MergedSymbState = Mod:merge_gc_expected(SymbState1, SymbState2),
+    NewVal = {AId1, MergedSymbState, V},
+    State#state{replicas=[NewVal|Replicas1]};
+
+next_state(S, _V, _Command) ->
+    S.
 
 prop_gc_correct(Mod) ->
     ?FORALL(Cmds,commands(?MODULE,#state{mod=Mod}),
