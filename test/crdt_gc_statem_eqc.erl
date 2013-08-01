@@ -97,7 +97,7 @@ postcondition(_S, {call, ?MODULE, update, [Mod, Operation, {AId, SymbState, _}]}
     SymbVal = Mod:realise_gc_expected(SymbState1),
     case values_equal(CRDTVal, SymbVal) of
         true -> true;
-        _    -> {postcondition_failed, "SymbVal does not look like CRDTVal", SymbVal, CRDTVal}
+        _    -> {postcondition_failed, "The Symbolic Value seems to have deviated from the CRDT Value", SymbVal, CRDTVal}
     end;
 
 postcondition(_S, {call, ?MODULE, merge, [Mod, ReplicaTriple1, ReplicaTriple2]}, Merged1) ->
@@ -106,7 +106,7 @@ postcondition(_S, {call, ?MODULE, merge, [Mod, ReplicaTriple1, ReplicaTriple2]},
     Merged2 = merge(Mod, ReplicaTriple2, ReplicaTriple1),
     case equal(Mod, Merged1, Merged2) of
         true -> true;
-        _    -> {postcondition_failed, "Merge is not commutative", Merged1, Merged2}
+        _    -> {postcondition_failed, "merge/2 is not commutative (in the eyes of equals/2)", Merged1, Merged2}
     end;
 
 postcondition(_S,_Command,_CommandRes) ->
