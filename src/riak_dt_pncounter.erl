@@ -144,9 +144,7 @@ to_binary(PNCnt) ->
 -spec to_binary(pncounter() | v1_pncounter(), v2 | v1) -> binary().
 to_binary(PNCnt, v2) ->
     PNBin = term_to_binary(PNCnt),
-    PNSize = byte_size(PNBin),
-    <<?TAG:8/integer, ?V2_VERS:8/integer, 
-      PNSize:32/integer, PNBin/binary>>;
+    <<?TAG:8/integer, ?V2_VERS:8/integer, PNBin/binary>>;
 to_binary({P,N}, v1) ->
     PBin = riak_dt_gcounter:to_binary(P),
     NBin = riak_dt_gcounter:to_binary(N),
@@ -158,8 +156,7 @@ to_binary({P,N}, v1) ->
 
 %% @doc Decode a binary encoded PN-Counter
 -spec from_binary(binary()) -> pncounter().
-from_binary(<<?TAG:8/integer, ?V2_VERS:8/integer,
-              PNBinLen:32/integer, PNBin:PNBinLen/binary>>) ->
+from_binary(<<?TAG:8/integer, ?V2_VERS:8/integer, PNBin/binary>>) ->
     binary_to_term(PNBin);
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer,
               PBinLen:32/integer, PBin:PBinLen/binary,
