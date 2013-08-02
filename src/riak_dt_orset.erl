@@ -110,8 +110,16 @@ realise_gc_expected({Add,Remove}) ->
     Values = [ X || {X, _A} <- ordsets:to_list(ordsets:subtract(Add,Remove))],
     lists:usort(Values).
     
-eqc_gc_ready(_S) ->
-    false.
+eqc_gc_ready(Meta, {Add,Remove}) ->
+    TotalTokens = ordsets:size(ordsets:union(Add,Remove)),
+    TombstoneTokens = ordsets:size(ordsets:intersection(Add,Remove)),
+    case TotalTokens of
+        0 -> false;
+        _ -> (TombstoneTokens / TotalTokens) > Meta?GC_META.compact_proportion
+    end.
+
+eqc_gc_get_fragment(_Meta, _S) ->
+    {}.
 
 -endif.
 
@@ -159,7 +167,10 @@ gc_ready(Meta, {Add,Remove}=_ORSet) ->
     Removals = orddict:fold(fun ordsets_union_prefix/3, ordsets:new(),Remove),
     TotalTokens = ordsets:size(ordsets:union(Additions,Removals)),
     TombstoneTokens = ordsets:size(ordsets:intersection(Additions,Removals)),
-    (TombstoneTokens / TotalTokens) > Meta?GC_META.compact_proportion.
+    case TotalTokens of
+        0 -> false;
+        _ -> (TombstoneTokens / TotalTokens) > Meta?GC_META.compact_proportion
+    end.
 
 % Gulp, I literally have no idea, one reason is we don't embed the epoch in 
 -spec gc_epoch(orset()) -> epoch().
