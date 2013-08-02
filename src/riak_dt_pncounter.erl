@@ -36,7 +36,7 @@
 
 -export([new/0, new/2, value/1, value/2,
          update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
--export([to_binary/2, from_binary/2, change_versions/3]).
+-export([to_binary/2, from_binary/2, current_version/1, change_versions/3]).
 
 %% EQC API
 -ifdef(EQC).
