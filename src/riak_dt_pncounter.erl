@@ -35,7 +35,8 @@
 -module(riak_dt_pncounter).
 
 -export([new/0, new/2, value/1, value/2,
-         update/3, merge/2, equal/2, to_binary/1, to_binary/2, from_binary/1]).
+         update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
+-export([to_binary/2, from_binary/2, change_versions/3]).
 
 %% EQC API
 -ifdef(EQC).
@@ -55,6 +56,8 @@
 -type pncounter_q()  :: positive | negative.
 
 -type v1_pncounter() :: {riak_dt_gcounter:gcounter(),riak_dt_gcounter:gcounter()}.
+-type version()      :: integer().
+-type any_pncounter() :: pncounter() | v1_pncounter().
 
 %% @doc Create a new, empty `pncounter()'
 -spec new() -> pncounter().
@@ -139,13 +142,24 @@ equal(PNCntA, PNCntB) ->
 %% @doc Encode an effecient binary representation of `pncounter()'
 -spec to_binary(pncounter()) -> binary().
 to_binary(PNCnt) ->
-    to_binary(PNCnt, v2).
+    to_binary(?V2_VERS, PNCnt).
 
--spec to_binary(pncounter() | v1_pncounter(), v2 | v1) -> binary().
-to_binary(PNCnt, v2) ->
-    PNBin = term_to_binary(PNCnt),
-    <<?TAG:8/integer, ?V2_VERS:8/integer, PNBin/binary>>;
-to_binary({P,N}, v1) ->
+%% @doc Decode a binary encoded PN-Counter
+-spec from_binary(binary()) -> pncounter().
+from_binary(Binary = <<?TAG:8/integer, _/binary>>) ->
+    % io:format("~p~n", [Binary]),
+    from_binary(?V2_VERS, Binary).
+
+
+-spec to_binary(version(), any_pncounter()) -> binary().
+to_binary(?V2_VERS, PNCnt) ->
+    Version = current_version(PNCnt),
+    V2 = change_versions(Version, ?V2_VERS, PNCnt),
+    V2Bin = term_to_binary(V2),
+    <<?TAG:8/integer, ?V2_VERS:8/integer, V2Bin/binary>>;
+to_binary(?V1_VERS, PNCnt) ->
+    Version = current_version(PNCnt),
+    {P,N} = change_versions(Version, ?V1_VERS, PNCnt),
     PBin = riak_dt_gcounter:to_binary(P),
     NBin = riak_dt_gcounter:to_binary(N),
     PBinLen = byte_size(PBin),
@@ -154,29 +168,50 @@ to_binary({P,N}, v1) ->
       PBinLen:32/integer, PBin:PBinLen/binary,
       NBinLen:32/integer, NBin:NBinLen/binary>>.
 
-%% @doc Decode a binary encoded PN-Counter
--spec from_binary(binary()) -> pncounter().
-from_binary(<<?TAG:8/integer, ?V2_VERS:8/integer, PNBin/binary>>) ->
+-spec from_binary(version(), binary()) -> any_pncounter().
+from_binary(?V2_VERS, <<?TAG:8/integer, ?V2_VERS:8/integer, PNBin/binary>>) ->
     binary_to_term(PNBin);
-from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer,
-              PBinLen:32/integer, PBin:PBinLen/binary,
-              NBinLen:32/integer, NBin:NBinLen/binary>>) ->
+from_binary(?V1_VERS, <<?TAG:8/integer, ?V1_VERS:8/integer,
+                  PBinLen:32/integer, PBin:PBinLen/binary,
+                  NBinLen:32/integer, NBin:NBinLen/binary>>) ->
     OldStyleIncs = riak_dt_gcounter:from_binary(PBin),
     OldStyleDecs = riak_dt_gcounter:from_binary(NBin),
+    {OldStyleIncs,OldStyleDecs};
+from_binary(OutVers, Binary = <<?TAG:8/integer, InVers:8/integer, _/binary>>) ->
+    OtherVers = from_binary(InVers, Binary),
+    change_versions(InVers, OutVers, OtherVers).
+
+-spec current_version(any_pncounter()) -> version().
+current_version(PNCnt) when is_list(PNCnt) ->
+    ?V2_VERS;
+current_version({_P,_N}) ->
+    ?V1_VERS.
+
+-spec change_versions(version(), version(), any_pncounter()) -> any_pncounter().
+change_versions(Version, Version, PNCnt)  ->
+    PNCnt;
+change_versions(?V1_VERS, ?V2_VERS, {P,N}) ->
     PNCnt0 = new(),
-    PNCnt1 = lists:foldl(fun({Actor,Inc},PNCnt) -> 
+    PNCnt1 = lists:foldl(fun({Actor,Inc},PNCnt) ->
                             update({increment,Inc}, Actor, PNCnt)
-                         end, PNCnt0, OldStyleIncs),
+                         end, PNCnt0, P),
     PNCnt2 = lists:foldl(fun({Actor,Dec},PNCnt) ->
                             update({decrement,Dec}, Actor, PNCnt)
-                         end, PNCnt1, OldStyleDecs),
-    PNCnt2.
+                         end, PNCnt1, N),
+    PNCnt2;
+change_versions(?V2_VERS, ?V1_VERS, PNCnt) when is_list(PNCnt) ->
+    OldPN = {riak_dt_gcounter:new(), riak_dt_gcounter:new()},
+    {P, N} = lists:foldl(fun({Actor,Inc,Dec},{P1,N1}) ->
+                             {riak_dt_gcounter:update({increment,Inc},Actor,P1),
+                              riak_dt_gcounter:update({increment,Dec},Actor,N1)}
+                         end, OldPN, PNCnt),
+    {P, N}.
 
 % Priv
 -spec increment_by(pos_integer(), term(), pncounter()) -> pncounter().
 increment_by(Increment, Actor, PNCnt) ->
     case lists:keytake(Actor, 1, PNCnt) of
-        false -> 
+        false ->
             [{Actor,Increment,0}|PNCnt];
         {value, {Actor,Inc,Dec}, ModPNCnt} ->
             [{Actor,Inc+Increment,Dec}|ModPNCnt]
@@ -284,8 +319,8 @@ merge_test() ->
 merge_too_test() ->
     PNCnt1 = [{<<"5">>,5,0},
               {<<"7">>,0,4}],
-    PNCnt2 = [{<<"5">>,0,2}, 
-              {<<"6">>,6,0}, 
+    PNCnt2 = [{<<"5">>,0,2},
+              {<<"6">>,6,0},
               {<<"7">>,7,0}],
     ?assertEqual([{<<"5">>,5,2},
                   {<<"7">>,7,4},
@@ -331,7 +366,7 @@ roundtrip_bin_test() ->
 % This is kinda important, I should probably do more about this test.
 update_bin_test() ->
     OldPNCnt = {[{a,1}],[{b,3}]},
-    OldPNBin = to_binary(OldPNCnt, v1),
+    OldPNBin = to_binary(?V1_VERS, OldPNCnt),
     NewPNCnt = from_binary(OldPNBin),
     ?assertEqual([{b,0,3},{a,1,0}], NewPNCnt).
 
