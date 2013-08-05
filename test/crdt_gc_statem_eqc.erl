@@ -40,6 +40,7 @@
     }).
 
 -define(NUMTESTS, 1000).
+-define(NUMCOMMANDS, 10000).
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) ->
                               io:format(user, Str, Args) end, P)).
@@ -128,10 +129,11 @@ postcondition(_S, {call, ?MODULE, gc_get_fragment, [Mod, Meta, {_AId, _SymbState
         true -> true;
         _    -> {postcondition_failed, "concrete state changes value when GCd", CRDTVal, PostGCCRDTVal}
     end;
-    % Get SymbFrag, apply SymbFrag to SymbState to check value doesn't change
-    % Get symbfrag, apply symbfrag to symbstate to check value stays "in step" with concfrag and concstate
-    % Apply ConcFrag to ConcState to check value doesn't change
-    % Check concfrag with symbstate
+    % Four Options (* is the one done above)
+    % - Get SymbFrag, apply SymbFrag to SymbState to check value doesn't change
+    % - Get symbfrag, apply symbfrag to symbstate to check value stays "in step" with concfrag and concstate
+    % * Apply ConcFrag to ConcState to check value doesn't change
+    % - Check concfrag with symbstate
 
 postcondition(_S,_Command,_CommandRes) ->
     true.
@@ -173,11 +175,11 @@ next_state(S, _V, _Command) ->
 %%% Properties
 
 prop_gc_correct(Mod) ->
-    ?FORALL(Cmds,more_commands(10,commands(?MODULE,#state{mod=Mod})),
+    ?FORALL(Cmds,more_commands(?NUMCOMMANDS,commands(?MODULE,#state{mod=Mod})),
         begin
             Res={_,_,Result} = run_commands(?MODULE, Cmds),
             aggregate(command_names(Cmds),
-                      pretty_commands(?MODULE, Cmds, Res, Result == ok))
+                      pretty_commands(?MODULE, Cmds, Res, eqc_statem:show_states(Result == ok)))
         end).
 
 
