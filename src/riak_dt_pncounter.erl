@@ -147,7 +147,6 @@ to_binary(PNCnt) ->
 %% @doc Decode a binary encoded PN-Counter
 -spec from_binary(binary()) -> pncounter().
 from_binary(Binary = <<?TAG:8/integer, _/binary>>) ->
-    % io:format("~p~n", [Binary]),
     from_binary(?V2_VERS, Binary).
 
 
