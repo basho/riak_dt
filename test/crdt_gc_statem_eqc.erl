@@ -157,7 +157,7 @@ next_state(State = #state{gc_readies=GcReadies}, _V,
            {call, ?MODULE, gc_ready, [Mod, Meta, {AId, SymbState, _DynamicState}]}) ->
     SymbReady = Mod:eqc_gc_ready(Meta, SymbState),
     GcReadies1 = case SymbReady of
-                    true -> orddict:insert(AId, Meta);
+                    true -> orddict:store(AId, Meta, GcReadies);
                     _    -> GcReadies
                  end,
     State#state{gc_readies=GcReadies1};
