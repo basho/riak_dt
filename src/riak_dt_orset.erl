@@ -49,11 +49,11 @@
 %% EQC generator
 -ifdef(EQC).
 gen_op() ->
-    ?LET({Add, Remove}, gen_elems(),
+    ?LET(Add, nat(),
          oneof([{add, Add}, {remove, Remove}])).
 
-gen_elems() ->
-    ?LET(A, int(), {A, oneof([A, int()])}).
+% gen_elems() ->
+%     ?LET(A, int(), {A, oneof([A, int()])}).
 
 %% Maybe model qc state as op based?
 init_state() ->
