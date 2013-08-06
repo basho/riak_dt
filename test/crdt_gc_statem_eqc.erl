@@ -69,7 +69,7 @@ command(State=#state{mod=Mod, replicas=Replicas, gc_readies=GcReadies}) ->
                 [{1, {call, ?MODULE, merge,  [Mod, elements(Replicas), elements(Replicas)]}} || length(Replicas) > 0] ++
                 [{10, {call, ?MODULE, gc_ready, [Mod, gen_meta(State), elements(Replicas)]}} || length(Replicas) > 0]
              );
-        _ -> return({call, ?MODULE, gc_get_fragment, gen_get_fragment(State)})
+        _ -> gen_get_fragment(State)
     end.
 
 
@@ -78,7 +78,8 @@ gen_get_fragment(#state{mod=Mod, replicas=Replicas, gc_readies=GcReadies}) ->
          elements(orddict:to_list(GcReadies)),
          begin
              ReplicaTriple = {AId,_,_} = lists:keyfind(AId,1,Replicas),
-             [Mod, Meta, ReplicaTriple]
+             io:format("G"),
+             {call, ?MODULE, gc_get_fragment, [Mod, Meta, ReplicaTriple]}
          end).
 
 gen_meta(#state{replicas=Replicas}) ->
@@ -93,8 +94,8 @@ precondition(#state{replicas=Replicas}, {call, ?MODULE, merge, [_, ReplicaTriple
     lists:member(ReplicaTriple1, Replicas) andalso lists:member(ReplicaTriple2, Replicas);
 precondition(#state{replicas=Replicas}, {call, ?MODULE, gc_ready, [_, _, ReplicaTriple]}) ->
     lists:member(ReplicaTriple, Replicas);
-precondition(#state{gc_readies=GcReadies}, {call, ?MODULE, gc_get_fragment, [_Mod, _Meta, {AId, _SymbState, _CRDTState}]}) ->
-    orddict:is_key(AId, GcReadies);
+% precondition(#state{gc_readies=GcReadies}, {call, ?MODULE, gc_get_fragment, [_Mod, _Meta, {AId, _SymbState, _CRDTState}]}) ->
+%     orddict:is_key(AId, GcReadies);
 precondition(_S,_Command) ->
     true.
 
