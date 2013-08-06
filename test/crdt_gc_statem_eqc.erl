@@ -81,7 +81,7 @@ gen_get_fragment(#state{mod=Mod, replicas=Replicas, gc_readies=GcReadies}) ->
 gen_meta(#state{replicas=Replicas}) ->
     Primaries = [ AId || {AId,_,_} <- lists:sublist(Replicas,1,3)],
     Epoch = riak_dt_gc:new_epoch(hd(Primaries)), % Primaries is never []
-    riak_dt_gc:meta(Epoch, Primaries, [], 1.0).
+    riak_dt_gc:meta(Epoch, Primaries, 1.0).
 
 %% Precondition, checked before command is added to the command sequence
 precondition(#state{replicas=Replicas}, {call, ?MODULE, update, [_, _, ReplicaTriple]}) ->

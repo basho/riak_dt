@@ -113,7 +113,7 @@ eqc_gc_ready(Meta, {Add,Remove}) ->
     TombstoneTokens = ordsets:size(ordsets:intersection(Add,Remove)),
     case TotalTokens of
         0 -> false;
-        _ -> (TombstoneTokens / TotalTokens) > Meta?GC_META.compact_proportion
+        _ -> ?SHOULD_GC(Meta, 1 - (TombstoneTokens/TotalTokens))
     end.
 
 eqc_gc_get_fragment(_Meta, _S) ->
@@ -156,7 +156,6 @@ equal({ADict1, RDict1}, {ADict2, RDict2}) ->
 
 -type gc_fragment() :: orset().
 
-% We're Ready to GC if Tombstones make up more than compact_proportion of the total number of tokens.
 -spec gc_ready(gc_meta(), orset()) -> boolean().
 gc_ready(Meta, {Add,Remove}=_ORSet) ->
     % These folds add {elem, token} to a set, on the off-chance that two tokens
@@ -164,10 +163,10 @@ gc_ready(Meta, {Add,Remove}=_ORSet) ->
     Additions = orddict:fold(fun ordsets_union_prefix/3, ordsets:new(),Add),
     Removals = orddict:fold(fun ordsets_union_prefix/3, ordsets:new(),Remove),
     TotalTokens = ordsets:size(ordsets:union(Additions,Removals)),
-    TombstoneTokens = ordsets:size(ordsets:intersection(Additions,Removals)),
+    KeepTokens = ordsets:size(ordsets:subtract(Additions,Removals)),
     case TotalTokens of
         0 -> false;
-        _ -> (TombstoneTokens / TotalTokens) > Meta?GC_META.compact_proportion
+        _ -> ?SHOULD_GC(Meta, KeepTokens/TotalTokens)
     end.
 
 % Gulp, I literally have no idea, one reason is we don't embed the epoch in 

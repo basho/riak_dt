@@ -23,7 +23,7 @@
 -module(riak_dt_gc).
 
 -export([behaviour_info/1]).
--export([meta/4]).
+-export([meta/4,meta/3]).
 -export([new_epoch/1, epoch_actor/1, epoch_compare/2]).
 
 -include("riak_dt_gc_meta.hrl").
@@ -34,13 +34,17 @@ behaviour_info(callbacks) ->
      {gc_get_fragment, 2},
      {gc_replace_fragment, 3}].
 
+-spec meta(actor(), [actor()], float()) -> gc_meta().
+meta(Epoch, PActors, CompactThreshold) ->
+    meta(Epoch, PActors, [], CompactThreshold).
+
 -spec meta(actor(), [actor()], [actor()], float()) -> gc_meta().
-meta(Epoch, PActors, ROActors, CompactProportion) ->
+meta(Epoch, PActors, ROActors, CompactThreshold) ->
     ?GC_META{epoch=Epoch,
              actor=epoch_actor(Epoch),
              primary_actors=ordsets:from_list(PActors),
              readonly_actors=ordsets:from_list(ROActors),
-             compact_proportion=CompactProportion}.
+             compact_threshold=CompactThreshold}.
 
 -spec new_epoch(actor()) -> epoch().
 new_epoch(Actor) ->

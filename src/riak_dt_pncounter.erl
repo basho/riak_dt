@@ -95,8 +95,7 @@ equal({Incr1, Decr1}, {Incr2, Decr2}) ->
 
 -type gc_fragment() :: pncounter().
 
-% We're ready to GC if the actors we can't compact make up more than `compact_proportion` of
-% the actors in this GCounter.
+% We're ready to GC if either of the gcounters are ready to GC.
 -spec gc_ready(gc_meta(), pncounter()) -> boolean().
 gc_ready(Meta, {Inc,Dec}) ->
     riak_dt_gcounter:gc_ready(Meta, Inc)

@@ -100,15 +100,15 @@ equal(VA,VB) ->
 
 -type gc_fragment() :: gcounter().
 
-% We're ready to GC if the actors we can't compact make up more than `compact_proportion` of
-% the actors in this GCounter.
 -spec gc_ready(gc_meta(), gcounter()) -> boolean().
 gc_ready(Meta, GCnt) ->
     GCActors = length([Act || {{gc, _Epoch}=Act,_Cnt} <- GCnt]),
     ROActors = length(ro_actors(Meta, GCnt)),
     TotalActors = length(GCnt),
-    Proportion = Meta?GC_META.compact_proportion,
-    (GCActors > 1) or (TotalActors * Proportion > ROActors).
+    case TotalActors of
+        0 -> false;
+        1 -> (GCActors > 1) or ?SHOULD_GC(Meta, ROActors/TotalActors)
+    end.
 
 -spec gc_epoch(gcounter()) -> epoch().
 gc_epoch(GCnt) ->

@@ -78,7 +78,7 @@ equal({ADict1, RDict1}, {ADict2, RDict2}) ->
 gc_ready(Meta, {Add,_Remove}=VVORSet) ->
     TombstoneCount = orddict:size(tombstones(VVORSet)),
     ElementCount   = orddict:size(Add),
-    (TombstoneCount / ElementCount) > Meta?GC_META.compact_proportion.
+    ?SHOULD_GC(Meta, 1 - (TombstoneCount/ElementCount)).
 
 % I don't know how we find the epoch
 -spec gc_epoch(vvorset()) -> epoch().
