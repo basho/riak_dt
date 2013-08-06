@@ -62,13 +62,16 @@ command(State=#state{mod=Mod, replicas=Replicas, gc_readies=GcReadies}) ->
     % - Exectuting a GC (removing the fragment from a given replica)
     %  - Execute a GC immediately that it's proposed
     %  - Execute sometime later
-    frequency(
-        [{1, {call, ?MODULE, create, [Mod]}}] ++
-        [{10, {call, ?MODULE, update, [Mod, Mod:gen_op(), elements(Replicas)]}} || length(Replicas) > 0] ++
-        [{1, {call, ?MODULE, merge,  [Mod, elements(Replicas), elements(Replicas)]}} || length(Replicas) > 0] ++
-        [{10, {call, ?MODULE, gc_ready, [Mod, gen_meta(State), elements(Replicas)]}} || length(Replicas) > 0] ++
-        [{10, {call, ?MODULE, gc_get_fragment, gen_get_fragment(State)}} || orddict:size(GcReadies) > 0]
-    ).
+    case orddict:size(GcReadies) of
+        0 -> frequency(
+                [{1, {call, ?MODULE, create, [Mod]}}] ++
+                [{10, {call, ?MODULE, update, [Mod, Mod:gen_op(), elements(Replicas)]}} || length(Replicas) > 0] ++
+                [{1, {call, ?MODULE, merge,  [Mod, elements(Replicas), elements(Replicas)]}} || length(Replicas) > 0] ++
+                [{10, {call, ?MODULE, gc_ready, [Mod, gen_meta(State), elements(Replicas)]}} || length(Replicas) > 0]
+             );
+        _ -> return({call, ?MODULE, gc_get_fragment, gen_get_fragment(State)})
+    end.
+
 
 gen_get_fragment(#state{mod=Mod, replicas=Replicas, gc_readies=GcReadies}) ->
     ?LET({AId,Meta},
@@ -81,7 +84,7 @@ gen_get_fragment(#state{mod=Mod, replicas=Replicas, gc_readies=GcReadies}) ->
 gen_meta(#state{replicas=Replicas}) ->
     Primaries = [ AId || {AId,_,_} <- lists:sublist(Replicas,1,3)],
     Epoch = riak_dt_gc:new_epoch(hd(Primaries)), % Primaries is never []
-    riak_dt_gc:meta(Epoch, Primaries, 1.0).
+    riak_dt_gc:meta(Epoch, Primaries, [], 1.0).
 
 %% Precondition, checked before command is added to the command sequence
 precondition(#state{replicas=Replicas}, {call, ?MODULE, update, [_, _, ReplicaTriple]}) ->
@@ -178,9 +181,20 @@ prop_gc_correct(Mod) ->
     ?FORALL(Cmds,more_commands(?NUMCOMMANDS,commands(?MODULE,#state{mod=Mod})),
         begin
             Res={_,_,Result} = run_commands(?MODULE, Cmds),
-            aggregate(command_names(Cmds),
-                      pretty_commands(?MODULE, Cmds, Res, eqc_statem:show_states(Result == ok)))
+            collect(with_title("Command Lengths"),
+                length(Cmds),
+                aggregate(with_title("Command Names"),
+                    command_names(Cmds),
+                    pretty_commands(?MODULE,
+                        Cmds,
+                        Res,
+                        eqc_statem:show_states(Result == ok))))
         end).
+
+commands_sampler(Mod) ->
+    ?LET(Cmds,more_commands(?NUMCOMMANDS,commands(?MODULE,#state{mod=Mod})),
+         length(Cmds)).
+
 
 
 %%% Callbacks Used Above
