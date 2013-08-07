@@ -40,8 +40,60 @@
 -export([gen_op/0, update_expected/3, eqc_state_value/1]).
 -endif.
 
-%% EQC generator
+new() ->
+    orddict:new().
+
+value(ORDict0) ->
+    ORDict1 = orddict:filter(fun(_Elem,{Add,Rem}) ->
+            Tokens = ordsets:subtract(Add,Rem),
+            ordsets:size(Tokens) /= 0
+        end, ORDict0),
+    orddict:fetch_keys(ORDict1).
+
+update({add,Elem}, Actor, ORDict) ->
+    Token = unique(Actor),
+    add_elem(Elem,Token,ORDict);
+update({remove,Elem}, _Actor, ORDict) ->
+    remove_elem(Elem, ORDict).
+
+merge(ORDictA, ORDictB) ->
+    orddict:merge(fun(_Elem,{AddA,RemA},{AddB,RemB}) ->
+            Add = ordsets:union(AddA,AddB),
+            Rem = ordsets:union(RemA,RemB),
+            {Add,Rem}
+        end, ORDictA, ORDictB).
+
+equal(ORDictA, ORDictB) ->
+    ORDictA == ORDictB. % Everything inside is ordered, so this should work
+
+%% Private
+add_elem(Elem,Token,ORDict) ->
+    case orddict:find(Elem,ORDict) of
+        {ok, {Add,Rem}} -> Add1 = ordsets:add_element(Token,Add),
+                           orddict:store(Elem, {Add1,Rem}, ORDict);
+        error           -> Add = ordsets:from_list([Token]),
+                           orddict:store(Elem, {Add,ordsets:new()}, ORDict)
+    end.
+
+remove_elem(Elem, ORDict) ->
+    case orddict:find(Elem,ORDict) of
+        {ok, {Add,Rem}} -> Rem1 = ordsets:union(Add,Rem),
+                           orddict:store(Elem, {Add,Rem1}, ORDict);
+        error           -> ORDict
+    end.
+
+unique(Actor) ->
+    erlang:phash2({Actor, erlang:now()}).
+
+%% ===================================================================
+%% EUnit tests
+%% ===================================================================
+-ifdef(TEST).
 -ifdef(EQC).
+eqc_value_test_() ->
+    {timeout, 120, [?_assert(crdt_statem_eqc:prop_converge(init_state(), 1000, ?MODULE))]}.
+
+%% EQC generator
 gen_op() ->
     ?LET({Add, Remove}, gen_elems(),
          oneof([{add, Add}, {remove, Remove}])).
@@ -79,77 +131,5 @@ eqc_state_value({_Cnt, Dict, _L}) ->
     Remaining = sets:subtract(A, R),
     Values = [ Elem || {Elem, _X} <- sets:to_list(Remaining)],
     lists:usort(Values).
-
--endif.
-
-new() ->
-    {orddict:new(), orddict:new()}.
-
-value({ADict, RDict}) ->
-    orddict:fetch_keys(orddict:filter(fun(K, V) ->
-                                        case orddict:find(K, RDict) of
-                                            {ok, RSet} ->
-                                                case
-                                                    ordsets:to_list(ordsets:subtract(V, RSet)) of
-                                                    [] -> false;
-                                                    _ -> true
-                                                end;
-                                            error -> true
-                                        end
-                                end,
-                                ADict)).
-
-update({add, Elem}, Actor, {ADict0, RDict}) ->
-    ADict = add_elem(Actor, ADict0, Elem),
-    {ADict, RDict};
-update({remove, Elem}, _Actor, {ADict, RDict0}) ->
-    RDict = remove_elem(orddict:find(Elem, ADict), Elem, RDict0),
-    {ADict, RDict}.
-merge({ADict1, RDict1}, {ADict2, RDict2}) ->
-    MergedADict = merge_dicts(ADict1, ADict2),
-    MergedRDict = merge_dicts(RDict1, RDict2),
-    {MergedADict, MergedRDict}.
-
-equal({ADict1, RDict1}, {ADict2, RDict2}) ->
-    ADict1 == ADict2 andalso RDict1 == RDict2.
-
-%% Private
-add_elem(Actor, Dict, Elem) ->
-    Unique = unique(Actor),
-    add_unique(orddict:find(Elem, Dict), Dict, Elem, Unique).
-
-remove_elem({ok, Set0}, Elem, RDict) ->
-    case orddict:find(Elem, RDict) of
-        {ok, Set} ->
-            orddict:store(Elem, ordsets:union(Set, Set0), RDict);
-        error ->
-            orddict:store(Elem, Set0, RDict)
-    end;
-remove_elem(error, _Elem, RDict) ->
-    %% Can't remove an element not in the ADict, warn??
-    RDict.
-
-add_unique({ok, Set0}, Dict, Elem, Unique) ->
-    Set = ordsets:add_element(Unique, Set0),
-    orddict:store(Elem, Set, Dict);
-add_unique(error, Dict, Elem, Unique) ->
-    Set = ordsets:from_list([Unique]),
-    orddict:store(Elem, Set, Dict).
-
-unique(Actor) ->
-    erlang:phash2({Actor, erlang:now()}).
-
-merge_dicts(Dict1, Dict2) ->
-    %% for every key in dict1, merge its contents with dict2's content for same key
-   orddict:merge(fun(_K, V1, V2) -> ordsets:union(V1, V2) end, Dict1, Dict2).
-
-%% ===================================================================
-%% EUnit tests
-%% ===================================================================
--ifdef(TEST).
-
--ifdef(EQC).
-eqc_value_test_() ->
-    {timeout, 120, [?_assert(crdt_statem_eqc:prop_converge(init_state(), 1000, ?MODULE))]}.
 -endif.
 -endif.
