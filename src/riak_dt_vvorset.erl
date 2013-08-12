@@ -71,15 +71,17 @@
 -export([new/0, value/1, value/2]).
 -export([update/3, merge/2, equal/2]).
 -export([to_binary/1, from_binary/1]).
+-export([precondition_context/1]).
 
 %% EQC API
 -ifdef(EQC).
 -export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0, generate/0]).
 -endif.
 
--export_type([vvorset/0, vvorset_op/0]).
+-export_type([vvorset/0, vvorset_op/0, binary_vvorset/0]).
 
 -opaque vvorset() :: {actorlist(), entries()}.
+-opaque binary_vvorset() :: binary(). %% A binary that from_binary/1 will operate on.
 
 -type vvorset_op() :: {add, member()} | {remove, member()}.
 -type vvorset_q()  :: size | {contains, term()} | tombstones.
@@ -116,7 +118,7 @@ value(size, ORset) ->
 value({contains, Elem}, ORset) ->
     lists:member(Elem, value(ORset));
 value(tombstones, {_Actors, Entries}) ->
-        [K || {K, {Active, _Vclock}} <- orddict:to_list(Entries), Active == 0].
+    [K || {K, {Active, _Vclock}} <- orddict:to_list(Entries), Active == 0].
 
 -spec update(vvorset_op(), actor(), vvorset()) -> vvorset().
 update({add, Elem}, Actor, ORSet) ->
@@ -208,6 +210,17 @@ remove_elem(_, _Elem, ORSet) ->
     %% What @TODO?
     %% Throw an error? (seems best)
     ORSet.
+
+%% @doc the precondition context is a binary representation of a fragment of the CRDT
+%% that operations with pre-conditions can be applied too.
+%% In the case of OR-Sets this is the set of adds observed.
+%% The system can then apply a remove to this context and merge it with a replica.
+%% Especially useful for hybrid op/state systems where the context of an operation is
+%% needed at a replica without sending the entire state to the client.
+-spec precondition_context(vvorset()) -> binary_vvorset().
+precondition_context({AL, Entries}) ->
+    to_binary({AL, [Add || {_K, {Active, _Clock}}=Add <- orddict:to_list(Entries),
+                 Active == 1]}).
 
 -define(TAG, 75).
 -define(V1_VERS, 1).
