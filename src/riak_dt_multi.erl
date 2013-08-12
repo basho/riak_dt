@@ -43,7 +43,7 @@
 -endif.
 
 %% API
--export([new/0, value/1, value/2, update/3, merge/2,
+-export([new/0, value/1, value/2, update/3, merge/2, reset/2,
          equal/2, to_binary/1, from_binary/1]).
 
 %% EQC API
@@ -51,6 +51,8 @@
 -export([gen_op/0, update_expected/3, eqc_state_value/1,
          init_state/0, generate/0]).
 -endif.
+
+-export_type([multi/0]).
 
 -opaque multi() :: {schema(), valuelist()}.
 -type schema() :: riak_dt_vvorset:vvorset().
@@ -149,15 +151,16 @@ apply_ops([{update, {_Name, Mod}=Key, Op} | Rest], Actor, Schema, Values) ->
     InitialValue = Mod:update(Op, Actor, InitialValue0),
     NewValues = orddict:update(Key, update_fun(Mod, Op, Actor), InitialValue, Values),
     apply_ops(Rest, Actor, NewSchema, NewValues);
-apply_ops([{remove, Key} | Rest], Actor, Schema, Values) ->
+apply_ops([{remove, {_Name, Type}=Key} | Rest], Actor, Schema, Values) ->
     NewSchema = riak_dt_vvorset:update({remove, Key}, Actor, Schema),
-    NewValues = orddict:erase(Key, Values),
-    apply_ops(Rest, Actor, NewSchema, NewValues);
-apply_ops([{add, {_Name, Mod}=Key} | Rest], Actor, Schema, Values) ->
-    %% Add the key to schema
-    NewSchema = riak_dt_vvorset:update({add, Key}, Actor, Schema),
-    %% Update the value, adding an empty crdt if not present
-    NewValues = orddict:update(Key, fun(V) -> V end, Mod:new(), Values),
+    %% Do a reset remove, we keep the value as a tombstone, but we negate it (as best we can)
+    Current = value({get_crdt, Key}, {Schema, Values}),
+    NewValues = case Current of
+                error -> Values;
+                CRDT ->
+                    Tombstone = Type:reset(CRDT, Actor),
+                    orddict:store(Key, Tombstone, Values)
+            end,
     apply_ops(Rest, Actor, NewSchema, NewValues);
 apply_ops([{insert, {_Name, Mod}=Key, CRDT} | Rest], Actor, Schema, Values) ->
     %% Add the key to the schema
@@ -227,6 +230,18 @@ short_cicuit_equals([{{_Name, Type}=Key, Val1} | Rest], Values2) ->
             false
     end.
 
+%% @Doc reset the Map as though it were empty.
+%% Essentially remove all present fields.
+-spec reset(multi(), term()) -> multi().
+reset(Map, Actor) ->
+    Fields = value(keyset, Map),
+    reset(Fields, Actor, Map).
+
+reset([], _Actor, Map) ->
+    Map;
+reset([Field | Rest], Actor, Map) ->
+    reset(Rest, Actor, update({remove, Field}, Actor, Map)).
+
 -define(TAG, 77).
 -define(V1_VERS, 1).
 
@@ -259,7 +274,7 @@ gen_update() ->
 
 gen_field() ->
     {binary(), oneof([riak_dt_pncounter, riak_dt_vvorset, riak_dt_lwwreg,
-                       riak_dt_gcounter, riak_dt_zorset, riak_dt_multi])}.
+                       riak_dt_zorset, riak_dt_multi])}.%%riak_dt_gcounter])}.
 
 gen_field_op({_Name, Type}) ->
     Type:gen_op().

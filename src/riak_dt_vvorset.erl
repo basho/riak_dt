@@ -69,7 +69,7 @@
 
 %% API
 -export([new/0, value/1, value/2]).
--export([update/3, merge/2, equal/2]).
+-export([update/3, merge/2, equal/2, reset/2]).
 -export([to_binary/1, from_binary/1]).
 -export([precondition_context/1]).
 
@@ -177,6 +177,17 @@ is_active_or_removed(RemoveClock0, AddClock0, RemActors, AddActors, MergedActors
 -spec equal(vvorset(), vvorset()) -> boolean().
 equal(ORSet1, ORSet2) ->
     ORSet1 == ORSet2.
+
+%% @Doc reset the set to empty, essentially have `Actor' remove all present members.
+-spec reset(vvorset(), actor()) -> vvorset().
+reset(Set, Actor) ->
+    Members = value(Actor),
+    reset(Members, Actor, Set).
+
+reset([], _Actor, Set) ->
+    Set;
+reset([Member | Rest], Actor, Set) ->
+    reset(Rest, Actor, update({remove, Member}, Actor, Set)).
 
 %% Private
 -spec add_elem(actor(), vvorset(), member()) -> vvorset().
