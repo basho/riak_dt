@@ -42,7 +42,7 @@
 
 %% EQC API
 -ifdef(EQC).
--export([gen_op/0, update_expected/3, eqc_state_value/1]).
+-export([gen_op/0, gen_gc_ops/0, update_expected/3, eqc_state_value/1]).
 -compile(export_all).
 -endif.
 
@@ -51,6 +51,10 @@
 gen_op() ->
     ?LET(Add, nat(),
          oneof([{add, Add}, {remove, Add}])).
+         
+gen_gc_ops() ->
+    ?LET(Add, nat(),
+         [{add, Add}, {remove, Add}]).
 
 % gen_elems() ->
 %     ?LET(A, int(), {A, oneof([A, int()])}).
