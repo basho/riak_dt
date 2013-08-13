@@ -52,7 +52,7 @@
 
 -opaque gcounter() :: [entry()].
 
--type entry() :: {Actor::term(), Count::pos_integer()}.
+-type entry() :: {Actor::riak_dt:actor(), Count::pos_integer()}.
 -type gcounter_op() :: increment | {increment, pos_integer()}.
 
 %% @doc Create a new, empty `gcounter()'

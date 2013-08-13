@@ -22,6 +22,8 @@
 
 -module(riak_dt).
 
+-export_type([actor/0]).
+
 -type crdt() :: term().
 -type operation() :: term().
 -type actor() :: term().
