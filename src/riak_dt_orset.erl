@@ -50,7 +50,7 @@
 -ifdef(EQC).
 gen_op() ->
     ?LET(Add, nat(),
-         oneof([{add, Add}, {remove, Remove}])).
+         oneof([{add, Add}, {remove, Add}])).
 
 % gen_elems() ->
 %     ?LET(A, int(), {A, oneof([A, int()])}).
