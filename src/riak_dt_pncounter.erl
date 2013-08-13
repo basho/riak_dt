@@ -36,6 +36,7 @@
 
 -export([new/0, new/2, value/1, value/2, reset/2,
          update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
+-export([to_binary/2, from_binary/2, current_version/1, change_versions/3]).
 
 %% EQC API
 -ifdef(EQC).
@@ -49,15 +50,19 @@
 
 -export_type([pncounter/0, pncounter_op/0]).
 
--opaque pncounter() :: {riak_dt_gcounter:gcounter(), riak_dt_gcounter:gcounter()}.
+-opaque pncounter()  :: [{Actor::term(), Inc::pos_integer(), Dec::pos_integer()}].
 -type pncounter_op() :: riak_dt_gcounter:gcounter_op() | decrement_op().
 -type decrement_op() :: decrement | {decrement, pos_integer()}.
 -type pncounter_q()  :: positive | negative.
 
+-type v1_pncounter() :: {riak_dt_gcounter:gcounter(),riak_dt_gcounter:gcounter()}.
+-type version()      :: integer().
+-type any_pncounter() :: pncounter() | v1_pncounter().
+
 %% @doc Create a new, empty `pncounter()'
 -spec new() -> pncounter().
 new() ->
-    {riak_dt_gcounter:new(), riak_dt_gcounter:new()}.
+    [].
 
 %% @doc Create a `pncounter()' with an initial `Value' for `Actor'.
 -spec new(term(), integer()) -> pncounter().
@@ -70,16 +75,16 @@ new(_Actor, _Zero) ->
 
 %% @doc The single, total value of a `pncounter()'
 -spec value(pncounter()) -> integer().
-value({Incr, Decr}) ->
-    riak_dt_gcounter:value(Incr) - riak_dt_gcounter:value(Decr).
+value(PNCnt) ->
+    lists:sum([Inc - Dec || {_Act,Inc,Dec} <- PNCnt]).
 
 %% @doc query the parts of a `pncounter()'
 %% valid queries are `positive' or `negative'.
 -spec value(pncounter_q(), pncounter()) -> pncounter().
-value(positive, {P, _N}) ->
-    riak_dt_gcounter:value(P);
-value(negative, {_P, N}) ->
-    riak_dt_gcounter:value(N).
+value(positive, PNCnt) ->
+    lists:sum([Inc || {_Act,Inc,_Dec} <- PNCnt]);
+value(negative, PNCnt) ->
+    lists:sum([Dec || {_Act,_Inc,Dec} <- PNCnt]).
 
 %% @doc Update a `pncounter()'. The first argument is either the atom
 %% `increment' or `decrement' or the two tuples `{increment, pos_integer()}' or
@@ -89,29 +94,46 @@ value(negative, {_P, N}) ->
 %%
 %% returns the updated `pncounter()'
 -spec update(pncounter_op(), term(), pncounter()) -> pncounter().
-update(increment, Actor, {Incr, Decr}) ->
-    {riak_dt_gcounter:update(increment, Actor, Incr), Decr};
-update({increment, By}, Actor, {Incr, Decr}) when is_integer(By), By > 0 ->
-    {riak_dt_gcounter:update({increment, By}, Actor, Incr), Decr};
-update(decrement, Actor, {Incr, Decr}) ->
-    {Incr, riak_dt_gcounter:update(increment, Actor, Decr)};
-update({decrement, By}, Actor, {Incr, Decr}) when is_integer(By), By > 0 ->
-    {Incr, riak_dt_gcounter:update({increment, By}, Actor, Decr)}.
+update(increment, Actor, PNCnt) ->
+    update({increment, 1}, Actor, PNCnt);
+update(decrement, Actor, PNCnt) ->
+    update({decrement, 1}, Actor, PNCnt);
+update({_IncrDecr, 0}, _Actor, PNCnt) ->
+    PNCnt;
+update({increment, By}, Actor, PNCnt) when is_integer(By), By > 0 ->
+    increment_by(By, Actor, PNCnt);
+update({increment, By}, Actor, PNCnt) when is_integer(By), By < 0 ->
+    update({decrement, By}, Actor, PNCnt);
+update({decrement, By}, Actor, PNCnt) when is_integer(By), By > 0 ->
+    decrement_by(By, Actor, PNCnt).
 
 %% @doc Merge two `pncounter()'s to a single `pncounter()'. This is the Least Upper Bound
 %% function described in the literature.
 -spec merge(pncounter(), pncounter()) -> pncounter().
-merge({Incr1, Decr1}, {Incr2, Decr2}) ->
-    MergedIncr =  riak_dt_gcounter:merge(Incr1, Incr2),
-    MergedDecr =  riak_dt_gcounter:merge(Decr1, Decr2),
-    {MergedIncr, MergedDecr}.
+merge(PNCntA, PNCntB) ->
+    merge(PNCntA, PNCntB, []).
+
+merge([],[],Acc) ->
+    lists:reverse(Acc);
+merge(LeftOver, [], Acc) ->
+    lists:reverse(Acc,LeftOver);
+merge([], RightOver, Acc) ->
+    lists:reverse(Acc,RightOver);
+merge([{Act,IncA,DecA}=ACntA|RestA],PNCntB, Acc) ->
+    case lists:keytake(Act, 1, PNCntB) of
+        {value, {Act,IncB,DecB}, ModPNCntB} ->
+            ACntB = {Act,max(IncA,IncB),max(DecA,DecB)},
+            merge(RestA, ModPNCntB, [ACntB|Acc]);
+        false ->
+            merge(RestA, PNCntB, [ACntA|Acc])
+    end.
 
 %% @doc Are two `pncounter()'s structurally equal? This is not `value/1' equality.
 %% Two counters might represent the total `-42', and not be `equal/2'. Equality here is
 %% that both counters represent exactly the same information.
 -spec equal(pncounter(), pncounter()) -> boolean().
-equal({Incr1, Decr1}, {Incr2, Decr2}) ->
-    riak_dt_gcounter:equal(Incr1, Incr2) andalso riak_dt_gcounter:equal(Decr1, Decr2).
+equal(PNCntA, PNCntB) ->
+    lists:sort(PNCntA) =:= lists:sort(PNCntB).
 
 %% @Doc reset the PN-Counter to zero (based on it's current value) by
 %% writing an increment in `Actor''s name.
@@ -129,10 +151,28 @@ reset(Amt, Actor, Cntr)  ->
 
 -define(TAG, 71).
 -define(V1_VERS, 1).
+-define(V2_VERS, 2).
 
 %% @doc Encode an effecient binary representation of `pncounter()'
 -spec to_binary(pncounter()) -> binary().
-to_binary({P, N}) ->
+to_binary(PNCnt) ->
+    to_binary(?V2_VERS, PNCnt).
+
+%% @doc Decode a binary encoded PN-Counter
+-spec from_binary(binary()) -> pncounter().
+from_binary(Binary = <<?TAG:8/integer, _/binary>>) ->
+    from_binary(?V2_VERS, Binary).
+
+
+-spec to_binary(version(), any_pncounter()) -> binary().
+to_binary(?V2_VERS, PNCnt) ->
+    Version = current_version(PNCnt),
+    V2 = change_versions(Version, ?V2_VERS, PNCnt),
+    V2Bin = term_to_binary(V2),
+    <<?TAG:8/integer, ?V2_VERS:8/integer, V2Bin/binary>>;
+to_binary(?V1_VERS, PNCnt) ->
+    Version = current_version(PNCnt),
+    {P,N} = change_versions(Version, ?V1_VERS, PNCnt),
     PBin = riak_dt_gcounter:to_binary(P),
     NBin = riak_dt_gcounter:to_binary(N),
     PBinLen = byte_size(PBin),
@@ -141,12 +181,63 @@ to_binary({P, N}) ->
       PBinLen:32/integer, PBin:PBinLen/binary,
       NBinLen:32/integer, NBin:NBinLen/binary>>.
 
-%% @doc Decode a binary encoded PN-Counter
--spec from_binary(binary()) -> pncounter().
-from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer,
-              PBinLen:32/integer, PBin:PBinLen/binary,
-              NBinLen:32/integer, NBin:NBinLen/binary>>) ->
-    {riak_dt_gcounter:from_binary(PBin), riak_dt_gcounter:from_binary(NBin)}.
+-spec from_binary(version(), binary()) -> any_pncounter().
+from_binary(?V2_VERS, <<?TAG:8/integer, ?V2_VERS:8/integer, PNBin/binary>>) ->
+    binary_to_term(PNBin);
+from_binary(?V1_VERS, <<?TAG:8/integer, ?V1_VERS:8/integer,
+                  PBinLen:32/integer, PBin:PBinLen/binary,
+                  NBinLen:32/integer, NBin:NBinLen/binary>>) ->
+    OldStyleIncs = riak_dt_gcounter:from_binary(PBin),
+    OldStyleDecs = riak_dt_gcounter:from_binary(NBin),
+    {OldStyleIncs,OldStyleDecs};
+from_binary(OutVers, Binary = <<?TAG:8/integer, InVers:8/integer, _/binary>>) ->
+    OtherVers = from_binary(InVers, Binary),
+    change_versions(InVers, OutVers, OtherVers).
+
+-spec current_version(any_pncounter()) -> version().
+current_version(PNCnt) when is_list(PNCnt) ->
+    ?V2_VERS;
+current_version({_P,_N}) ->
+    ?V1_VERS.
+
+-spec change_versions(version(), version(), any_pncounter()) -> any_pncounter().
+change_versions(Version, Version, PNCnt)  ->
+    PNCnt;
+change_versions(?V1_VERS, ?V2_VERS, {P,N}) ->
+    PNCnt0 = new(),
+    PNCnt1 = lists:foldl(fun({Actor,Inc},PNCnt) ->
+                            update({increment,Inc}, Actor, PNCnt)
+                         end, PNCnt0, P),
+    PNCnt2 = lists:foldl(fun({Actor,Dec},PNCnt) ->
+                            update({decrement,Dec}, Actor, PNCnt)
+                         end, PNCnt1, N),
+    PNCnt2;
+change_versions(?V2_VERS, ?V1_VERS, PNCnt) when is_list(PNCnt) ->
+    OldPN = {riak_dt_gcounter:new(), riak_dt_gcounter:new()},
+    {P, N} = lists:foldl(fun({Actor,Inc,Dec},{P1,N1}) ->
+                             {riak_dt_gcounter:update({increment,Inc},Actor,P1),
+                              riak_dt_gcounter:update({increment,Dec},Actor,N1)}
+                         end, OldPN, PNCnt),
+    {P, N}.
+
+% Priv
+-spec increment_by(pos_integer(), term(), pncounter()) -> pncounter().
+increment_by(Increment, Actor, PNCnt) ->
+    case lists:keytake(Actor, 1, PNCnt) of
+        false ->
+            [{Actor,Increment,0}|PNCnt];
+        {value, {Actor,Inc,Dec}, ModPNCnt} ->
+            [{Actor,Inc+Increment,Dec}|ModPNCnt]
+    end.
+
+-spec decrement_by(pos_integer(), term(), pncounter()) -> pncounter().
+decrement_by(Decrement, Actor, PNCnt) ->
+    case lists:keytake(Actor, 1, PNCnt) of
+        false ->
+            [{Actor,0,Decrement}|PNCnt];
+        {value, {Actor,Inc,Dec}, ModPNCnt} ->
+            [{Actor,Inc,Dec+Decrement}|ModPNCnt]
+    end.
 
 %% ===================================================================
 %% EUnit tests
@@ -190,12 +281,12 @@ eqc_state_value(S) ->
 -endif.
 
 new_test() ->
-    ?assertEqual({[], []}, new()).
+    ?assertEqual([], new()).
 
 value_test() ->
-    PNCnt1 = {[{1, 1}, {2, 13}, {3, 1}], [{2, 10}, {4, 1}]},
-    PNCnt2 = {[], []},
-    PNCnt3 = {[{1, 3}, {2, 1}, {3, 1}], [{1, 3}, {2, 1}, {3, 1}]},
+    PNCnt1 = [{1,1,0}, {2,13,10}, {3,1,0}, {4,0,1}],
+    PNCnt2 = [],
+    PNCnt3 = [{1,3,3},{2,1,1},{3,1,1}],
     ?assertEqual(4, value(PNCnt1)),
     ?assertEqual(0, value(PNCnt2)),
     ?assertEqual(0, value(PNCnt3)).
@@ -205,12 +296,12 @@ update_increment_test() ->
     PNCnt1 = update(increment, 1, PNCnt0),
     PNCnt2 = update(increment, 2, PNCnt1),
     PNCnt3 = update(increment, 1, PNCnt2),
-    ?assertEqual({[{1, 2}, {2, 1}], []}, PNCnt3).
+    ?assertEqual([{1,2,0}, {2,1,0}], PNCnt3).
 
 update_increment_by_test() ->
     PNCnt0 = new(),
     PNCnt1 = update({increment, 7}, 1, PNCnt0),
-    ?assertEqual({[{1, 7}], []}, PNCnt1).
+    ?assertEqual([{1,7,0}], PNCnt1).
 
 update_decrement_test() ->
     PNCnt0 = new(),
@@ -218,35 +309,41 @@ update_decrement_test() ->
     PNCnt2 = update(increment, 2, PNCnt1),
     PNCnt3 = update(increment, 1, PNCnt2),
     PNCnt4 = update(decrement, 1, PNCnt3),
-    ?assertEqual({[{1, 2}, {2, 1}], [{1, 1}]}, PNCnt4).
+    ?assertEqual([{1,2,1}, {2,1,0}], PNCnt4).
 
 update_decrement_by_test() ->
     PNCnt0 = new(),
     PNCnt1 = update({increment, 7}, 1, PNCnt0),
     PNCnt2 = update({decrement, 5}, 1, PNCnt1),
-    ?assertEqual({[{1, 7}], [{1, 5}]}, PNCnt2).
+    ?assertEqual([{1,7,5}], PNCnt2).
 
 merge_test() ->
-    PNCnt1 = {[{<<"1">>, 1},
-               {<<"2">>, 2},
-               {<<"4">>, 4}], []},
-    PNCnt2 = {[{<<"3">>, 3},
-               {<<"4">>, 3}], []},
-    ?assertEqual({[], []}, merge(new(), new())),
-    ?assertEqual({[{<<"1">>,1},{<<"2">>,2},{<<"4">>,4},{<<"3">>,3}], []},
-                merge(PNCnt1, PNCnt2)).
+    PNCnt1 = [{<<"1">>,1,0},
+              {<<"2">>,2,0},
+              {<<"4">>,4,0}],
+    PNCnt2 = [{<<"3">>,3,0},
+              {<<"4">>,3,0}],
+    ?assertEqual([], merge(new(), new())),
+    ?assertEqual([{<<"1">>,1,0},
+                  {<<"2">>,2,0},
+                  {<<"4">>,4,0},
+                  {<<"3">>,3,0}], merge(PNCnt1, PNCnt2)).
 
 merge_too_test() ->
-    PNCnt1 = {[{<<"5">>, 5}], [{<<"7">>, 4}]},
-    PNCnt2 = {[{<<"6">>, 6}, {<<"7">>, 7}], [{<<"5">>, 2}]},
-    ?assertEqual({[{<<"5">>, 5},{<<"6">>,6}, {<<"7">>, 7}], [{<<"7">>, 4}, {<<"5">>, 2}]},
-                 merge(PNCnt1, PNCnt2)).
+    PNCnt1 = [{<<"5">>,5,0},
+              {<<"7">>,0,4}],
+    PNCnt2 = [{<<"5">>,0,2},
+              {<<"6">>,6,0},
+              {<<"7">>,7,0}],
+    ?assertEqual([{<<"5">>,5,2},
+                  {<<"7">>,7,4},
+                  {<<"6">>,6,0}], merge(PNCnt1, PNCnt2)).
 
 equal_test() ->
-    PNCnt1 = {[{1, 2}, {2, 1}, {4, 1}], [{1, 1}, {3, 1}]},
-    PNCnt2 = {[{1, 1}, {2, 4}, {3, 1}], []},
-    PNCnt3 = {[{1, 2}, {2, 1}, {4, 1}], [{3, 1}, {1, 1}]},
-    PNCnt4 = {[{4, 1}, {1, 2}, {2, 1}], [{1, 1}, {3, 1}]},
+    PNCnt1 = [{1,2,1},{2,1,0},{3,0,1},{4,1,0}],
+    PNCnt2 = [{1,1,0},{2,4,0},{3,1,0}],
+    PNCnt3 = [{4,1,0},{2,1,0},{3,0,1},{1,2,1}],
+    PNCnt4 = [{4,1,0},{1,2,1},{2,1,0},{3,0,1}],
     ?assertNot(equal(PNCnt1, PNCnt2)),
     ?assert(equal(PNCnt3, PNCnt4)),
     ?assert(equal(PNCnt1, PNCnt3)).
@@ -263,8 +360,11 @@ usage_test() ->
     PNCnt3_2 = update(increment, a1, PNCnt3_1),
     PNCnt3_3 = update({decrement, 2}, a5, PNCnt3_2),
     PNCnt2_3 = update(decrement, a2, PNCnt2_2),
-    ?assertEqual({[{a1, 3}, {a4, 1}, {a2, 1}, {a3, 3}], [{a5, 2}, {a2, 1}]},
-                 merge(PNCnt3_3, PNCnt2_3)).
+    ?assertEqual([{a5,0,2},
+                  {a1,3,0},
+                  {a4,1,0},
+                  {a2,1,1},
+                  {a3,3,0}], merge(PNCnt3_3, PNCnt2_3)).
 
 roundtrip_bin_test() ->
     PN = new(),
@@ -275,6 +375,13 @@ roundtrip_bin_test() ->
     Bin = to_binary(PN4),
     Decoded = from_binary(Bin),
     ?assert(equal(PN4, Decoded)).
+
+% This is kinda important, I should probably do more about this test.
+update_bin_test() ->
+    OldPNCnt = {[{a,1}],[{b,3}]},
+    OldPNBin = to_binary(?V1_VERS, OldPNCnt),
+    NewPNCnt = from_binary(OldPNBin),
+    ?assertEqual([{b,0,3},{a,1,0}], NewPNCnt).
 
 query_test() ->
     PN = new(),
