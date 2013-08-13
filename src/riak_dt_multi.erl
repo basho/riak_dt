@@ -52,6 +52,8 @@
          init_state/0, generate/0]).
 -endif.
 
+-export_type([multi/0]).
+
 -opaque multi() :: {schema(), valuelist()}.
 -type schema() :: riak_dt_vvorset:vvorset().
 -type field() :: {Name::term(), Type::crdt_mod()}.
