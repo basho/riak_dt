@@ -140,7 +140,7 @@ equal(PNCntA, PNCntB) ->
 -define(V2_VERS, 2).
 
 %% @doc Encode an effecient binary representation of `pncounter()'
--spec to_binary(pncounter()) -> binary().
+-spec to_binary(any_pncounter()) -> binary().
 to_binary(PNCnt) ->
     to_binary(?V2_VERS, PNCnt).
 
