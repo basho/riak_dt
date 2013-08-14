@@ -24,7 +24,7 @@
 
 -behaviour(riak_dt).
 
--export([new/0, value/1, update/3, merge/2, equal/2]).
+-export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -77,6 +77,9 @@ value({Enables,Disables}=_Flag) ->
         _ -> on
     end.
 
+value(_, Flag) ->
+    value(Flag).
+
 update(enable, Actor, {Enables,Disables}=_Flag) ->
     Token = unique_token(Actor),
     Enables1 = ordsets:add_element(Token,Enables),
@@ -91,6 +94,22 @@ merge({EA,DA}=_FA, {EB,DB}=_FB) ->
 
 equal(FlagA,FlagB) ->
     FlagA == FlagB.
+
+-define(TAG, 73).
+-define(VSN1, 1).
+
+from_binary(<<?TAG:8, ?VSN1:8, ESize:32, DSize:32,
+              EBin:ESize/binary, DBin:DSize/binary>>) ->
+    Enables = ordsets:from_list([ E || <<E:32>> <= EBin ]),
+    Disables = ordsets:from_list([ D || <<D:32>> <= DBin ]),
+    {Enables, Disables}.
+
+to_binary({Enables, Disables}) ->
+    ESize = ordsets:size(Enables) * 4,
+    DSize = ordsets:size(Disables) * 4,
+    EBin = << <<T:32>> || T <- ordsets:to_list(Enables) >>,
+    DBin = << <<T:32>> || T <- ordsets:to_list(Disables) >>,
+    <<?TAG:8, ?VSN1:8, ESize:32, DSize:32, EBin/binary, DBin/binary>>.
 
 %% priv
 unique_token(Actor) ->
@@ -141,5 +160,12 @@ merge_concurrent_test() ->
     ?assertEqual(on, value(merge(F1,F3))),
     ?assertEqual(off, value(merge(F1,F2))),
     ?assertEqual(on, value(merge(F2,F3))).
+
+binary_roundtrip_test() ->
+    F0 = new(),
+    F1 = update(enable, 1, F0),
+    F2 = update(disable, 1, F1),
+    F3 = update(enable, 2, F2),
+    ?assert(equal(from_binary(to_binary(F3)), F3)).
 
 -endif.
