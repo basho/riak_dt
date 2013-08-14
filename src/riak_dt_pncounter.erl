@@ -34,6 +34,11 @@
 
 %% API
 -export([new/0, value/1, update/3, merge/2, equal/2]).
+-export([gc_epoch/1, gc_ready/2, gc_get_fragment/2, gc_replace_fragment/3]).
+
+-include("riak_dt_gc_meta.hrl").
+
+-type pncounter() :: {riak_dt_gcounter:gcounter(),riak_dt_gcounter:gcounter()}.
 
 %% EQC API
 -ifdef(EQC).
@@ -85,6 +90,35 @@ merge({Incr1, Decr1}, {Incr2, Decr2}) ->
 
 equal({Incr1, Decr1}, {Incr2, Decr2}) ->
     riak_dt_gcounter:equal(Incr1, Incr2) andalso riak_dt_gcounter:equal(Decr1, Decr2).
+
+%%% GC
+
+-type gc_fragment() :: pncounter().
+
+% We're ready to GC if either of the gcounters are ready to GC.
+-spec gc_ready(gc_meta(), pncounter()) -> boolean().
+gc_ready(Meta, {Inc,Dec}) ->
+    riak_dt_gcounter:gc_ready(Meta, Inc)
+        orelse riak_dt_gcounter:gc_ready(Meta,Dec).
+
+-spec gc_epoch(pncounter()) -> riak_dt_gc:epoch().
+gc_epoch({Inc,Dec}) ->
+    Epoch = riak_dt_gcounter:gc_epoch(Inc),
+    Epoch = riak_dt_gcounter:gc_epoch(Dec),
+    Epoch.
+
+-spec gc_get_fragment(gc_meta(), pncounter()) -> gc_fragment().
+gc_get_fragment(Meta, {Inc,Dec}) ->
+    IncFragment = riak_dt_gcounter:gc_get_fragment(Meta, Inc),
+    DecFragment = riak_dt_gcounter:gc_get_fragment(Meta, Dec),
+    {IncFragment, DecFragment}.
+
+-spec gc_replace_fragment(gc_meta(), gc_fragment(), pncounter()) -> pncounter().
+gc_replace_fragment(Meta, {IncFrag,DecFrag}, {Inc,Dec}) ->
+    Inc1 = riak_dt_gcounter:gc_replace_fragment(Meta, IncFrag, Inc),
+    Dec1 = riak_dt_gcounter:gc_replace_fragment(Meta, DecFrag, Dec),
+    {Inc1,Dec1}.
+
 
 %% ===================================================================
 %% EUnit tests

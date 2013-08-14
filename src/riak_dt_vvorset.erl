@@ -23,6 +23,7 @@
 -module(riak_dt_vvorset).
 
 -behaviour(riak_dt).
+-behaviour(riak_dt_gc).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -34,6 +35,10 @@
 
 %% API
 -export([new/0, value/1, update/3, merge/2, equal/2]).
+-export([gc_epoch/1, gc_ready/2, gc_get_fragment/2, gc_replace_fragment/3]).
+
+-include("riak_dt_gc_meta.hrl").
+-opaque vvorset() :: {orddict:orddict(), orddict:orddict()}.
 
 %% EQC API
 -ifdef(EQC).
@@ -45,14 +50,8 @@ new() ->
 
 value({ADict, RDict}) ->
     orddict:fetch_keys(orddict:filter(fun(K, AClock) ->
-                                        case orddict:find(K, RDict) of
-                                            {ok, RClock} ->
-                                                %% The element is not in the set
-                                                %% if the remove clock descends the add clock
-                                                %% In this case descends just means equals.
-                                                (not vclock:descends(RClock, AClock));
-                                            error -> true
-                                        end
+                                        RClock = vclock_for(K, RDict),
+                                        not vclock:descends(RClock, AClock)
                                 end,
                                 ADict)).
 
@@ -70,6 +69,38 @@ merge({ADict1, RDict1}, {ADict2, RDict2}) ->
 equal({ADict1, RDict1}, {ADict2, RDict2}) ->
     ADict1 == ADict2 andalso RDict1 == RDict2.
 
+%%% GC
+
+-type gc_fragment() :: vvorset().
+
+% We want to gc if Tombstone Elements make up more than `compact_proportion` of the elements in the vvorset.
+-spec gc_ready(gc_meta(), vvorset()) -> boolean().
+gc_ready(Meta, {Add,_Remove}=VVORSet) ->
+    TombstoneCount = orddict:size(tombstones(VVORSet)),
+    ElementCount   = orddict:size(Add),
+    ?SHOULD_GC(Meta, 1 - (TombstoneCount/ElementCount)).
+
+% I don't know how we find the epoch
+-spec gc_epoch(vvorset()) -> riak_dt_gc:epoch().
+gc_epoch(_ORSet) ->
+    {}.
+
+% Just two copies of all Elements that were present but are no longer, complete
+% with their vclocks.
+-spec gc_get_fragment(gc_meta(), vvorset()) -> gc_fragment().
+gc_get_fragment(_Meta, VVORSet) ->
+    Tombstones = tombstones(VVORSet),
+    {Tombstones,Tombstones}.
+
+% Remove all tombstones, but only if the vclock in the fragment is not 
+% dominated by the vclock in the vvorset (the if dominated, suggests updates 
+% have happened since)
+-spec gc_replace_fragment(gc_meta(), gc_fragment(), vvorset()) -> vvorset().
+gc_replace_fragment(_Meta, {AddFrag,RemFrag}=_VVORFrag, {Add0,Rem0}=_VVORSet) ->
+    Add1 = orddict:filter(remove_fragment_filter(AddFrag), Add0),
+    Rem1 = orddict:filter(remove_fragment_filter(RemFrag), Rem0),
+    {Add1,Rem1}.
+
 %% Private
 add_elem(Actor, Dict, Elem) ->
     VC = vclock:fresh(),
@@ -78,16 +109,12 @@ add_elem(Actor, Dict, Elem) ->
 
 update_fun(Actor) ->
     fun(Vclock) ->
-            vclock:increment(Actor, Vclock)
+        vclock:increment(Actor, Vclock)
     end.
 
 remove_elem({ok, Aclock}, Elem, RDict) ->
-    case orddict:find(Elem, RDict) of
-        {ok, Rclock} ->
-            orddict:store(Elem, vclock:merge([Aclock, Rclock]), RDict);
-        error ->
-            orddict:store(Elem, Aclock, RDict)
-    end;
+    Rclock = vclock_for(Elem, RDict),
+    orddict:store(Elem, vclock:merge([Aclock,Rclock]), RDict);
 remove_elem(error, _Elem, RDict) ->
     %% What @TODO?
     %% Can't remove an element not in the ADict, warn??
@@ -99,12 +126,30 @@ merge_dicts(Dict1, Dict2) ->
     %% for every key in dict1, merge its contents with dict2's content for same key
    orddict:merge(fun(_K, V1, V2) -> vclock:merge([V1, V2]) end, Dict1, Dict2).
 
+vclock_for(Elem, Dict) ->
+    case orddict:find(Elem, Dict) of
+        {ok, Clock} -> Clock;
+        error       -> vclock:fresh()
+    end.
+
+tombstones({ADict,RDict}) ->
+    orddict:filter(fun(K,AClock) ->
+            vclock:descends(vclock_for(K,RDict),AClock)
+        end, ADict).
+        
+remove_fragment_filter(Fragment) ->
+    fun (Elem,VClock) ->
+        FragVClock = vclock_for(Elem,Fragment),
+        not vclock:descends(FragVClock,VClock)
+    end.
+
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
 -ifdef(TEST).
 
 -ifdef(EQC).
+-compile(export_all).
 eqc_value_test_() ->
     {timeout, 120, [?_assert(crdt_statem_eqc:prop_converge(init_state(), 1000, ?MODULE))]}.
 
@@ -144,6 +189,28 @@ eqc_state_value({_Cnt, Dict, _L}) ->
                        Dict),
     Remaining = sets:subtract(A, R),
     Values = [ Elem || {Elem, _X} <- sets:to_list(Remaining)],
+    lists:usort(Values).
+
+create_gc_expected() ->
+    {ordsets:new(), ordsets:new()}.
+
+update_gc_expected({add, X}, Actor, {Add,Remove}) ->
+    Unique = erlang:phash2({Actor, erlang:now()}),
+    {ordsets:add_element({X, Unique}, Add), ordsets:del_element(X,Remove)};
+update_gc_expected({remove, X}, _Actor, {Add,Remove}) ->
+    ToRem = [{A,Elem} || {A,Elem} <- ordsets:to_list(Add), Elem == X],
+    Remove1 = ordsets:union(ordsets:from_list(ToRem),Remove),
+    {Add, Remove1}.
+% update_gc_expected(_Operation, _Actor, State) ->
+%     State.
+
+merge_gc_expected({A1,R1}, {A2,R2}) ->
+    A3 = ordsets:union(A1,A2),
+    R3 = ordsets:union(R1,R2),
+    {A3,R3}.
+
+realise_gc_expected({Add,Remove}) ->
+    Values = [ X || {X, _A} <- ordsets:to_list(ordsets:subtract(Add,Remove))],
     lists:usort(Values).
 
 -endif.
