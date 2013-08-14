@@ -130,6 +130,7 @@ equal(VA,VB) ->
 %% 2 tuple list, assumes the first element in the
 %% actor map is present in the clock, and the second will
 %% replace it.
+-spec replace_actors([{vclock_node(), vclock_node()}], vclock()) -> vclock().
 replace_actors(ActorMap, Vclock) ->
     replace_actors(ActorMap, Vclock, 1).
 
@@ -137,6 +138,7 @@ replace_actors(ActorMap, Vclock) ->
 %% in the provided actor map list.
 %% The element at `KeyPos` is the actor in the vclock
 %% the other element in the actor map 2 tuple replaces it.
+-spec replace_actors([{vclock_node(), vclock_node()}], vclock(), 1 | 2) -> vclock().
 replace_actors(ActorMap, Vclock, KeyPos) ->
     lists:foldl(fun({CurrActor, Cntr}, NewClock) ->
                         Map = lists:keyfind(CurrActor, KeyPos, ActorMap),
