@@ -81,7 +81,7 @@ gc_ready(Meta, {Add,_Remove}=VVORSet) ->
     ?SHOULD_GC(Meta, 1 - (TombstoneCount/ElementCount)).
 
 % I don't know how we find the epoch
--spec gc_epoch(vvorset()) -> epoch().
+-spec gc_epoch(vvorset()) -> riak_dt_gc:epoch().
 gc_epoch(_ORSet) ->
     {}.
 

@@ -101,7 +101,7 @@ gc_ready(Meta, {Inc,Dec}) ->
     riak_dt_gcounter:gc_ready(Meta, Inc)
         orelse riak_dt_gcounter:gc_ready(Meta,Dec).
 
--spec gc_epoch(pncounter()) -> epoch().
+-spec gc_epoch(pncounter()) -> riak_dt_gc:epoch().
 gc_epoch({Inc,Dec}) ->
     Epoch = riak_dt_gcounter:gc_epoch(Inc),
     Epoch = riak_dt_gcounter:gc_epoch(Dec),

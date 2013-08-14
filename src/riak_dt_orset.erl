@@ -42,8 +42,14 @@
 
 %% EQC API
 -ifdef(EQC).
--export([gen_op/0, gen_gc_ops/0, update_expected/3, eqc_state_value/1]).
 -compile(export_all).
+-export([update_expected/3, eqc_state_value/1]).
+
+
+-behaviour(crdt_gc_statem_eqc).
+-export([gen_op/0, gen_gc_ops/0]).
+-export([gc_model_create/0, gc_model_update/3, gc_model_merge/2, gc_model_realise/1]).
+-export([gc_model_ready/2, gc_model_get_fragment/2, gc_model_replace_fragment/3]).
 -endif.
 
 %% EQC generator
@@ -51,7 +57,7 @@
 gen_op() ->
     ?LET(Add, nat(),
          oneof([{add, Add}, {remove, Add}])).
-         
+
 gen_gc_ops() ->
     ?LET(Add, nat(),
          [{add, Add}, {remove, Add}]).
@@ -90,39 +96,6 @@ eqc_state_value({_Cnt, Dict, _L}) ->
     Values = [ Elem || {Elem, _X} <- sets:to_list(Remaining)],
     lists:usort(Values).
 
-%% GC Property
-
-create_gc_expected() ->
-    {ordsets:new(), ordsets:new()}.
-
-update_gc_expected({add, Elem}, Actor, {Add,Remove}) ->
-    Unique = erlang:phash2({Actor, erlang:now()}),
-    {ordsets:add_element({Elem, Unique}, Add), Remove};
-update_gc_expected({remove, RemElem}, _Actor, {Add,Remove}) ->
-    ToRem = [{Elem,A} || {Elem,A} <- ordsets:to_list(Add), Elem == RemElem],
-    Remove1 = ordsets:union(ordsets:from_list(ToRem),Remove),
-    {Add, Remove1}.
-
-merge_gc_expected({A1,R1}, {A2,R2}) ->
-    A3 = ordsets:union(A1,A2),
-    R3 = ordsets:union(R1,R2),
-    {A3,R3}.
-
-realise_gc_expected({Add,Remove}) ->
-    Values = [ Elem || {Elem, _A} <- ordsets:to_list(ordsets:subtract(Add,Remove))],
-    lists:usort(Values).
-    
-eqc_gc_ready(Meta, {Add,Remove}) ->
-    TotalTokens = ordsets:size(ordsets:union(Add,Remove)),
-    TombstoneTokens = ordsets:size(ordsets:intersection(Add,Remove)),
-    case TotalTokens of
-        0 -> false;
-        _ -> ?SHOULD_GC(Meta, 1 - (TombstoneTokens/TotalTokens))
-    end.
-
-eqc_gc_get_fragment(_Meta, _S) ->
-    {}.
-
 -endif.
 
 new() ->
@@ -155,7 +128,7 @@ merge({ADict1, RDict1}, {ADict2, RDict2}) ->
 
 equal({ADict1, RDict1}, {ADict2, RDict2}) ->
     ADict1 == ADict2 andalso RDict1 == RDict2.
-    
+
 %%% GC
 
 -type gc_fragment() :: orset().
@@ -173,12 +146,12 @@ gc_ready(Meta, {Add,Remove}=_ORSet) ->
         _ -> ?SHOULD_GC(Meta, KeepTokens/TotalTokens)
     end.
 
-% Gulp, I literally have no idea, one reason is we don't embed the epoch in 
--spec gc_epoch(orset()) -> epoch().
+% Gulp, I literally have no idea, one reason is we don't embed the epoch in
+-spec gc_epoch(orset()) -> riak_dt_gc:epoch().
 gc_epoch(_ORSet) ->
     {}.
 
-% The fragment is just an ORSet with all invalidated tokens removed (but using 
+% The fragment is just an ORSet with all invalidated tokens removed (but using
 % the same tokens as the original ORSet).
 -spec gc_get_fragment(gc_meta(), orset()) -> gc_fragment().
 gc_get_fragment(_Meta, {Add,Rem}=_ORSet) ->
@@ -253,5 +226,41 @@ filter_empty(OrdDict) ->
 -ifdef(EQC).
 eqc_value_test_() ->
     {timeout, 120, [?_assert(crdt_statem_eqc:prop_converge(init_state(), 1000, ?MODULE))]}.
+
+%% GC Property
+
+gc_model_create() ->
+    {ordsets:new(), ordsets:new()}.
+
+gc_model_update({add, Elem}, Actor, {Add,Remove}) ->
+    Unique = erlang:phash2({Actor, erlang:now()}),
+    {ordsets:add_element({Elem, Unique}, Add), Remove};
+gc_model_update({remove, RemElem}, _Actor, {Add,Remove}) ->
+    ToRem = [{Elem,A} || {Elem,A} <- ordsets:to_list(Add), Elem == RemElem],
+    Remove1 = ordsets:union(ordsets:from_list(ToRem),Remove),
+    {Add, Remove1}.
+
+gc_model_merge({A1,R1}, {A2,R2}) ->
+    A3 = ordsets:union(A1,A2),
+    R3 = ordsets:union(R1,R2),
+    {A3,R3}.
+
+gc_model_realise({Add,Remove}) ->
+    Values = [ Elem || {Elem, _A} <- ordsets:to_list(ordsets:subtract(Add,Remove))],
+    lists:usort(Values).
+
+gc_model_ready(Meta, {Add,Remove}) ->
+    TotalTokens = ordsets:size(ordsets:union(Add,Remove)),
+    TombstoneTokens = ordsets:size(ordsets:intersection(Add,Remove)),
+    case TotalTokens of
+        0 -> false;
+        _ -> ?SHOULD_GC(Meta, 1 - (TombstoneTokens/TotalTokens))
+    end.
+
+gc_model_get_fragment(_Meta, _S) ->
+    {}.
+
+gc_model_replace_fragment(_Meta, _Frag, S) ->
+    S.
 -endif.
 -endif.

@@ -22,23 +22,25 @@
 
 -module(riak_dt_gc).
 
--export([behaviour_info/1]).
 -export([meta/4,meta/3]).
 -export([new_epoch/1, epoch_actor/1, epoch_compare/2]).
 
 -include("riak_dt_gc_meta.hrl").
 
-behaviour_info(callbacks) ->
-    [{gc_epoch, 1},
-     {gc_ready, 2},
-     {gc_get_fragment, 2},
-     {gc_replace_fragment, 3}].
+-type epoch() :: {riak_dt:actor(), erlang:timestamp()}.
+-type crdt_fragment() :: term().
+-export_type([epoch/0, crdt_fragment/0]).
 
--spec meta(actor(), [actor()], float()) -> gc_meta().
+-callback gc_epoch(riak_dt:crdt()) -> epoch().
+-callback gc_ready(gc_meta(), riak_dt:crdt()) -> boolean().
+-callback gc_get_fragment(gc_meta(), riak_dt:crdt()) -> crdt_fragment().
+-callback gc_replace_fragment(gc_meta(), crdt_fragment(), riak_dt:crdt()) -> riak_dt:crdt().
+
+-spec meta(riak_dt:actor(), [riak_dt:actor()], float()) -> gc_meta().
 meta(Epoch, PActors, CompactThreshold) ->
     meta(Epoch, PActors, [], CompactThreshold).
 
--spec meta(actor(), [actor()], [actor()], float()) -> gc_meta().
+-spec meta(riak_dt:actor(), [riak_dt:actor()], [riak_dt:actor()], float()) -> gc_meta().
 meta(Epoch, PActors, ROActors, CompactThreshold) ->
     ?GC_META{epoch=Epoch,
              actor=epoch_actor(Epoch),
@@ -46,11 +48,11 @@ meta(Epoch, PActors, ROActors, CompactThreshold) ->
              readonly_actors=ordsets:from_list(ROActors),
              compact_threshold=CompactThreshold}.
 
--spec new_epoch(actor()) -> epoch().
+-spec new_epoch(riak_dt:actor()) -> epoch().
 new_epoch(Actor) ->
     {Actor, erlang:now()}.
 
--spec epoch_actor(epoch()) -> actor().
+-spec epoch_actor(epoch()) -> riak_dt:actor().
 epoch_actor({Actor, _TS}) ->
     Actor.
 

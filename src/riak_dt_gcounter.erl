@@ -34,7 +34,7 @@
 
 -include("riak_dt_gc_meta.hrl").
 
--type gcounter() :: [{actor(),pos_integer()}].
+-type gcounter() :: [{riak_dt:actor(),pos_integer()}].
 -export_type([gcounter/0]).
 
 -ifdef(EQC).
@@ -110,7 +110,7 @@ gc_ready(Meta, GCnt) ->
         1 -> (GCActors > 1) or ?SHOULD_GC(Meta, ROActors/TotalActors)
     end.
 
--spec gc_epoch(gcounter()) -> epoch().
+-spec gc_epoch(gcounter()) -> riak_dt_gc:epoch().
 gc_epoch(GCnt) ->
     GCActors = [Act || {{gc, _Epoch}=Act,_Cnt} <- GCnt],
     {gc, Epoch} = hd(GCActors),
