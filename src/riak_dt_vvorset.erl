@@ -87,14 +87,12 @@
 %% a dict of actor() -> Alias::integer() mappings
 %% Reason being to keep the vector clocks as small as
 %% possible and not repeat actor names over and over.
--type actorlist() :: orddict:orddict().
-
--type actor() :: term().
-
+-type actorlist() :: [ {actor(), integer()} ].
+-type actor() :: riak_dt:actor().
 %% a dict of member() -> member_info() mappings.
 %% The vclock is simply a more effecient way of storing
 %% knowledge about adds / removes than a UUID per add.
--type entries() :: orddict:orddict().
+-type entries() :: [{member(), member_info()}].
 
 -type member_info() :: {boolean(), riak_dt_vclock:vclock()}.
 -type member() :: term().
@@ -121,7 +119,8 @@ value(tombstones, {_Actors, Entries}) ->
 -spec update(vvorset_op(), actor(), vvorset()) -> vvorset().
 update({add, Elem}, Actor, ORSet) ->
     add_elem(Actor, ORSet, Elem);
-update({remove, Elem}, _Actor, {_Actors, Entries}=ORSet) ->
+update({remove, Elem}, _Actor, ORSet) ->
+    {_Actors, Entries} = ORSet,
     remove_elem(orddict:find(Elem, Entries), Elem, ORSet).
 
 -spec merge(vvorset(), vvorset()) -> vvorset().
@@ -199,7 +198,6 @@ actor_placeholder(Actor, Actors) ->
             {Placeholder, orddict:store(Actor, Placeholder, Actors)}
     end.
 
--spec remove_elem({ok, member_info()} | error, member(), vvorset()) -> vvorset().
 remove_elem({ok, {1, Vclock}}, Elem, {AL, Dict}) ->
     {AL, orddict:store(Elem, {0, Vclock}, Dict)};
 remove_elem({ok, {0, _Vclock}}, _Elem, ORSet) ->
