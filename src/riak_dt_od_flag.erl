@@ -28,7 +28,7 @@
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
--export([gen_op/0, update_expected/3, eqc_state_value/1]).
+-export([gen_op/0, init_state/0, update_expected/3, eqc_state_value/1]).
 -endif.
 
 -ifdef(TEST).
@@ -123,7 +123,7 @@ unique_token(Actor) ->
 
 -ifdef(EQC).
 eqc_value_test_() ->
-    {timeout, 1200, [?_assert(crdt_statem_eqc:prop_converge(init_state(), 10000, ?MODULE))]}.
+    crdt_statem_eqc:run(?MODULE, 1000).
 -endif.
 
 new_test() ->

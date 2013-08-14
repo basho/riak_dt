@@ -24,11 +24,11 @@
 
 -behaviour(riak_dt).
 
--export([new/0, value/1, update/3, merge/2, equal/2]).
+-export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
--export([gen_op/0, update_expected/3, eqc_state_value/1]).
+-export([gen_op/0, init_state/0, update_expected/3, eqc_state_value/1]).
 -endif.
 
 -ifdef(TEST).
@@ -77,6 +77,9 @@ value({Disables,Enables}=_Flag) ->
         _ -> off
     end.
 
+value(_, Flag) ->
+    value(Flag).
+
 update(disable, Actor, {Disables,Enables}=_Flag) ->
     Token = unique_token(Actor),
     Disables1 = ordsets:add_element(Token,Disables),
@@ -92,6 +95,22 @@ merge({DA,EA}=_FA, {DB,EB}=_FB) ->
 equal(FlagA,FlagB) ->
     FlagA == FlagB.
 
+-define(TAG, 74).
+-define(VSN1, 1).
+
+from_binary(<<?TAG:8, ?VSN1:8, ESize:32, DSize:32,
+              EBin:ESize/binary, DBin:DSize/binary>>) ->
+    Enables = ordsets:from_list([ E || <<E:32>> <= EBin ]),
+    Disables = ordsets:from_list([ D || <<D:32>> <= DBin ]),
+    {Enables, Disables}.
+
+to_binary({Enables, Disables}) ->
+    ESize = ordsets:size(Enables) * 4,
+    DSize = ordsets:size(Disables) * 4,
+    EBin = << <<T:32>> || T <- ordsets:to_list(Enables) >>,
+    DBin = << <<T:32>> || T <- ordsets:to_list(Disables) >>,
+    <<?TAG:8, ?VSN1:8, ESize:32, DSize:32, EBin/binary, DBin/binary>>.
+
 %% priv
 unique_token(Actor) ->
     erlang:phash2({Actor, erlang:now()}).
@@ -104,7 +123,7 @@ unique_token(Actor) ->
 
 -ifdef(EQC).
 eqc_value_test_() ->
-    {timeout, 1200, [?_assert(crdt_statem_eqc:prop_converge(init_state(), 10000, ?MODULE))]}.
+    crdt_statem_eqc:run(?MODULE, 1000).
 -endif.
 
 new_test() ->
