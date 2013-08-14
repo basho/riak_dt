@@ -159,8 +159,6 @@ vclock_merge(V10, V20, Actors1, Actors2, MergedActors) ->
 
 %% @Doc determine if the entry is active or removed.
 %% First argument is a remove vclock, second is an active vclock
--spec is_active_or_removed(riak_dt_vclock:vclock(), riak_dt_vclock:vclock(),
-                           actorlist(), actorlist(), actorlist()) -> member_info().
 is_active_or_removed(RemoveClock0, AddClock0, RemActors, AddActors, MergedActors) ->
     RemoveClock = riak_dt_vclock:replace_actors(orddict:to_list(RemActors), RemoveClock0, 2),
     AddClock = riak_dt_vclock:replace_actors(orddict:to_list(AddActors), AddClock0, 2),
