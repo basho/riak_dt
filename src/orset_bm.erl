@@ -21,7 +21,7 @@
 start(Cmds, Mod) ->
     TS = erlang:now(),
     Coord =  start_coordinator(?N, Mod, self()),
-    [_|_] = [start_proc(I, Cmds, Mod, Coord) || I <- lists:seq(1, ?N)],
+    lists:foreach(fun(I) -> start_proc(I, Cmds, Mod, Coord) end, lists:seq(1, ?N)),
 
     receive
         {Coord, Results} ->
@@ -100,14 +100,11 @@ perform(remove, {I, Mod, Val0, AL0}) ->
 perform(merge, {I, Mod, Val0, AL0}) ->
     Peer = crypto:rand_uniform(1, ?N),
     PeerName = list_to_atom(integer_to_list(Peer)),
-    _ = case whereis(PeerName) of
-        Pid when is_pid(Pid) ->
-            Pid ! {merge, self(),  Val0};
-        _ -> ok
-    end,
+    ok = reply_if_peer(whereis(PeerName), Val0),
     {I, Mod, Val0, AL0}.
 
 
-
-
-
+reply_if_peer(Pid, Val0) when is_pid(Pid) ->
+    Pid ! {merge, self(), Val0},
+    ok;
+reply_if_peer(_, _) -> ok.
