@@ -54,7 +54,7 @@
 
 -export_type([multi/0]).
 
--opaque multi() :: {schema(), valuelist()}.
+-type multi() :: {schema(), valuelist()}.
 -type schema() :: riak_dt_vvorset:vvorset().
 -type field() :: {Name::term(), Type::crdt_mod()}.
 -type crdt_mod() :: riak_dt_gcounter | riak_dt_pncounter | riak_dt_lwwreg |
