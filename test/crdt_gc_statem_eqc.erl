@@ -46,7 +46,6 @@
                               io:format(user, Str, Args) end, P)).
 
 -type crdt_model() :: term().
--type crdt_model_fragment() :: term().
 -type meta() :: term().
 
 -callback gen_op() -> eqc_gen:gen(riak_dt:operation()).
@@ -57,8 +56,6 @@
 -callback gc_model_merge(crdt_model(), crdt_model()) -> crdt_model().
 -callback gc_model_realise(crdt_model()) -> term().
 -callback gc_model_ready(meta(),crdt_model()) -> boolean().
--callback gc_model_get_fragment(meta(), crdt_model()) -> crdt_model_fragment().
--callback gc_model_replace_fragment(meta(), crdt_model_fragment(), crdt_model()) -> crdt_model().
 
 %%% Statem Callbacks
 
@@ -94,7 +91,7 @@ gen_gc_update(#state{mod=Mod,replicas=Replicas}) ->
          {call, ?MODULE, update, [Mod, Operations, elements(Replicas)]}).
 
 gen_gc_execute(#state{mod=Mod,replicas=Replicas,fragments=Fragments}) ->
-    ?LET(FragInfo={AId,_Meta,_SymbFrag,_CRDTFrag},
+    ?LET(FragInfo={AId,_Meta,_CRDTFrag},
          elements(Fragments),
          begin
              ReplicaTriple = {AId,_,_} = lists:keyfind(AId, 1, Replicas),
@@ -181,21 +178,22 @@ next_state(State = #state{replicas=Replicas}, V,
 
 next_state(State = #state{fragments=Fragments}, _V,
            {call, ?MODULE, gc_prepare, [Mod, Meta, {AId, SymbState, CRDTState}]}) ->
+    % If were ready to gc, add a fragment to the list of fragments
     SymbReady = Mod:gc_model_ready(Meta, SymbState),
     Fragments1 = case SymbReady of
-                    true -> SymbFrag = Mod:gc_model_get_fragment(Meta, SymbState),
-                            CRDTFrag = get_fragment(Mod, Meta, CRDTState),
-                            [{AId,Meta,SymbFrag,CRDTFrag}|Fragments];
+                    true -> CRDTFrag = get_fragment(Mod, Meta, CRDTState),
+                            [{AId,Meta,CRDTFrag}|Fragments];
                     _    -> Fragments
                 end,
     State#state{fragments=Fragments1};
 
-next_state(State = #state{fragments=Fragments,replicas=Replicas}, V,
-           {call, ?MODULE, gc_execute, [Mod, {AId1,Meta,SymbFrag,_CRDTFrag}, {AId2,SymbState,_CRDTState}]}) ->
+% TODO: work out which replicas we can actually execute the gc on, more than just the current one.
+next_state(State = #state{fragments=Fragments}, _V,
+           {call, ?MODULE, gc_execute, [_Mod, {AId1,_,_}, _]}) ->
+    % Remove the current fragment from Fragments, as we've checked it.
+    % TODO: afterwards, check any remaining fragments.
     Fragments1 = lists:keydelete(AId1, 1, Fragments),
-    Replicas1 = lists:keydelete(AId2, 1, Replicas),
-    SymbState1 = Mod:gc_model_replace_fragment(Meta,SymbFrag,SymbState),
-    State#state{fragments=Fragments1, replicas=[{AId2, SymbState1,V}|Replicas1]};
+    State#state{fragments=Fragments1};
 
 next_state(S, _V, _Command) ->
     S.
@@ -230,9 +228,9 @@ merge(Module, {_,_,CRDT1},{_,_,CRDT2}) ->
 gc_prepare(Module, Meta, {_,_,CRDT}) ->
     Module:gc_ready(Meta, CRDT).
 
-gc_execute(_Module, {_,_,_,symbolic_frag}, {_,_,CRDT}) ->
+gc_execute(_Module, {_,_,symbolic_frag}, {_,_,CRDT}) ->
     CRDT;
-gc_execute(Module, {_,Meta,_,CRDTFrag}, {_,_,CRDT}) ->
+gc_execute(Module, {_,Meta,CRDTFrag}, {_,_,CRDT}) ->
     Module:gc_replace_fragment(Meta, CRDTFrag, CRDT).
 
 value(Module, CRDT) ->

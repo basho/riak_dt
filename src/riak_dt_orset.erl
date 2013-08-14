@@ -49,7 +49,7 @@
 -behaviour(crdt_gc_statem_eqc).
 -export([gen_op/0, gen_gc_ops/0]).
 -export([gc_model_create/0, gc_model_update/3, gc_model_merge/2, gc_model_realise/1]).
--export([gc_model_ready/2, gc_model_get_fragment/2, gc_model_replace_fragment/3]).
+-export([gc_model_ready/2]).
 -endif.
 
 %% EQC generator
@@ -257,10 +257,10 @@ gc_model_ready(Meta, {Add,Remove}) ->
         _ -> ?SHOULD_GC(Meta, 1 - (TombstoneTokens/TotalTokens))
     end.
 
-gc_model_get_fragment(_Meta, _S) ->
-    {}.
-
-gc_model_replace_fragment(_Meta, _Frag, S) ->
-    S.
+% gc_model_get_fragment(_Meta, _S) ->
+%     {}.
+% 
+% gc_model_replace_fragment(_Meta, _Frag, S) ->
+%     S.
 -endif.
 -endif.
