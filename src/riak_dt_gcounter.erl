@@ -2,7 +2,7 @@
 %%
 %% riak_dt_gcounter: A state based, grow only, convergent counter
 %%
-%% Copyright (c) 2007-2012 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -20,81 +20,89 @@
 %%
 %% -------------------------------------------------------------------
 
-%%% @doc
-%%% a G-Counter CRDT, borrows liberally from argv0 and Justin Sheehy's vclock module
-%%% @end
+%% @doc
+%% A G-Counter CRDT. A G-Counter is a Grow-only counter. Modeled as a list of
+%% two-tuples. Each entry in the list is an {actor, count} pair. The value of the counter
+%% is the sum of all entries in the list. An actor may only update its own entry. An entry
+%% can only be incremented. Borrows liberally from argv0 and Justin Sheehy's vclock module
+%% in implementation.
+%%
+%% @see riak_kv_pncounter.erl for a counter that can be decremented
+%%
+%% @reference Marc Shapiro, Nuno Preguiça, Carlos Baquero, Marek Zawirski (2011) A comprehensive study of
+%% Convergent and Commutative Replicated Data Types. http://hal.upmc.fr/inria-00555588/
+%%
+%% @end
 
 -module(riak_dt_gcounter).
 
 -behaviour(riak_dt).
 -behaviour(riak_dt_gc).
 
--export([new/0, value/1, update/3, merge/2, equal/2]).
+-export([new/0, new/2, value/1, value/2, update/3, merge/2, equal/2]).
+-export([to_binary/1, from_binary/1]).
 -export([gc_epoch/1, gc_ready/2, gc_get_fragment/2, gc_replace_fragment/3]).
 
 -include("riak_dt_gc_meta.hrl").
 
--type gcounter() :: [{riak_dt:actor(),pos_integer()}].
--export_type([gcounter/0]).
 
+%% EQC API
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
--export([gen_op/0, update_expected/3, eqc_state_value/1]).
+-export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0, generate/0]).
 -endif.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
-%% EQC generator
--ifdef(EQC).
-gen_op() ->
-    oneof([increment, {increment, gen_pos()}]).
+-export_type([gcounter/0, gcounter_op/0]).
 
-gen_pos()->
-    ?LET(X, int(), 1+abs(X)).
+-type gcounter() :: [{riak_dt:actor(),pos_integer()}].
+-type gcounter_op() :: increment | {increment, pos_integer()}.
 
-update_expected(_ID, increment, Prev) ->
-    Prev+1;
-update_expected(_ID, {increment, By}, Prev) ->
-    Prev+By;
-update_expected(_ID, _Op, Prev) ->
-    Prev.
-
-eqc_state_value(S) ->
-    S.
--endif.
-
+%% @doc Create a new, empty `gcounter()'
+-spec new() -> gcounter().
 new() ->
-    [].
+    orddict:new().
 
+%% @doc Create a `gcounter()' with an initial update
+-spec new(term(), pos_integer()) -> gcounter().
+new(Id, Count) when is_integer(Count), Count > 0 ->
+    update({increment, Count}, Id, new()).
+
+%% @doc The single total value of a `gcounter()'.
+-spec value(gcounter()) -> non_neg_integer().
 value(GCnt) ->
     lists:sum([ Cnt || {_Act, Cnt} <- GCnt]).
 
+%% @doc `value/2' is just `value/1' for a `gcounter()'
+-spec value(any(), gcounter()) -> non_neg_integer().
+value(_, GCnt) ->
+    value(GCnt).
+
+%% @doc `increment' the entry in `GCnt' for `Actor' by 1 or `{increment, Amt}'.
+%% returns an updated `gcounter()' or error if `Amt' is not a `pos_integer()'
+-spec update(gcounter_op(), term(), gcounter()) ->
+                    gcounter().
 update(increment, Actor, GCnt) ->
     increment_by(1, Actor, GCnt);
 update({increment, Amount}, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
     increment_by(Amount, Actor, GCnt).
 
+%% @doc Merge two `gcounter()'s to a single `gcounter()'. This is the Least Upper Bound
+%% function described in the literature.
+-spec merge(gcounter(), gcounter()) -> gcounter().
 merge(GCnt1, GCnt2) ->
-    merge(GCnt1, GCnt2, []).
+    orddict:merge(fun(_, V1, V2) -> max(V1,V2) end,
+                  GCnt1, GCnt2).
 
-merge([], [], Acc) ->
-    lists:reverse(Acc);
-merge(LeftOver, [], Acc) ->
-    lists:reverse(Acc, LeftOver);
-merge([], LeftOver, Acc) ->
-    lists:reverse(Acc, LeftOver);
-merge([{Actor1, Cnt1}=AC1|Rest], Clock2, Acc) ->
-    case lists:keytake(Actor1, 1, Clock2) of
-        {value, {Actor1, Cnt2}, RestOfClock2} ->
-            merge(Rest, RestOfClock2, [{Actor1, max(Cnt1, Cnt2)}|Acc]);
-        false ->
-            merge(Rest, Clock2, [AC1|Acc])
-    end.
-
+%% @doc Are two `gcounter()'s structurally equal? This is not `value/1' equality.
+%% Two counters might represent the total `42', and not be `equal/2'. Equality here is
+%% that both counters contain the same actors and those actors have the same count.
+-spec equal(gcounter(), gcounter()) -> boolean().
 equal(VA,VB) ->
-    lists:sort(VA) =:= lists:sort(VB).
+    lists:sort(orddict:to_list(VA)) =:= lists:sort(orddict:to_list(VB)).
 
 %%% GC
 
@@ -162,16 +170,24 @@ subtract_dead([{Actor,Subtract}|Dead], GCnt, Sum) ->
 prune_empty_nodes(GCnt) ->
     [Pair || {_,Cnt}=Pair <- GCnt, Cnt =/= 0].
 
-%% priv
+%% @private peform the increment.
+-spec increment_by(pos_integer(), term(), gcounter()) -> gcounter().
 increment_by(Amount, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
-    {Ctr, NewGCnt} = case lists:keytake(Actor, 1, GCnt) of
-                         false ->
-                             {Amount, GCnt};
-                         {value, {_N, C}, ModGCnt} ->
-                             {C + Amount, ModGCnt}
-                     end,
-    [{Actor, Ctr}|NewGCnt].
+    orddict:update_counter(Actor, Amount, GCnt).
 
+-define(TAG, 70).
+-define(V1_VERS, 1).
+
+%% @doc Encode an effecient binary representation of a `gcounter()'
+-spec to_binary(gcounter()) -> binary().
+to_binary(GCnt) ->
+    EntriesBin = term_to_binary(GCnt),
+    <<?TAG:8/integer, ?V1_VERS:8/integer, EntriesBin/binary>>.
+
+%% @doc Decode binary G-Counter
+-spec from_binary(binary()) -> gcounter().
+from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, EntriesBin/binary>>) ->
+    binary_to_term(EntriesBin).
 
 %% ===================================================================
 %% EUnit tests
@@ -179,8 +195,35 @@ increment_by(Amount, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
 -ifdef(TEST).
 
 -ifdef(EQC).
+%% EQC generator
 eqc_value_test_() ->
-    {timeout, 120, [?_assert(crdt_statem_eqc:prop_converge(0, 1000, ?MODULE))]}.
+    crdt_statem_eqc:run(?MODULE, 1000).
+
+generate() ->
+    ?LET(Ops, list(gen_op()),
+         lists:foldl(fun(Op, Cntr) ->
+                             riak_dt_gcounter:update(Op, choose(1, 50), Cntr) end,
+                     riak_dt_gcounter:new(),
+                     Ops)).
+
+init_state() ->
+    0.
+
+gen_op() ->
+    oneof([increment, {increment, gen_pos()}]).
+
+gen_pos()->
+    ?LET(X, int(), 1+abs(X)).
+
+update_expected(_ID, increment, Prev) ->
+    Prev+1;
+update_expected(_ID, {increment, By}, Prev) ->
+    Prev+By;
+update_expected(_ID, _Op, Prev) ->
+    Prev.
+
+eqc_state_value(S) ->
+    S.
 -endif.
 
 new_test() ->
@@ -254,5 +297,26 @@ usage_test() ->
     ?assertEqual([{a1, 3}, {a2, 1}, {a3, 3}, {a4, 1}],
                  lists:sort(merge(GC3_2, GC2_2))).
 
+roundtrip_bin_test() ->
+    GC = new(),
+    GC1 = update({increment, 2}, <<"a1">>, GC),
+    GC2 = update({increment, 4}, a2, GC1),
+    GC3 = update(increment, "a4", GC2),
+    GC4 = update({increment, 10000000000000000000000000000000000000000}, {complex, "actor", [<<"term">>, 2]}, GC3),
+    Bin = to_binary(GC4),
+    Decoded = from_binary(Bin),
+    ?assert(equal(GC4, Decoded)).
+
+lots_of_actors_test() ->
+    GC = lists:foldl(fun(_, GCnt) ->
+                            ActorLen = crypto:rand_uniform(1, 1000),
+                            Actor = crypto:rand_bytes(ActorLen),
+                            Cnt = crypto:rand_uniform(1, 10000),
+                            riak_dt_gcounter:update({increment, Cnt}, Actor, GCnt) end,
+                    new(),
+                    lists:seq(1, 1000)),
+    Bin = to_binary(GC),
+    Decoded = from_binary(Bin),
+    ?assert(equal(GC, Decoded)).
 
 -endif.

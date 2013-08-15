@@ -48,7 +48,7 @@
 -type crdt_model() :: term().
 -type meta() :: term().
 
--callback gen_op() -> eqc_gen:gen(riak_dt:operation()).
+% -callback gen_op() -> eqc_gen:gen(riak_dt:operation()).
 -callback gen_gc_ops() -> eqc_gen:gen([riak_dt:operation(),...]).
 
 -callback gc_model_create() -> crdt_model().

@@ -25,7 +25,26 @@
 -behaviour(riak_dt).
 -behaviour(riak_dt_gc).
 
+-export_type([orset/0]).
+-opaque orset() :: {orddict:orddict(), orddict:orddict()}.
+
+%% API
+-export([new/0, value/1, value/2, update/3, merge/2, equal/2]).
+-export([to_binary/1, from_binary/1]).
+-export([gc_epoch/1, gc_ready/2, gc_get_fragment/2, gc_replace_fragment/3]).
+
+-include("riak_dt_gc_meta.hrl").
+
+%% EQC API
 -ifdef(EQC).
+-compile(export_all).
+-export([init_state/0, gen_op/0, update_expected/3, eqc_state_value/1]).
+
+-behaviour(crdt_gc_statem_eqc).
+-export([gen_gc_ops/0]).
+-export([gc_model_create/0, gc_model_update/3, gc_model_merge/2, gc_model_realise/1]).
+-export([gc_model_ready/2]).
+
 -include_lib("eqc/include/eqc.hrl").
 -endif.
 
@@ -33,24 +52,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
-%% API
--export([new/0, value/1, update/3, merge/2, equal/2]).
--export([gc_epoch/1, gc_ready/2, gc_get_fragment/2, gc_replace_fragment/3]).
-
--include("riak_dt_gc_meta.hrl").
--opaque orset() :: {orddict:orddict(), orddict:orddict()}.
-
-%% EQC API
--ifdef(EQC).
--compile(export_all).
--export([update_expected/3, eqc_state_value/1]).
 
 
--behaviour(crdt_gc_statem_eqc).
--export([gen_op/0, gen_gc_ops/0]).
--export([gc_model_create/0, gc_model_update/3, gc_model_merge/2, gc_model_realise/1]).
--export([gc_model_ready/2]).
--endif.
 
 %% EQC generator
 -ifdef(EQC).
@@ -114,6 +117,9 @@ value({ADict, RDict}) ->
                                         end
                                 end,
                                 ADict)).
+
+value(_, ORSet) ->
+    value(ORSet).
 
 update({add, Elem}, Actor, {ADict0, RDict}) ->
     ADict = add_elem(Actor, ADict0, Elem),
@@ -218,14 +224,23 @@ filter_empty(OrdDict) ->
                       (_K,_V) -> true
                   end, OrdDict).
 
+-define(TAG, 76).
+-define(V1_VERS, 1).
+
+to_binary(ORSet) ->
+    %% @TODO something smarter
+    <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(ORSet))/binary>>.
+
+from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
+    %% @TODO something smarter
+    binary_to_term(Bin).
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
 -ifdef(TEST).
-
 -ifdef(EQC).
 eqc_value_test_() ->
-    {timeout, 120, [?_assert(crdt_statem_eqc:prop_converge(init_state(), 1000, ?MODULE))]}.
+    crdt_statem_eqc:run(?MODULE, 1000).
 
 %% GC Property
 
