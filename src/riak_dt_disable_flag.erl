@@ -29,11 +29,11 @@
 
 -behaviour(riak_dt).
 
--export([new/0, value/1, update/3, merge/2, equal/2]).
+-export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
--export([gen_op/0, update_expected/3, eqc_state_value/1]).
+-export([gen_op/0, init_state/0, update_expected/3, eqc_state_value/1]).
 -endif.
 
 -ifdef(TEST).
@@ -42,6 +42,9 @@
 
 %% EQC generator
 -ifdef(EQC).
+init_state() ->
+    on.
+
 gen_op() ->
     disable.
 
@@ -54,10 +57,15 @@ eqc_state_value(S) ->
     S.
 -endif.
 
+-define(TAG, 80).
+
 new() ->
     on.
 
 value(Flag) ->
+    Flag.
+
+value(_, Flag) ->
     Flag.
 
 update(disable, _Actor, _Flag) ->
@@ -68,6 +76,12 @@ merge(FA, FB) ->
 
 equal(FA,FB) ->
     FA =:= FB.
+
+from_binary(<<?TAG:7, 0:1>>) -> off;
+from_binary(<<?TAG:7, 1:1>>) -> on.
+
+to_binary(off) -> <<?TAG:7, 0:1>>;
+to_binary(on) -> <<?TAG:7, 1:1>>.
 
 %% priv
 flag_and(on, on) ->
@@ -85,7 +99,7 @@ flag_and(_, off) ->
 
 -ifdef(EQC).
 eqc_value_test_() ->
-    {timeout, 120, [?_assert(crdt_statem_eqc:prop_converge(on, 1000, ?MODULE))]}.
+    crdt_statem_eqc:run(?MODULE, 1000).
 -endif.
 
 new_test() ->

@@ -50,15 +50,14 @@
 
 -export_type([gcounter/0, gcounter_op/0]).
 
--opaque gcounter() :: [entry()].
+-opaque gcounter() :: orddict:orddict().
 
--type entry() :: {Actor::term(), Count::pos_integer()}.
 -type gcounter_op() :: increment | {increment, pos_integer()}.
 
 %% @doc Create a new, empty `gcounter()'
 -spec new() -> gcounter().
 new() ->
-    [].
+    orddict:new().
 
 %% @doc Create a `gcounter()' with an initial update
 -spec new(term(), pos_integer()) -> gcounter().
@@ -88,41 +87,20 @@ update({increment, Amount}, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
 %% function described in the literature.
 -spec merge(gcounter(), gcounter()) -> gcounter().
 merge(GCnt1, GCnt2) ->
-    merge(GCnt1, GCnt2, []).
-
-%% @private merge two counters.
--spec merge(gcounter(), gcounter(), gcounter()) -> gcounter().
-merge([], [], Acc) ->
-    lists:reverse(Acc);
-merge(LeftOver, [], Acc) ->
-    lists:reverse(Acc, LeftOver);
-merge([], LeftOver, Acc) ->
-    lists:reverse(Acc, LeftOver);
-merge([{Actor1, Cnt1}=AC1|Rest], Clock2, Acc) ->
-    case lists:keytake(Actor1, 1, Clock2) of
-        {value, {Actor1, Cnt2}, RestOfClock2} ->
-            merge(Rest, RestOfClock2, [{Actor1, max(Cnt1, Cnt2)}|Acc]);
-        false ->
-            merge(Rest, Clock2, [AC1|Acc])
-    end.
+    orddict:merge(fun(_, V1, V2) -> max(V1,V2) end,
+                  GCnt1, GCnt2).
 
 %% @doc Are two `gcounter()'s structurally equal? This is not `value/1' equality.
 %% Two counters might represent the total `42', and not be `equal/2'. Equality here is
 %% that both counters contain the same actors and those actors have the same count.
 -spec equal(gcounter(), gcounter()) -> boolean().
 equal(VA,VB) ->
-    lists:sort(VA) =:= lists:sort(VB).
+    lists:sort(orddict:to_list(VA)) =:= lists:sort(orddict:to_list(VB)).
 
 %% @private peform the increment.
 -spec increment_by(pos_integer(), term(), gcounter()) -> gcounter().
 increment_by(Amount, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
-    {Ctr, NewGCnt} = case lists:keytake(Actor, 1, GCnt) of
-                         false ->
-                             {Amount, GCnt};
-                         {value, {_N, C}, ModGCnt} ->
-                             {C + Amount, ModGCnt}
-                     end,
-    [{Actor, Ctr}|NewGCnt].
+    orddict:update_counter(Actor, Amount, GCnt).
 
 -define(TAG, 70).
 -define(V1_VERS, 1).

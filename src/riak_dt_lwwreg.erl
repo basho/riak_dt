@@ -106,7 +106,7 @@ equal({Val, TS}, {Val, TS}) ->
 equal(_, _) ->
     false.
 
--define(TAG, 71).
+-define(TAG, 72).
 -define(V1_VERS, 1).
 
 %% @doc Encode an effecient binary representation of an `lwwreg()'

@@ -24,6 +24,9 @@
 
 -behaviour(riak_dt).
 
+-export_type([orset/0]).
+-opaque orset() :: {orddict:orddict(), orddict:orddict()}.
+
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -endif.
