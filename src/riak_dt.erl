@@ -22,11 +22,28 @@
 
 -module(riak_dt).
 
--export([behaviour_info/1]).
+-export_type([actor/0]).
 
-behaviour_info(callbacks) ->
-    [{new, 0},
-     {value, 1},
-     {update, 3},
-     {merge, 2},
-     {equal, 2}].
+-type crdt() :: term().
+-type operation() :: term().
+-type actor() :: term().
+
+-callback new() -> crdt().
+-callback value(crdt()) -> term().
+-callback value(term(), crdt()) -> term().
+-callback update(operation(), actor(), crdt()) -> crdt().
+-callback merge(crdt(), crdt()) -> crdt().
+-callback equal(crdt(), crdt()) -> boolean().
+-callback to_binary(crdt()) -> binary().
+-callback from_binary(binary()) -> crdt().
+
+-ifdef(EQC).
+% Extra callbacks for any crdt_statem_eqc tests
+-type model_state() :: term().
+
+-callback gen_op() -> eqc_gen:gen(operation()).
+-callback update_expected(actor(), operation(), model_state()) -> model_state().
+-callback eqc_state_value(model_state()) -> term().
+-callback init_state() -> model_state().
+
+-endif.
