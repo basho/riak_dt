@@ -28,6 +28,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -compile(export_all).
+-export([run/2]).
 -behaviour(eqc_statem).
 -export([initial_state/0, command/1, precondition/2, next_state/3, postcondition/3]).
 
@@ -57,6 +58,12 @@
 -callback gc_model_realise(crdt_model()) -> term().
 -callback gc_model_ready(meta(),crdt_model()) -> boolean().
 
+run(Module,NumTests) ->
+    {atom_to_list(Module),
+    {timeout, 120,
+     ?_assert(eqc:quickcheck(
+              eqc:numtests(NumTests, 
+                           ?QC_OUT(prop_gc_correct(Module)))))}}.
 %%% Statem Callbacks
 
 initial_state() ->
@@ -204,14 +211,12 @@ prop_gc_correct(Mod) ->
     ?FORALL(Cmds,more_commands(?NUMCOMMANDS,commands(?MODULE,#state{mod=Mod})),
         begin
             Res={_,_,Result} = run_commands(?MODULE, Cmds),
-            collect(with_title("Command Lengths"),
-                length(Cmds),
-                aggregate(with_title("Command Names"),
-                    command_names(Cmds),
-                    pretty_commands(?MODULE,
-                        Cmds,
-                        Res,
-                        eqc_statem:show_states(Result == ok))))
+            aggregate(with_title("Command Names"),
+                command_names(Cmds),
+                pretty_commands(?MODULE,
+                    Cmds,
+                    Res,
+                    eqc_statem:show_states(Result == ok)))
         end).
 
 %%% Callbacks Used Above
