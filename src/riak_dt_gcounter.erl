@@ -45,11 +45,16 @@
 
 -include("riak_dt_gc_meta.hrl").
 
-
 %% EQC API
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0, generate/0]).
+-compile(export_all).
+
+-behaviour(crdt_gc_statem_eqc).
+-export([gen_gc_ops/0]).
+-export([gc_model_create/0, gc_model_update/3, gc_model_merge/2, gc_model_realise/1]).
+-export([gc_model_ready/2]).
 -endif.
 
 -ifdef(TEST).
@@ -198,6 +203,9 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, EntriesBin/binary>>) ->
 %% EQC generator
 eqc_value_test_() ->
     crdt_statem_eqc:run(?MODULE, 1000).
+    
+eqc_gc_test_() ->
+    crdt_gc_statem_eqc:run(?MODULE, 200).
 
 generate() ->
     ?LET(Ops, list(gen_op()),
@@ -212,6 +220,9 @@ init_state() ->
 gen_op() ->
     oneof([increment, {increment, gen_pos()}]).
 
+gen_gc_ops() ->
+    list(gen_op()).
+
 gen_pos()->
     ?LET(X, int(), 1+abs(X)).
 
@@ -224,6 +235,28 @@ update_expected(_ID, _Op, Prev) ->
 
 eqc_state_value(S) ->
     S.
+
+% In my gc model, I'm thinking of it as a log of update operations (each with a unique ID).
+gc_model_create() ->
+    ordsets:new().
+
+gc_model_update(increment, Actor, Cnt) ->
+    gc_model_update({increment, 1}, Actor, Cnt);
+gc_model_update({increment, Add}, Actor, Cnt) ->
+    ID = erlang:phash2({Actor, erlang:now()}),
+    ordsets:add_element({ID, Add}, Cnt).
+
+gc_model_merge(Cnt1, Cnt2) ->
+    ordsets:union(Cnt1, Cnt2).
+
+gc_model_realise(Cnt) ->
+    ordsets:fold(fun ({_ID,Add},Sum) ->
+            Add + Sum
+        end, 0, Cnt).
+
+% TODO: this should fail more (or at all)
+gc_model_ready(_Meta, _Cnt) ->
+    false.
 -endif.
 
 new_test() ->

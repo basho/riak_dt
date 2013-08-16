@@ -14,7 +14,7 @@
 
 % A Helper, put in Calced as from the notes below. Doesn't cope with
 % 'badarith' errors, so wrap in a case statement.
--define(SHOULD_GC(Meta,CalcedVal), CalcedVal < Meta?GC_META.compact_threshold).
+-define(SHOULD_GC(Meta,CalcedVal), ((CalcedVal) < Meta?GC_META.compact_threshold)).
 
 %% the compact_threshold is a number between 0.0 and 1.0:
 %%

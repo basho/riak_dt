@@ -60,7 +60,7 @@
 
 run(Module,NumTests) ->
     {atom_to_list(Module),
-    {timeout, 120,
+    {timeout, 1200,
      ?_assert(eqc:quickcheck(
               eqc:numtests(NumTests, 
                            ?QC_OUT(prop_gc_correct(Module)))))}}.
