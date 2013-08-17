@@ -30,6 +30,9 @@
 
 -module(riak_dt_lwwreg).
 
+-behaviour(riak_dt).
+-behaviour(riak_dt_gc).
+
 -export([new/0, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
 -export([gc_epoch/1, gc_ready/2, gc_get_fragment/2, gc_replace_fragment/3]).
 
