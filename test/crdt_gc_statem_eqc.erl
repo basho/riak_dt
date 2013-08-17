@@ -71,31 +71,34 @@ initial_state() ->
 
 %% Command generator
 command(State=#state{mod=Mod, replicas=Replicas, fragments=Fragments}) ->
-    % - Create Replica (Y)
-    % - Update Replica (Y)
-    % - Merging 2 Replicas (Y)
-    % ----
-    % - GC Ready?
-    % - Proposing a GC (getting a fragment)
+    % - Create Replica
+    % - Update Replica
+    % - Merging 2 Replicas
+    % - serialize to_binary and deserialize from_binary to check value remains.
+    % - GC Ready? & Proposing a GC (getting a fragment)
     % - Exectuting a GC (removing the fragment from a given replica, sometime later)
     frequency(
         [{1, {call, ?MODULE, create, [Mod]}}] ++
         [{10, gen_update(State)} || length(Replicas) > 0] ++
         [{10, gen_gc_update(State)} || length(Replicas) > 0] ++
         [{10, {call, ?MODULE, merge,  [Mod, elements(Replicas), elements(Replicas)]}} || length(Replicas) > 0] ++
+        [{10, {call, ?MODULE, serialize, [Mod, elements(Replicas)]}} || length(Replicas) > 0] ++
         [{10, {call, ?MODULE, gc_prepare, [Mod, gen_meta(State), elements(Replicas)]}} || length(Replicas) > 0] ++
         [{50, gen_gc_execute(State)} || length(Fragments) > 0]
     ).
 
 gen_update(#state{mod=Mod,replicas=Replicas}) ->
     ?LET(Operations,
-         shrink_list(lists:duplicate(?BATCHSIZE, Mod:gen_op())),
+         ?SIZED(BatchSize, resize(BatchSize*10, list(Mod:gen_op()))),
          {call, ?MODULE, update, [Mod, Operations, elements(Replicas)]}).
 
-gen_gc_update(#state{mod=Mod,replicas=Replicas}) ->
+gen_gc_update(State = #state{mod=Mod,replicas=Replicas}) ->
     ?LET(Operations,
          Mod:gen_gc_ops(),
-         {call, ?MODULE, update, [Mod, Operations, elements(Replicas)]}).
+         case Operations of
+             [] -> gen_update(State); % Some generators have no possible way of generating something that will cause GC, so fall through to the normal gen_update mechanism.
+             _  -> {call, ?MODULE, update, [Mod, Operations, elements(Replicas)]}
+         end).
 
 gen_gc_execute(#state{mod=Mod,replicas=Replicas,fragments=Fragments}) ->
     ?LET(FragInfo={AId,_Meta,_CRDTFrag},
@@ -116,6 +119,8 @@ precondition(#state{replicas=Replicas}, {call, ?MODULE, update, [_,_,ReplicaTrip
     lists:member(ReplicaTriple, Replicas);
 precondition(#state{replicas=Replicas}, {call, ?MODULE, merge, [_, ReplicaTriple1, ReplicaTriple2]}) ->
     lists:member(ReplicaTriple1, Replicas) andalso lists:member(ReplicaTriple2, Replicas);
+precondition(#state{replicas=Replicas}, {call, ?MODULE, serialize, [_, ReplicaTriple]}) ->
+    lists:member(ReplicaTriple, Replicas);
 precondition(#state{replicas=Replicas}, {call, ?MODULE, gc_prepare, [_, _, ReplicaTriple]}) ->
     lists:member(ReplicaTriple, Replicas);
 % precondition(#state{replicas=Replicas}, {call, ?MODULE, gc_execute, [_, _, ReplicaTriple]}) ->
@@ -141,6 +146,12 @@ postcondition(_S, {call, ?MODULE, merge, [Mod, ReplicaTriple1, ReplicaTriple2]},
     case equal(Mod, Merged1, Merged2) of
         true -> true;
         _    -> {postcondition_failed, "merge/2 is not commutative (in the eyes of equals/2)", Merged1, Merged2}
+    end;
+
+postcondition(_S, {call, ?MODULE, serialize, [Mod, {_AId, _SymbState, PreCRDT}]}, PostCRDT) ->
+    case equal(Mod, PreCRDT, PostCRDT) of
+        true -> true;
+        _    -> {postcondition_failed, "binary serialisation changes CRDT internal state", PreCRDT, PostCRDT}
     end;
 
 postcondition(_S, {call, ?MODULE, gc_prepare, [Mod, Meta, {_AId, SymbState, _}]}, CRDTReady) ->
@@ -229,6 +240,10 @@ update(Module, Operations, {Actor,_SymbState,CRDT}) ->
 
 merge(Module, {_,_,CRDT1},{_,_,CRDT2}) ->
     Module:merge(CRDT1, CRDT2).
+
+serialize(Module, {_,_,CRDT}) ->
+    Binary = Module:to_binary(CRDT),
+    Module:from_binary(Binary).
 
 gc_prepare(Module, Meta, {_,_,CRDT}) ->
     Module:gc_ready(Meta, CRDT).
