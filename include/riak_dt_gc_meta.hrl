@@ -1,7 +1,5 @@
 
 
--define(GC_META, #riak_dt_gc_meta).
--define(GC_META_ACTOR(GM), GM?GC_META.actor).
 -record(riak_dt_gc_meta,
         {
           epoch :: riak_dt_gc:epoch(),             % Epoch of GC
@@ -10,7 +8,9 @@
           readonly_actors :: [riak_dt:actor()], % Actors that can't be GCd (ie cluster remotes)
           compact_threshold :: float()  % Float between 0.0 and 1.0
         }).
--opaque gc_meta() :: #riak_dt_gc_meta{}.
+-define(GC_META, #riak_dt_gc_meta).
+-define(GC_META_ACTOR(GM), GM?GC_META.actor).
+-type gc_meta() :: ?GC_META{}.
 
 % A Helper, put in Calced as from the notes below. Doesn't cope with
 % 'badarith' errors, so wrap in a case statement.

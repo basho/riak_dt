@@ -22,14 +22,14 @@
 
 -module(riak_dt_gc).
 
--export([meta/4,meta/3]).
+-export([meta/4, meta/3]).
 -export([new_epoch/1, epoch_actor/1, epoch_compare/2]).
 
 -include("riak_dt_gc_meta.hrl").
 
 -type epoch() :: {riak_dt:actor(), erlang:timestamp()}.
 -type crdt_fragment() :: term().
--export_type([epoch/0, crdt_fragment/0]).
+-export_type([gc_meta/0, epoch/0, crdt_fragment/0]).
 
 -callback gc_epoch(riak_dt:crdt()) -> epoch().
 -callback gc_ready(gc_meta(), riak_dt:crdt()) -> boolean().
