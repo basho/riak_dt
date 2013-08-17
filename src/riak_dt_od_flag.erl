@@ -45,11 +45,6 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
-% EQC generator
--ifdef(EQC).
-
--endif.
-
 % {Enables,Disables}
 new() ->
     {ordsets:new(),ordsets:new()}.
