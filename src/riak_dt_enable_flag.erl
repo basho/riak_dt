@@ -28,33 +28,24 @@
 -module(riak_dt_enable_flag).
 
 -behaviour(riak_dt).
+-behaviour(riak_dt_gc).
 
 -export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1]).
+-export([gc_epoch/1, gc_ready/2, gc_get_fragment/2, gc_replace_fragment/3]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -export([gen_op/0, init_state/0, update_expected/3, eqc_state_value/1]).
+-compile(export_all).
+
+-behaviour(crdt_gc_statem_eqc).
+-export([gen_gc_ops/0]).
+-export([gc_model_create/0, gc_model_update/3, gc_model_merge/2, gc_model_realise/1]).
+-export([gc_model_ready/2]).
 -endif.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
--endif.
-
-%% EQC generator
--ifdef(EQC).
-init_state() -> 
-    off.    
-
-gen_op() ->
-    enable.
-
-update_expected(_ID, enable, _Prev) ->
-    on;
-update_expected(_ID, _Op, Prev) ->
-    Prev.
-
-eqc_state_value(S) ->
-    S.
 -endif.
 
 -define(TAG, 79).
@@ -84,13 +75,22 @@ to_binary(off) -> <<?TAG:7, 0:1>>;
 to_binary(on) -> <<?TAG:7, 1:1>>.
 
 %% priv
-flag_or(on, _) ->
-    on;
-flag_or(_, on) ->
-    on;
 flag_or(off, off) ->
-    off.
+    off;
+flag_or(_, _) ->
+    on.
 
+gc_epoch(_Flag) ->
+    undefined.
+
+gc_ready(_Meta, _Flag) ->
+    false.
+
+gc_get_fragment(_Meta, _Flag) ->
+    {}.
+
+gc_replace_fragment(_Meta, _Frag, Flag) ->
+    Flag.
 
 %% ===================================================================
 %% EUnit tests
@@ -100,6 +100,44 @@ flag_or(off, off) ->
 -ifdef(EQC).
 eqc_value_test_() ->
     crdt_statem_eqc:run(?MODULE, 1000).
+
+eqc_gc_test_() ->
+    crdt_gc_statem_eqc:run(?MODULE, 200).
+    
+%% EQC generator
+init_state() -> 
+    off.    
+
+gen_op() ->
+    enable.
+
+gen_gc_ops() ->
+    [].
+
+update_expected(_ID, enable, _Prev) ->
+    on;
+update_expected(_ID, _Op, Prev) ->
+    Prev.
+
+eqc_state_value(S) ->
+    S.
+
+gc_model_create() ->
+    false.
+
+gc_model_update(enable, _Actor, _Flag) ->
+    true.
+
+gc_model_merge(Flag1, Flag2) ->
+    Flag1 or Flag2.
+
+gc_model_realise(true) ->
+    on;
+gc_model_realise(false) ->
+    off.
+
+gc_model_ready(_Meta, _Flag) ->
+    false.
 -endif.
 
 new_test() ->

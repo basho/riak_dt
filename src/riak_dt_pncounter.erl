@@ -34,19 +34,12 @@
 
 -module(riak_dt_pncounter).
 
--export([new/0, new/2, value/1, value/2,
-         update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
+-export([new/0, new/2, value/1, value/2, update/3, merge/2, equal/2]).
+-export([to_binary/1, from_binary/1]).
 -export([to_binary/2, from_binary/2, current_version/1, change_versions/3]).
+-export([gc_epoch/1, gc_ready/2, gc_get_fragment/2, gc_replace_fragment/3]).
 
-%% EQC API
--ifdef(EQC).
--include_lib("eqc/include/eqc.hrl").
--export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0, generate/0]).
--endif.
-
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
--endif.
+-include("riak_dt_gc_meta.hrl").
 
 -export_type([pncounter/0, pncounter_op/0]).
 
@@ -58,6 +51,17 @@
 -type v1_pncounter() :: {riak_dt_gcounter:gcounter(),riak_dt_gcounter:gcounter()}.
 -type version()      :: integer().
 -type any_pncounter() :: pncounter() | v1_pncounter().
+
+%% EQC API
+-ifdef(EQC).
+-include_lib("eqc/include/eqc.hrl").
+-compile(export_all).
+-export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0, generate/0]).
+-endif.
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
 
 %% @doc Create a new, empty `pncounter()'
 -spec new() -> pncounter().
@@ -224,6 +228,35 @@ decrement_by(Decrement, Actor, PNCnt) ->
         {value, {Actor,Inc,Dec}, ModPNCnt} ->
             [{Actor,Inc,Dec+Decrement}|ModPNCnt]
     end.
+
+%%% GC
+
+-type gc_fragment() :: pncounter().
+
+% We're ready to GC if either of the gcounters are ready to GC.
+-spec gc_ready(gc_meta(), pncounter()) -> boolean().
+gc_ready(Meta, {Inc,Dec}) ->
+    riak_dt_gcounter:gc_ready(Meta, Inc)
+        orelse riak_dt_gcounter:gc_ready(Meta,Dec).
+
+-spec gc_epoch(pncounter()) -> riak_dt_gc:epoch().
+gc_epoch({Inc,Dec}) ->
+    Epoch = riak_dt_gcounter:gc_epoch(Inc),
+    Epoch = riak_dt_gcounter:gc_epoch(Dec),
+    Epoch.
+
+-spec gc_get_fragment(gc_meta(), pncounter()) -> gc_fragment().
+gc_get_fragment(Meta, {Inc,Dec}) ->
+    IncFragment = riak_dt_gcounter:gc_get_fragment(Meta, Inc),
+    DecFragment = riak_dt_gcounter:gc_get_fragment(Meta, Dec),
+    {IncFragment, DecFragment}.
+
+-spec gc_replace_fragment(gc_meta(), gc_fragment(), pncounter()) -> pncounter().
+gc_replace_fragment(Meta, {IncFrag,DecFrag}, {Inc,Dec}) ->
+    Inc1 = riak_dt_gcounter:gc_replace_fragment(Meta, IncFrag, Inc),
+    Dec1 = riak_dt_gcounter:gc_replace_fragment(Meta, DecFrag, Dec),
+    {Inc1,Dec1}.
+
 
 %% ===================================================================
 %% EUnit tests

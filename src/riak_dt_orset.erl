@@ -23,11 +23,28 @@
 -module(riak_dt_orset).
 
 -behaviour(riak_dt).
+-behaviour(riak_dt_gc).
 
 -export_type([orset/0]).
 -opaque orset() :: {orddict:orddict(), orddict:orddict()}.
 
+%% API
+-export([new/0, value/1, value/2, update/3, merge/2, equal/2]).
+-export([to_binary/1, from_binary/1]).
+-export([gc_epoch/1, gc_ready/2, gc_get_fragment/2, gc_replace_fragment/3]).
+
+-include("riak_dt_gc_meta.hrl").
+
+%% EQC API
 -ifdef(EQC).
+-compile(export_all).
+-export([init_state/0, gen_op/0, update_expected/3, eqc_state_value/1]).
+
+-behaviour(crdt_gc_statem_eqc).
+-export([gen_gc_ops/0]).
+-export([gc_model_create/0, gc_model_update/3, gc_model_merge/2, gc_model_realise/1]).
+-export([gc_model_ready/2]).
+
 -include_lib("eqc/include/eqc.hrl").
 -endif.
 
@@ -35,22 +52,21 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
-%% API
--export([new/0, value/1, update/3, merge/2, equal/2, to_binary/1, from_binary/1, value/2]).
 
-%% EQC API
--ifdef(EQC).
--export([init_state/0, gen_op/0, update_expected/3, eqc_state_value/1]).
--endif.
+
 
 %% EQC generator
 -ifdef(EQC).
 gen_op() ->
-    ?LET({Add, Remove}, gen_elems(),
-         oneof([{add, Add}, {remove, Remove}])).
+    ?LET(Add, nat(),
+         oneof([{add, Add}, {remove, Add}])).
 
-gen_elems() ->
-    ?LET(A, int(), {A, oneof([A, int()])}).
+gen_gc_ops() ->
+    ?LET(Add, nat(),
+         [{add, Add}, {remove, Add}]).
+
+% gen_elems() ->
+%     ?LET(A, int(), {A, oneof([A, int()])}).
 
 %% Maybe model qc state as op based?
 init_state() ->
@@ -119,6 +135,49 @@ merge({ADict1, RDict1}, {ADict2, RDict2}) ->
 equal({ADict1, RDict1}, {ADict2, RDict2}) ->
     ADict1 == ADict2 andalso RDict1 == RDict2.
 
+%%% GC
+
+-type gc_fragment() :: orset().
+
+-spec gc_ready(gc_meta(), orset()) -> boolean().
+gc_ready(Meta, {Add,Remove}=_ORSet) ->
+    % These folds add {elem, token} to a set, on the off-chance that two tokens
+    % for seperate keys are the same.
+    Additions = orddict:fold(fun ordsets_union_prefix/3, ordsets:new(),Add),
+    Removals = orddict:fold(fun ordsets_union_prefix/3, ordsets:new(),Remove),
+    TotalTokens = ordsets:size(ordsets:union(Additions,Removals)),
+    KeepTokens = ordsets:size(ordsets:subtract(Additions,Removals)),
+    case TotalTokens of
+        0 -> false;
+        _ -> ?SHOULD_GC(Meta, KeepTokens/TotalTokens)
+    end.
+
+% Gulp, I literally have no idea, one reason is we don't embed the epoch in
+-spec gc_epoch(orset()) -> riak_dt_gc:epoch().
+gc_epoch(_ORSet) ->
+    {}.
+
+% The fragment is just an ORSet with all invalidated tokens removed (but using
+% the same tokens as the original ORSet).
+-spec gc_get_fragment(gc_meta(), orset()) -> gc_fragment().
+gc_get_fragment(_Meta, {Add,Rem}=_ORSet) ->
+    Additions = orddict:fold(fun ordsets_union_prefix/3, ordsets:new(), Add),
+    Removals = orddict:fold(fun ordsets_union_prefix/3,  ordsets:new(), Rem),
+    TombstoneTokens = ordsets:intersection(Additions,Removals),
+    ordsets:fold(fun({Elem,Token},{Add0,Rem0}) ->
+                    % For add we need to bypass token generation. Le Sigh
+                    Add1 = add_unique(orddict:find(Elem,Add0), Add0, Elem, Token),
+                    Rem1 = remove_elem(orddict:find(Elem,Add1), Elem, Rem0),
+                    {Add1, Rem1}
+                 end, new(), TombstoneTokens).
+
+% Now we go through the orset removing all tokens present in the fragment.
+-spec gc_replace_fragment(gc_meta(), gc_fragment(), orset()) -> orset().
+gc_replace_fragment(_Meta, {AddFrag,RemFrag}=_ORFrag, {Add0,Rem0}=_ORSet) ->
+    Add1 = orddict:merge(fun ordsets_subtract/3, Add0, AddFrag),
+    Rem1 = orddict:merge(fun ordsets_subtract/3, Rem0, RemFrag),
+    {filter_empty(Add1), filter_empty(Rem1)}.
+
 %% Private
 add_elem(Actor, Dict, Elem) ->
     Unique = unique(Actor),
@@ -147,7 +206,23 @@ unique(Actor) ->
 
 merge_dicts(Dict1, Dict2) ->
     %% for every key in dict1, merge its contents with dict2's content for same key
-   orddict:merge(fun(_K, V1, V2) -> ordsets:union(V1, V2) end, Dict1, Dict2).
+   orddict:merge(fun ordsets_union/3, Dict1, Dict2).
+
+ordsets_union(_K, V1, V2) ->
+    ordsets:union(V1, V2).
+
+ordsets_union_prefix(K, V, KTokenSet) ->
+    KTs = ordsets:from_list([{K,Token} || Token <- V]),
+    ordsets:union(KTs, KTokenSet).
+
+% Subtracts the elements in V2 from V1
+ordsets_subtract(_K, V1, V2) ->
+    ordsets:subtract(V1, V2).
+
+filter_empty(OrdDict) ->
+    orddict:filter(fun(_K,[]) -> false;
+                      (_K,_V) -> true
+                  end, OrdDict).
 
 -define(TAG, 76).
 -define(V1_VERS, 1).
@@ -163,9 +238,44 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
 %% EUnit tests
 %% ===================================================================
 -ifdef(TEST).
-
 -ifdef(EQC).
 eqc_value_test_() ->
     crdt_statem_eqc:run(?MODULE, 1000).
+
+%% GC Property
+
+gc_model_create() ->
+    {ordsets:new(), ordsets:new()}.
+
+gc_model_update({add, Elem}, Actor, {Add,Remove}) ->
+    Unique = erlang:phash2({Actor, erlang:now()}),
+    {ordsets:add_element({Elem, Unique}, Add), Remove};
+gc_model_update({remove, RemElem}, _Actor, {Add,Remove}) ->
+    ToRem = [{Elem,A} || {Elem,A} <- ordsets:to_list(Add), Elem == RemElem],
+    Remove1 = ordsets:union(ordsets:from_list(ToRem),Remove),
+    {Add, Remove1}.
+
+gc_model_merge({A1,R1}, {A2,R2}) ->
+    A3 = ordsets:union(A1,A2),
+    R3 = ordsets:union(R1,R2),
+    {A3,R3}.
+
+gc_model_realise({Add,Remove}) ->
+    Values = [ Elem || {Elem, _A} <- ordsets:to_list(ordsets:subtract(Add,Remove))],
+    lists:usort(Values).
+
+gc_model_ready(Meta, {Add,Remove}) ->
+    TotalTokens = ordsets:size(ordsets:union(Add,Remove)),
+    TombstoneTokens = ordsets:size(ordsets:intersection(Add,Remove)),
+    case TotalTokens of
+        0 -> false;
+        _ -> ?SHOULD_GC(Meta, 1 - (TombstoneTokens/TotalTokens))
+    end.
+
+% gc_model_get_fragment(_Meta, _S) ->
+%     {}.
+% 
+% gc_model_replace_fragment(_Meta, _Frag, S) ->
+%     S.
 -endif.
 -endif.

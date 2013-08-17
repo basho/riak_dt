@@ -30,12 +30,22 @@
 
 -module(riak_dt_lwwreg).
 
+-behaviour(riak_dt).
+-behaviour(riak_dt_gc).
+
 -export([new/0, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
+-export([gc_epoch/1, gc_ready/2, gc_get_fragment/2, gc_replace_fragment/3]).
+
+-include("riak_dt_gc_meta.hrl").
 
 %% EQC API
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0, generate/0]).
+-behaviour(crdt_gc_statem_eqc).
+-export([gen_gc_ops/0]).
+-export([gc_model_create/0, gc_model_update/3, gc_model_merge/2, gc_model_realise/1]).
+-export([gc_model_ready/2]).
 -endif.
 
 -ifdef(TEST).
@@ -122,6 +132,18 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, ValueLen:8/integer, ValueBin:V
               TSLen:8/integer, TSBin:TSLen/binary>>) ->
     {binary_to_val(ValueBin), binary_to_ts(TSBin)}.
 
+gc_ready(_Meta, _Reg) ->
+    false.
+
+gc_epoch(_Reg) ->
+    undefined.
+
+gc_get_fragment(_Meta, _Reg) ->
+    {}.
+
+gc_replace_fragment(_Meta, _Frag, Reg) ->
+    Reg.
+
 val_to_binary(Val) when is_binary(Val) ->
     Bin = <<1, Val/binary>>,
     {byte_size(Bin), Bin};
@@ -154,6 +176,9 @@ ts_to_binary(TS) ->
 eqc_value_test_() ->
     crdt_statem_eqc:run(?MODULE, 1000).
 
+eqc_gc_test_() ->
+    crdt_gc_statem_eqc:run(?MODULE, 200).
+
 %% EQC generator
 generate() ->
     ?LET({Op, Actor}, {gen_op(), char()},
@@ -164,6 +189,9 @@ init_state() ->
 
 gen_op() ->
     ?LET(TS, largeint(), {assign, binary(), abs(TS)}).
+
+gen_gc_ops() ->
+    [].
 
 update_expected(_ID, {assign, Val, TS}, {OldVal, OldTS}) ->
     case TS >= OldTS of
@@ -177,6 +205,34 @@ update_expected(_ID, _Op, Prev) ->
 
 eqc_state_value({Val, _TS}) ->
     Val.
+
+% I wanted to model this as a log of all {Ts,Value} assignments.
+% Unfortunately, this was slow as hell, so gc_model_update trims the log to make
+% it a bit speedier. 
+gc_model_create() ->
+    orddict:new().
+
+gc_model_update({assign, Val, Ts}, _Actor, Model) ->
+    Model1 = orddict:store(Ts, Val, Model),
+    lists:dropwhile(fun({Ts1,_Val1}) ->
+            Ts1 < Ts
+        end, Model1).
+
+% The merge fun has to do *something*, not that we should ever hit it.
+gc_model_merge(Model1, Model2) ->
+    orddict:merge(fun(_Ts,V1,V2) ->
+            max(V1, V2)
+        end, Model1, Model2).
+
+gc_model_realise([]) ->
+    undefined;
+gc_model_realise(Model) ->
+    % Why of course orddict has no way of getting the maximum pair.
+    [{_Ts,Val}|_Rest] = lists:reverse(Model),
+    Val.
+
+gc_model_ready(_Meta, _Flag) ->
+    false.
 -endif.
 
 new_test() ->

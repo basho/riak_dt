@@ -58,6 +58,7 @@
 -module(riak_dt_vvorset).
 
 -behaviour(riak_dt).
+-behaviour(riak_dt_gc).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -68,9 +69,12 @@
 -endif.
 
 %% API
--export([new/0, value/1, value/2]).
--export([update/3, merge/2, equal/2]).
+-export([new/0, value/1, value/2, update/3, merge/2, equal/2]).
 -export([to_binary/1, from_binary/1]).
+-export([gc_epoch/1, gc_ready/2, gc_get_fragment/2, gc_replace_fragment/3]).
+
+-include("riak_dt_gc_meta.hrl").
+
 
 %% EQC API
 -ifdef(EQC).
@@ -80,7 +84,6 @@
 -export_type([vvorset/0, vvorset_op/0]).
 
 -opaque vvorset() :: {actorlist(), entries()}.
-
 -type vvorset_op() :: {add, member()} | {remove, member()}.
 -type vvorset_q()  :: size | {contains, term()} | tombstones.
 
@@ -173,6 +176,38 @@ is_active_or_removed(RemoveClock0, AddClock0, RemActors, AddActors, MergedActors
 equal(ORSet1, ORSet2) ->
     ORSet1 == ORSet2.
 
+%%% GC
+
+-type gc_fragment() :: vvorset().
+
+% We want to gc if Tombstone Elements make up more than `compact_proportion` of the elements in the vvorset.
+-spec gc_ready(gc_meta(), vvorset()) -> boolean().
+gc_ready(Meta, {Add,_Remove}=VVORSet) ->
+    TombstoneCount = orddict:size(tombstones(VVORSet)),
+    ElementCount   = orddict:size(Add),
+    ?SHOULD_GC(Meta, 1 - (TombstoneCount/ElementCount)).
+
+% I don't know how we find the epoch
+-spec gc_epoch(vvorset()) -> riak_dt_gc:epoch().
+gc_epoch(_ORSet) ->
+    {}.
+
+% Just two copies of all Elements that were present but are no longer, complete
+% with their vclocks.
+-spec gc_get_fragment(gc_meta(), vvorset()) -> gc_fragment().
+gc_get_fragment(_Meta, VVORSet) ->
+    Tombstones = tombstones(VVORSet),
+    {Tombstones,Tombstones}.
+
+% Remove all tombstones, but only if the vclock in the fragment is not 
+% dominated by the vclock in the vvorset (the if dominated, suggests updates 
+% have happened since)
+-spec gc_replace_fragment(gc_meta(), gc_fragment(), vvorset()) -> vvorset().
+gc_replace_fragment(_Meta, {AddFrag,RemFrag}=_VVORFrag, {Add0,Rem0}=_VVORSet) ->
+    Add1 = orddict:filter(remove_fragment_filter(AddFrag), Add0),
+    Rem1 = orddict:filter(remove_fragment_filter(RemFrag), Rem0),
+    {Add1,Rem1}.
+
 %% Private
 -spec add_elem(actor(), vvorset(), member()) -> vvorset().
 add_elem(Actor, {Actors0, Entries}, Elem) ->
@@ -218,12 +253,30 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
     %% @TODO something smarter
     binary_to_term(Bin).
 
+vclock_for(Elem, Dict) ->
+    case orddict:find(Elem, Dict) of
+        {ok, Clock} -> Clock;
+        error       -> vclock:fresh()
+    end.
+
+tombstones({ADict,RDict}) ->
+    orddict:filter(fun(K,AClock) ->
+            vclock:descends(vclock_for(K,RDict),AClock)
+        end, ADict).
+        
+remove_fragment_filter(Fragment) ->
+    fun (Elem,VClock) ->
+        FragVClock = vclock_for(Elem,Fragment),
+        not vclock:descends(FragVClock,VClock)
+    end.
+
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
 -ifdef(TEST).
 
 -ifdef(EQC).
+-compile(export_all).
 eqc_value_test_() ->
     crdt_statem_eqc:run(?MODULE, 1000).
 
@@ -270,6 +323,28 @@ eqc_state_value({_Cnt, Dict}) ->
                        Dict),
     Remaining = sets:subtract(A, R),
     Values = [ Elem || {Elem, _X} <- sets:to_list(Remaining)],
+    lists:usort(Values).
+
+create_gc_expected() ->
+    {ordsets:new(), ordsets:new()}.
+
+update_gc_expected({add, X}, Actor, {Add,Remove}) ->
+    Unique = erlang:phash2({Actor, erlang:now()}),
+    {ordsets:add_element({X, Unique}, Add), ordsets:del_element(X,Remove)};
+update_gc_expected({remove, X}, _Actor, {Add,Remove}) ->
+    ToRem = [{A,Elem} || {A,Elem} <- ordsets:to_list(Add), Elem == X],
+    Remove1 = ordsets:union(ordsets:from_list(ToRem),Remove),
+    {Add, Remove1}.
+% update_gc_expected(_Operation, _Actor, State) ->
+%     State.
+
+merge_gc_expected({A1,R1}, {A2,R2}) ->
+    A3 = ordsets:union(A1,A2),
+    R3 = ordsets:union(R1,R2),
+    {A3,R3}.
+
+realise_gc_expected({Add,Remove}) ->
+    Values = [ X || {X, _A} <- ordsets:to_list(ordsets:subtract(Add,Remove))],
     lists:usort(Values).
 
 -endif.
