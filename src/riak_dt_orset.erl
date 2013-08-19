@@ -57,47 +57,7 @@
 
 %% EQC generator
 -ifdef(EQC).
-gen_op() ->
-    ?LET(Add, nat(),
-         oneof([{add, Add}, {remove, Add}])).
 
-gen_gc_ops() ->
-    ?LET(Add, nat(),
-         [{add, Add}, {remove, Add}]).
-
-% gen_elems() ->
-%     ?LET(A, int(), {A, oneof([A, int()])}).
-
-%% Maybe model qc state as op based?
-init_state() ->
-    {0, dict:new(), []}.
-
-update_expected(ID, {add, Elem}, {Cnt0, Dict, L}) ->
-    Cnt = Cnt0+1,
-    ToAdd = {Elem, Cnt},
-    {A, R} = dict:fetch(ID, Dict),
-    {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict), [{ID, {add, Elem}}|L]};
-update_expected(ID, {remove, Elem}, {Cnt, Dict, L}) ->
-    {A, R} = dict:fetch(ID, Dict),
-    ToRem = [ {E, X} || {E, X} <- sets:to_list(A), E == Elem],
-    {Cnt, dict:store(ID, {A, sets:union(R, sets:from_list(ToRem))}, Dict), [{ID, {remove, Elem, ToRem}}|L]};
-update_expected(ID, {merge, SourceID}, {Cnt, Dict, L}) ->
-    {FA, FR} = dict:fetch(ID, Dict),
-    {TA, TR} = dict:fetch(SourceID, Dict),
-    MA = sets:union(FA, TA),
-    MR = sets:union(FR, TR),
-    {Cnt, dict:store(ID, {MA, MR}, Dict), [{ID,{merge, SourceID}}|L]};
-update_expected(ID, create, {Cnt, Dict, L}) ->
-    {Cnt, dict:store(ID, {sets:new(), sets:new()}, Dict), [{ID, create}|L]}.
-
-eqc_state_value({_Cnt, Dict, _L}) ->
-    {A, R} = dict:fold(fun(_K, {Add, Rem}, {AAcc, RAcc}) ->
-                               {sets:union(Add, AAcc), sets:union(Rem, RAcc)} end,
-                       {sets:new(), sets:new()},
-                       Dict),
-    Remaining = sets:subtract(A, R),
-    Values = [ Elem || {Elem, _X} <- sets:to_list(Remaining)],
-    lists:usort(Values).
 
 -endif.
 
@@ -137,9 +97,10 @@ equal({ADict1, RDict1}, {ADict2, RDict2}) ->
 
 %%% GC
 
--type gc_fragment() :: orset().
+% Gulp, I literally have no idea, one reason is we don't embed the epoch in
+gc_epoch(_ORSet) ->
+    undefined.
 
--spec gc_ready(gc_meta(), orset()) -> boolean().
 gc_ready(Meta, {Add,Remove}=_ORSet) ->
     % These folds add {elem, token} to a set, on the off-chance that two tokens
     % for seperate keys are the same.
@@ -152,14 +113,8 @@ gc_ready(Meta, {Add,Remove}=_ORSet) ->
         _ -> ?SHOULD_GC(Meta, KeepTokens/TotalTokens)
     end.
 
-% Gulp, I literally have no idea, one reason is we don't embed the epoch in
--spec gc_epoch(orset()) -> riak_dt_gc:epoch().
-gc_epoch(_ORSet) ->
-    {}.
-
 % The fragment is just an ORSet with all invalidated tokens removed (but using
 % the same tokens as the original ORSet).
--spec gc_get_fragment(gc_meta(), orset()) -> gc_fragment().
 gc_get_fragment(_Meta, {Add,Rem}=_ORSet) ->
     Additions = orddict:fold(fun ordsets_union_prefix/3, ordsets:new(), Add),
     Removals = orddict:fold(fun ordsets_union_prefix/3,  ordsets:new(), Rem),
@@ -172,7 +127,6 @@ gc_get_fragment(_Meta, {Add,Rem}=_ORSet) ->
                  end, new(), TombstoneTokens).
 
 % Now we go through the orset removing all tokens present in the fragment.
--spec gc_replace_fragment(gc_meta(), gc_fragment(), orset()) -> orset().
 gc_replace_fragment(_Meta, {AddFrag,RemFrag}=_ORFrag, {Add0,Rem0}=_ORSet) ->
     Add1 = orddict:merge(fun ordsets_subtract/3, Add0, AddFrag),
     Rem1 = orddict:merge(fun ordsets_subtract/3, Rem0, RemFrag),
@@ -241,6 +195,48 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
 -ifdef(EQC).
 eqc_value_test_() ->
     crdt_statem_eqc:run(?MODULE, 1000).
+
+eqc_gc_test_() ->
+    crdt_gc_statem_eqc:run(?MODULE, 200).
+
+gen_op() ->
+    ?LET(Add, nat(),
+         oneof([{add, Add}, {remove, Add}])).
+
+gen_gc_ops() ->
+    ?LET(Add, nat(),
+         [{add, Add}, {remove, Add}]).
+
+%% Maybe model qc state as op based?
+init_state() ->
+    {0, dict:new(), []}.
+
+update_expected(ID, {add, Elem}, {Cnt0, Dict, L}) ->
+    Cnt = Cnt0+1,
+    ToAdd = {Elem, Cnt},
+    {A, R} = dict:fetch(ID, Dict),
+    {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict), [{ID, {add, Elem}}|L]};
+update_expected(ID, {remove, Elem}, {Cnt, Dict, L}) ->
+    {A, R} = dict:fetch(ID, Dict),
+    ToRem = [ {E, X} || {E, X} <- sets:to_list(A), E == Elem],
+    {Cnt, dict:store(ID, {A, sets:union(R, sets:from_list(ToRem))}, Dict), [{ID, {remove, Elem, ToRem}}|L]};
+update_expected(ID, {merge, SourceID}, {Cnt, Dict, L}) ->
+    {FA, FR} = dict:fetch(ID, Dict),
+    {TA, TR} = dict:fetch(SourceID, Dict),
+    MA = sets:union(FA, TA),
+    MR = sets:union(FR, TR),
+    {Cnt, dict:store(ID, {MA, MR}, Dict), [{ID,{merge, SourceID}}|L]};
+update_expected(ID, create, {Cnt, Dict, L}) ->
+    {Cnt, dict:store(ID, {sets:new(), sets:new()}, Dict), [{ID, create}|L]}.
+
+eqc_state_value({_Cnt, Dict, _L}) ->
+    {A, R} = dict:fold(fun(_K, {Add, Rem}, {AAcc, RAcc}) ->
+                               {sets:union(Add, AAcc), sets:union(Rem, RAcc)} end,
+                       {sets:new(), sets:new()},
+                       Dict),
+    Remaining = sets:subtract(A, R),
+    Values = [ Elem || {Elem, _X} <- sets:to_list(Remaining)],
+    lists:usort(Values).
 
 %% GC Property
 
