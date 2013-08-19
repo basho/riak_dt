@@ -50,7 +50,7 @@
 
 -export_type([pncounter/0, pncounter_op/0]).
 
--opaque pncounter()  :: [{Actor::term(), Inc::pos_integer(), Dec::pos_integer()}].
+-opaque pncounter()  :: [{Actor::riak_dt:actor(), Inc::pos_integer(), Dec::pos_integer()}].
 -type pncounter_op() :: riak_dt_gcounter:gcounter_op() | decrement_op().
 -type decrement_op() :: decrement | {decrement, pos_integer()}.
 -type pncounter_q()  :: positive | negative.
@@ -80,7 +80,7 @@ value(PNCnt) ->
 
 %% @doc query the parts of a `pncounter()'
 %% valid queries are `positive' or `negative'.
--spec value(pncounter_q(), pncounter()) -> pncounter().
+-spec value(pncounter_q(), pncounter()) -> integer().
 value(positive, PNCnt) ->
     lists:sum([Inc || {_Act,Inc,_Dec} <- PNCnt]);
 value(negative, PNCnt) ->
@@ -103,7 +103,7 @@ update({_IncrDecr, 0}, _Actor, PNCnt) ->
 update({increment, By}, Actor, PNCnt) when is_integer(By), By > 0 ->
     increment_by(By, Actor, PNCnt);
 update({increment, By}, Actor, PNCnt) when is_integer(By), By < 0 ->
-    update({decrement, By}, Actor, PNCnt);
+    update({decrement, -By}, Actor, PNCnt);
 update({decrement, By}, Actor, PNCnt) when is_integer(By), By > 0 ->
     decrement_by(By, Actor, PNCnt).
 
@@ -154,7 +154,7 @@ reset(Amt, Actor, Cntr)  ->
 -define(V2_VERS, 2).
 
 %% @doc Encode an effecient binary representation of `pncounter()'
--spec to_binary(pncounter()) -> binary().
+-spec to_binary(any_pncounter()) -> binary().
 to_binary(PNCnt) ->
     to_binary(?V2_VERS, PNCnt).
 
@@ -260,10 +260,12 @@ init_state() ->
     0.
 
 gen_op() ->
-    oneof([increment, {increment, gen_pos()}, decrement, {decrement, gen_pos()} ]).
-
-gen_pos()->
-    ?LET(X, int(), 1+abs(X)).
+    oneof([increment,
+           {increment, nat()},
+           decrement,
+           {decrement, nat()},
+           {increment, ?LET(X, nat(), -X)}
+          ]).
 
 update_expected(_ID, increment, Prev) ->
     Prev+1;

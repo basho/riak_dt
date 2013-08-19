@@ -112,7 +112,7 @@ equal(_, _) ->
 reset({_Value, TS}, _Actor) ->
     {undefined, TS+1}.
 
--define(TAG, 71).
+-define(TAG, 72).
 -define(V1_VERS, 1).
 
 %% @doc Encode an effecient binary representation of an `lwwreg()'

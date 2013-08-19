@@ -49,8 +49,8 @@
 
 -export_type([zorset/0, zorset_op/0]).
 
--opaque zorset() :: riak_dt_multi:multi().
--opaque zorset_op() :: {add, member(), score()} | {remove, member()} | {incr, member(), score()}.
+-type zorset() :: riak_dt_multi:multi().
+-type zorset_op() :: {add, member(), score()} | {remove, member()} | {incr, member(), score()}.
 
 -type zorset_q()  :: size | {contains, term()}.
 

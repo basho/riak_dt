@@ -89,14 +89,12 @@
 %% a dict of actor() -> Alias::integer() mappings
 %% Reason being to keep the vector clocks as small as
 %% possible and not repeat actor names over and over.
--type actorlist() :: orddict:orddict().
-
--type actor() :: term().
-
+-type actorlist() :: [ {actor(), integer()} ].
+-type actor() :: riak_dt:actor().
 %% a dict of member() -> member_info() mappings.
 %% The vclock is simply a more effecient way of storing
 %% knowledge about adds / removes than a UUID per add.
--type entries() :: orddict:orddict().
+-type entries() :: [{member(), member_info()}].
 
 -type member_info() :: {boolean(), riak_dt_vclock:vclock()}.
 -type member() :: term().
@@ -123,7 +121,8 @@ value(tombstones, {_Actors, Entries}) ->
 -spec update(vvorset_op(), actor(), vvorset()) -> vvorset().
 update({add, Elem}, Actor, ORSet) ->
     add_elem(Actor, ORSet, Elem);
-update({remove, Elem}, _Actor, {_Actors, Entries}=ORSet) ->
+update({remove, Elem}, _Actor, ORSet) ->
+    {_Actors, Entries} = ORSet,
     remove_elem(orddict:find(Elem, Entries), Elem, ORSet).
 
 -spec merge(vvorset(), vvorset()) -> vvorset().
@@ -162,8 +161,6 @@ vclock_merge(V10, V20, Actors1, Actors2, MergedActors) ->
 
 %% @Doc determine if the entry is active or removed.
 %% First argument is a remove vclock, second is an active vclock
--spec is_active_or_removed(riak_dt_vclock:vclock(), riak_dt_vclock:vclock(),
-                           actorlist(), actorlist(), actorlist()) -> member_info().
 is_active_or_removed(RemoveClock0, AddClock0, RemActors, AddActors, MergedActors) ->
     RemoveClock = riak_dt_vclock:replace_actors(orddict:to_list(RemActors), RemoveClock0, 2),
     AddClock = riak_dt_vclock:replace_actors(orddict:to_list(AddActors), AddClock0, 2),
@@ -212,7 +209,6 @@ actor_placeholder(Actor, Actors) ->
             {Placeholder, orddict:store(Actor, Placeholder, Actors)}
     end.
 
--spec remove_elem({ok, member_info()} | error, member(), vvorset()) -> vvorset().
 remove_elem({ok, {1, Vclock}}, Elem, {AL, Dict}) ->
     {AL, orddict:store(Elem, {0, Vclock}, Dict)};
 remove_elem({ok, {0, _Vclock}}, _Elem, ORSet) ->

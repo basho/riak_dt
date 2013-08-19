@@ -54,8 +54,8 @@
 
 -export_type([multi/0, binary_multi/0]).
 
--opaque multi() :: {schema(), valuelist()}.
--opaque binary_multi() :: binary(). %% A binary that from_binary/1 will accept
+-type binary_multi() :: binary(). %% A binary that from_binary/1 will accept
+-type multi() :: {schema(), valuelist()}.
 -type schema() :: riak_dt_vvorset:vvorset().
 -type field() :: {Name::term(), Type::crdt_mod()}.
 -type crdt_mod() :: riak_dt_gcounter | riak_dt_pncounter | riak_dt_lwwreg |
