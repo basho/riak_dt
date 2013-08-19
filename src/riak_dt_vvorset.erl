@@ -60,14 +60,6 @@
 -behaviour(riak_dt).
 -behaviour(riak_dt_gc).
 
--ifdef(EQC).
--include_lib("eqc/include/eqc.hrl").
--endif.
-
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
--endif.
-
 %% API
 -export([new/0, value/1, value/2, update/3, merge/2, equal/2]).
 -export([to_binary/1, from_binary/1]).
@@ -75,10 +67,20 @@
 
 -include("riak_dt_gc_meta.hrl").
 
-
 %% EQC API
 -ifdef(EQC).
+-include_lib("eqc/include/eqc.hrl").
+-compile(export_all).
 -export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0, generate/0]).
+
+-behaviour(crdt_gc_statem_eqc).
+-export([gen_gc_ops/0]).
+-export([gc_model_create/0, gc_model_update/3, gc_model_merge/2, gc_model_realise/1]).
+-export([gc_model_ready/2]).
+-endif.
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
 -endif.
 
 -export_type([vvorset/0, vvorset_op/0]).
@@ -182,10 +184,8 @@ equal(ORSet1, ORSet2) ->
 
 % We want to gc if Tombstone Elements make up more than `compact_proportion` of the elements in the vvorset.
 -spec gc_ready(gc_meta(), vvorset()) -> boolean().
-gc_ready(Meta, {Add,_Remove}=VVORSet) ->
-    TombstoneCount = orddict:size(tombstones(VVORSet)),
-    ElementCount   = orddict:size(Add),
-    ?SHOULD_GC(Meta, 1 - (TombstoneCount/ElementCount)).
+gc_ready(_Meta, _VVORSet) ->
+    false.
 
 % I don't know how we find the epoch
 -spec gc_epoch(vvorset()) -> riak_dt_gc:epoch().
@@ -195,18 +195,17 @@ gc_epoch(_ORSet) ->
 % Just two copies of all Elements that were present but are no longer, complete
 % with their vclocks.
 -spec gc_get_fragment(gc_meta(), vvorset()) -> gc_fragment().
-gc_get_fragment(_Meta, VVORSet) ->
-    Tombstones = tombstones(VVORSet),
-    {Tombstones,Tombstones}.
+gc_get_fragment(_Meta, _VVORSet) ->
+    {[], []}.
+    % Tombstones = tombstones(VVORSet),
+    % {Tombstones,Tombstones}.
 
 % Remove all tombstones, but only if the vclock in the fragment is not 
 % dominated by the vclock in the vvorset (the if dominated, suggests updates 
 % have happened since)
 -spec gc_replace_fragment(gc_meta(), gc_fragment(), vvorset()) -> vvorset().
-gc_replace_fragment(_Meta, {AddFrag,RemFrag}=_VVORFrag, {Add0,Rem0}=_VVORSet) ->
-    Add1 = orddict:filter(remove_fragment_filter(AddFrag), Add0),
-    Rem1 = orddict:filter(remove_fragment_filter(RemFrag), Rem0),
-    {Add1,Rem1}.
+gc_replace_fragment(_Meta, _VVORFrag, VVORSet) ->
+    VVORSet.
 
 %% Private
 -spec add_elem(actor(), vvorset(), member()) -> vvorset().
@@ -280,6 +279,9 @@ remove_fragment_filter(Fragment) ->
 eqc_value_test_() ->
     crdt_statem_eqc:run(?MODULE, 1000).
 
+eqc_gc_test_() ->
+    crdt_gc_statem_eqc:run(?MODULE, 200).
+
 generate() ->
     ?LET(Members, list(int()),
          lists:foldl(fun(M, Set) ->
@@ -291,6 +293,10 @@ generate() ->
 gen_op() ->
     ?LET({Add, Remove}, gen_elems(),
          oneof([{add, Add}, {remove, Remove}])).
+
+gen_gc_ops() ->
+    ?LET(Elem, nat(),
+         [{add, Elem}, {remove, Elem}]).
 
 gen_elems() ->
     ?LET(A, int(), {A, oneof([A, int()])}).
@@ -325,27 +331,33 @@ eqc_state_value({_Cnt, Dict}) ->
     Values = [ Elem || {Elem, _X} <- sets:to_list(Remaining)],
     lists:usort(Values).
 
-create_gc_expected() ->
+gc_model_create() ->
     {ordsets:new(), ordsets:new()}.
 
-update_gc_expected({add, X}, Actor, {Add,Remove}) ->
+gc_model_update({add, Elem}, Actor, {Add,Remove}) ->
     Unique = erlang:phash2({Actor, erlang:now()}),
-    {ordsets:add_element({X, Unique}, Add), ordsets:del_element(X,Remove)};
-update_gc_expected({remove, X}, _Actor, {Add,Remove}) ->
-    ToRem = [{A,Elem} || {A,Elem} <- ordsets:to_list(Add), Elem == X],
+    {ordsets:add_element({Elem, Unique}, Add), Remove};
+gc_model_update({remove, RemElem}, _Actor, {Add,Remove}) ->
+    ToRem = [{Elem,A} || {Elem,A} <- ordsets:to_list(Add), Elem == RemElem],
     Remove1 = ordsets:union(ordsets:from_list(ToRem),Remove),
     {Add, Remove1}.
-% update_gc_expected(_Operation, _Actor, State) ->
-%     State.
 
-merge_gc_expected({A1,R1}, {A2,R2}) ->
+gc_model_merge({A1,R1}, {A2,R2}) ->
     A3 = ordsets:union(A1,A2),
     R3 = ordsets:union(R1,R2),
     {A3,R3}.
 
-realise_gc_expected({Add,Remove}) ->
-    Values = [ X || {X, _A} <- ordsets:to_list(ordsets:subtract(Add,Remove))],
+gc_model_realise({Add,Remove}) ->
+    Values = [ Elem || {Elem, _A} <- ordsets:to_list(ordsets:subtract(Add,Remove))],
     lists:usort(Values).
+
+gc_model_ready(Meta, {Add,Remove}) ->
+    TotalTokens = ordsets:size(ordsets:union(Add,Remove)),
+    TombstoneTokens = ordsets:size(ordsets:intersection(Add,Remove)),
+    case TotalTokens of
+        0 -> false;
+        _ -> ?SHOULD_GC(Meta, 1 - (TombstoneTokens/TotalTokens))
+    end.
 
 -endif.
 
