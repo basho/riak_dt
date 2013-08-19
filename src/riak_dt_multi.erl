@@ -44,7 +44,7 @@
 
 %% API
 -export([new/0, value/1, value/2, update/3, merge/2, reset/2,
-         equal/2, to_binary/1, from_binary/1]).
+         equal/2, to_binary/1, from_binary/1, precondition_context/1]).
 
 %% EQC API
 -ifdef(EQC).
@@ -52,9 +52,10 @@
          init_state/0, generate/0]).
 -endif.
 
--export_type([multi/0]).
+-export_type([multi/0, binary_multi/0]).
 
 -opaque multi() :: {schema(), valuelist()}.
+-opaque binary_multi() :: binary(). %% A binary that from_binary/1 will accept
 -type schema() :: riak_dt_vvorset:vvorset().
 -type field() :: {Name::term(), Type::crdt_mod()}.
 -type crdt_mod() :: riak_dt_gcounter | riak_dt_pncounter | riak_dt_lwwreg |
@@ -241,6 +242,37 @@ reset([], _Actor, Map) ->
     Map;
 reset([Field | Rest], Actor, Map) ->
     reset(Rest, Actor, update({remove, Field}, Actor, Map)).
+
+%% @Doc a fragment of the Map that can be used for
+%% precondition operations.
+%% The schema is just the active Key Set
+%% The values are just those values that are present
+%% We can use either the values precondition_context
+%% or the whole CRDT
+-spec precondition_context(multi()) -> binary_multi().
+precondition_context({KeySet0, Values0}) ->
+    KeySet = riak_dt_vvorset:precondition_context(KeySet0),
+    Present = riak_dt_vvorset:value(KeySet),
+    Values = precondition_context(Present, Values0, orddict:new()),
+    to_binary({KeySet, Values}).
+
+precondition_context([], _, Acc) ->
+    Acc;
+precondition_context([{_Name, Type}=Field | Rest], Values, Acc) ->
+    V = orddict:fetch(Field, Values),
+    Ctx = precondition_context(Type, V),
+    precondition_context(Rest, Values, orddict:store(Field, Ctx, Acc)).
+
+precondition_context(Type, V) ->
+    case lists:member(precondition_context, Type:module_info(exports)) of
+        true ->
+            Type:precondition_context(V);
+        false ->
+            V   %% if there is no smaller precondition context, use the whole value
+                %% I suspect a smarter tihng would be use nothing, or
+                %% the value/1 value But that makes update more
+                %% complex (the context would no longer be a CRDT)
+    end.
 
 -define(TAG, 77).
 -define(V1_VERS, 1).
