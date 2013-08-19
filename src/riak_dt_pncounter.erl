@@ -34,6 +34,9 @@
 
 -module(riak_dt_pncounter).
 
+-behaviour(riak_dt).
+-behaviour(riak_dt_gc).
+
 -export([new/0, new/2, value/1, value/2, update/3, merge/2, equal/2]).
 -export([to_binary/1, from_binary/1]).
 -export([to_binary/2, from_binary/2, current_version/1, change_versions/3]).
@@ -55,8 +58,13 @@
 %% EQC API
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
--compile(export_all).
 -export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0, generate/0]).
+-compile(export_all).
+
+-behaviour(crdt_gc_statem_eqc).
+-export([gen_gc_ops/0]).
+-export([gc_model_create/0, gc_model_update/3, gc_model_merge/2, gc_model_realise/1]).
+-export([gc_model_ready/2]).
 -endif.
 
 -ifdef(TEST).
@@ -235,28 +243,65 @@ decrement_by(Decrement, Actor, PNCnt) ->
 
 % We're ready to GC if either of the gcounters are ready to GC.
 -spec gc_ready(gc_meta(), pncounter()) -> boolean().
-gc_ready(Meta, {Inc,Dec}) ->
-    riak_dt_gcounter:gc_ready(Meta, Inc)
-        orelse riak_dt_gcounter:gc_ready(Meta,Dec).
+gc_ready(Meta, PNCnt) ->
+    GCActors = length([Act || {{gc, _Epoch}=Act,_Inc,_Dec} <- PNCnt]),
+    ROActors = length(ro_actors(Meta, PNCnt)),
+    TotalActors = length(PNCnt),
+    case TotalActors of
+        0 -> false;
+        1 -> (GCActors > 1) or ?SHOULD_GC(Meta, ROActors/TotalActors)
+    end.
 
 -spec gc_epoch(pncounter()) -> riak_dt_gc:epoch().
-gc_epoch({Inc,Dec}) ->
-    Epoch = riak_dt_gcounter:gc_epoch(Inc),
-    Epoch = riak_dt_gcounter:gc_epoch(Dec),
+gc_epoch(PNCnt) ->
+    GCActors = [Act || {{gc, _Epoch}=Act,_Inc,_Dec} <- PNCnt],
+    {gc, Epoch} = hd(GCActors),
     Epoch.
 
 -spec gc_get_fragment(gc_meta(), pncounter()) -> gc_fragment().
-gc_get_fragment(Meta, {Inc,Dec}) ->
-    IncFragment = riak_dt_gcounter:gc_get_fragment(Meta, Inc),
-    DecFragment = riak_dt_gcounter:gc_get_fragment(Meta, Dec),
-    {IncFragment, DecFragment}.
+gc_get_fragment(Meta, PNCnt) ->
+    ROActors = ro_actors(Meta, PNCnt),
+    DeadActors = make_fragment(ROActors, PNCnt, []),
+    DeadActors.
 
 -spec gc_replace_fragment(gc_meta(), gc_fragment(), pncounter()) -> pncounter().
-gc_replace_fragment(Meta, {IncFrag,DecFrag}, {Inc,Dec}) ->
-    Inc1 = riak_dt_gcounter:gc_replace_fragment(Meta, IncFrag, Inc),
-    Dec1 = riak_dt_gcounter:gc_replace_fragment(Meta, DecFrag, Dec),
-    {Inc1,Dec1}.
+gc_replace_fragment(Meta, Frag, PNCnt) ->
+    Epoch = Meta?GC_META.epoch,
+    {AInc, ADec, PNCnt1} = subtract_dead(Frag, PNCnt, {0,0}),
+    PNCnt2 = prune_empty_nodes(PNCnt1),
+    [{{gc, Epoch},AInc,ADec} | PNCnt2].
 
+ro_actors(Meta, PNCnt) ->
+    PAs = ordsets:from_list(Meta?GC_META.primary_actors),
+    RoAs = ordsets:from_list(Meta?GC_META.readonly_actors),
+    CounterActors = ordsets:from_list([Actor || {Actor, _, _} <- PNCnt]),
+    ordsets:intersection(ordsets:union(PAs, RoAs), CounterActors).
+
+make_fragment(_ROActors, [], Dead) ->
+    Dead;
+% Ensure previous GCs are all removed.
+make_fragment(ROActors, [{{gc, _Epoch}=Act,Inc,Dec}|PNCnt], Dead) ->
+    make_fragment(ROActors, PNCnt, [{Act,Inc,Dec}|Dead]);
+% And ensure any non-read-only actors are removed too
+make_fragment(ROActors, [{Act,Inc,Dec}|PNCnt], Dead) ->
+    case ordsets:is_element(Act, ROActors) of
+        true ->  make_fragment(ROActors, PNCnt, Dead);
+        false -> make_fragment(ROActors, PNCnt, [{Act,Inc,Dec}|Dead])
+    end.
+
+subtract_dead([], PNCnt, {Inc,Dec}) ->
+    {Inc, Dec, PNCnt};
+subtract_dead([{Actor,SubInc,SubDec}|Dead], PNCnt, {Inc,Dec}) ->
+    {AInc1, ADec1, NewPNCnt} = case lists:keytake(Actor, 1, PNCnt) of
+                                    false ->
+                                        {-SubInc, -SubDec, PNCnt};
+                                    {value, {_,AInc,ADec}, ModPNCnt} ->
+                                        {AInc-SubInc, ADec-SubDec, ModPNCnt}
+                               end,
+    subtract_dead(Dead, [{Actor,AInc1,ADec1}|NewPNCnt], {Inc-SubInc,Dec-SubDec}).
+
+prune_empty_nodes(PNCnt) ->
+    [Pair || {_,Inc,Dec}=Pair <- PNCnt, Inc =/= 0, Dec =/= 0].
 
 %% ===================================================================
 %% EUnit tests
@@ -267,6 +312,9 @@ gc_replace_fragment(Meta, {IncFrag,DecFrag}, {Inc,Dec}) ->
 %% EQC generator
 eqc_value_test_() ->
     crdt_statem_eqc:run(?MODULE, 1000).
+
+eqc_gc_test_() ->
+    crdt_statem_eqc:run(?MODULE, 200).
 
 generate() ->
     ?LET(Ops, list(gen_op()),
@@ -286,6 +334,9 @@ gen_op() ->
            {increment, ?LET(X, nat(), -X)}
           ]).
 
+gen_gc_ops() ->
+    [].
+
 update_expected(_ID, increment, Prev) ->
     Prev+1;
 update_expected(_ID, decrement, Prev) ->
@@ -299,6 +350,35 @@ update_expected(_ID, _Op, Prev) ->
 
 eqc_state_value(S) ->
     S.
+
+% In my gc model, I'm thinking of it as a log of update operations (each with a unique ID).
+gc_model_create() ->
+    ordsets:new().
+
+gc_model_update(increment, Actor, Cnt) ->
+    add_change(1, Actor, Cnt);
+gc_model_update({increment, Add}, Actor, Cnt) ->
+    add_change(Add, Actor, Cnt);
+gc_model_update(decrement, Actor, Cnt) ->
+    add_change(-1, Actor, Cnt);
+gc_model_update({decrement, Dec}, Actor, Cnt) ->
+    add_change(-abs(Dec), Actor, Cnt).
+
+add_change(Change, Actor, Cnt) ->
+    ID = erlang:phash2({Actor, erlang:now()}),
+    ordsets:add_element({ID, Change}, Cnt).
+
+gc_model_merge(Cnt1, Cnt2) ->
+    ordsets:union(Cnt1, Cnt2).
+
+gc_model_realise(Cnt) ->
+    ordsets:fold(fun ({_ID,Add},Sum) ->
+            Add + Sum
+        end, 0, Cnt).
+
+% TODO: this should fail more (or at all)
+gc_model_ready(_Meta, _Cnt) ->
+    false.
 -endif.
 
 new_test() ->

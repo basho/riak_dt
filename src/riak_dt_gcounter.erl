@@ -221,7 +221,7 @@ gen_op() ->
     oneof([increment, {increment, gen_pos()}]).
 
 gen_gc_ops() ->
-    list(gen_op()).
+    [].
 
 gen_pos()->
     ?LET(X, int(), 1+abs(X)).
