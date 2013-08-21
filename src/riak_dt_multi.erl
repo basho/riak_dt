@@ -49,7 +49,7 @@
 %% EQC API
 -ifdef(EQC).
 -export([gen_op/0, update_expected/3, eqc_state_value/1,
-         init_state/0, generate/0]).
+         init_state/0, generate/0, gen_field/0]).
 -endif.
 
 -export_type([multi/0, binary_multi/0]).
@@ -251,7 +251,7 @@ reset([Field | Rest], Actor, Map) ->
 %% or the whole CRDT
 -spec precondition_context(multi()) -> binary_multi().
 precondition_context({KeySet0, Values0}) ->
-    KeySet = riak_dt_vvorset:precondition_context(KeySet0),
+    KeySet = riak_dt_vvorset:from_binary(riak_dt_vvorset:precondition_context(KeySet0)),
     Present = riak_dt_vvorset:value(KeySet),
     Values = precondition_context(Present, Values0, orddict:new()),
     to_binary({KeySet, Values}).
@@ -301,18 +301,15 @@ gen_op() ->
 gen_update() ->
     ?LET(Field, gen_field(),
          oneof([{add, Field}, {remove, Field},
-                {insert, Field, gen_field_insert(Field)},
                 {update, Field, gen_field_op(Field)}])).
 
 gen_field() ->
-    {binary(), oneof([riak_dt_pncounter, riak_dt_vvorset, riak_dt_lwwreg,
-                       riak_dt_zorset, riak_dt_multi])}.%%riak_dt_gcounter])}.
+    {binary(), oneof([riak_dt_pncounter, riak_dt_vvorset,
+                      riak_dt_lwwreg,
+                      riak_dt_multi])}.
 
 gen_field_op({_Name, Type}) ->
     Type:gen_op().
-
-gen_field_insert({_Name, Type}) ->
-     Type:generate().
 
 generate() ->
     ?LET(Fields, list(gen_field()),
@@ -382,26 +379,7 @@ eqc_state_value({_Cnt, Dict}) ->
                 sets:to_list(Remaining)),
     [{K, Type:value(V)} || {{_Name, Type}=K, V} <- dict:to_list(Res)].
 
-%% On shrinking this fails with some badarge shit
-%% {'EXIT',
-%%     {badarg,
-%%         [{dict,fetch,
-%%              [5,
-%%               {dict,1,16,16,8,80,48,
-%%                   {[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[]},
-%%                   {{[[0|
-%%                       {{set,0,16,16,8,80,48,
-%%                            {[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[]},
-%%                            {{[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],
-%%                              []}}},
-%%                        {set,0,16,16,8,80,48,
-%%                            {[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[]},
-%%                            {{[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],
-%%                              []}}}}]],
-%%                     [],[],[],[],[],[],[],[],[],[],[],[],[],[],[]}}}],
-%%              [{file,"dict.erl"},{line,125}]},
-%%          {riak_dt_multi,get_for_key,3,
-%%              [{file,"src/riak_dt_multi.erl"},{line,307}]},
+
 get_for_key({_N, T}=K, ID, Dict) ->
     {A, R} = dict:fetch(ID, Dict),
     Remaining = sets:subtract(A, R),
