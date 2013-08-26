@@ -247,7 +247,7 @@ reset([Field | Rest], Actor, Map) ->
 %% precondition operations.
 %% The schema is just the active Key Set
 %% The values are just those values that are present
-%% We can use either the values precondition_context
+%% We use either the values precondition_context
 %% or the whole CRDT
 -spec precondition_context(multi()) -> binary_multi().
 precondition_context({KeySet0, Values0}) ->
