@@ -107,10 +107,15 @@ value(_, ORSet) ->
 
 update({add, Elem}, Actor, {ADict0, RDict}) ->
     ADict = add_elem(Actor, ADict0, Elem),
-    {ADict, RDict};
+    {ok, {ADict, RDict}};
 update({remove, Elem}, _Actor, {ADict, RDict0}) ->
-    RDict = remove_elem(orddict:find(Elem, ADict), Elem, RDict0),
-    {ADict, RDict}.
+    case remove_elem(orddict:find(Elem, ADict), Elem, RDict0) of
+        {error, _}=Error ->
+            Error;
+        RDict ->
+            {ok, {ADict, RDict}}
+    end.
+
 merge({ADict1, RDict1}, {ADict2, RDict2}) ->
     MergedADict = merge_dicts(ADict1, ADict2),
     MergedRDict = merge_dicts(RDict1, RDict2),
@@ -131,9 +136,9 @@ remove_elem({ok, Set0}, Elem, RDict) ->
         error ->
             orddict:store(Elem, Set0, RDict)
     end;
-remove_elem(error, _Elem, RDict) ->
-    %% Can't remove an element not in the ADict, warn??
-    RDict.
+remove_elem(error, Elem, _RDict) ->
+    %% Can't remove an element not in the ADict
+    {error, {precondition, {not_present, Elem}}}.
 
 add_unique({ok, Set0}, Dict, Elem, Unique) ->
     Set = ordsets:add_element(Unique, Set0),

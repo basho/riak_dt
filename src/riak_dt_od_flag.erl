@@ -83,9 +83,9 @@ value(_, Flag) ->
 update(enable, Actor, {Enables,Disables}=_Flag) ->
     Token = unique_token(Actor),
     Enables1 = ordsets:add_element(Token,Enables),
-    {Enables1, Disables};
+    {ok, {Enables1, Disables}};
 update(disable, _Actor, {Enables,Disables}=_Flag) ->
-    {Enables,ordsets:union(Enables,Disables)}.
+    {ok, {Enables,ordsets:union(Enables,Disables)}}.
 
 merge({EA,DA}=_FA, {EB,DB}=_FB) ->
     Enables = ordsets:union(EA,EB),
@@ -131,14 +131,14 @@ new_test() ->
 
 update_enable_test() ->
     F0 = new(),
-    F1 = update(enable, 1, F0),
+    {ok, F1} = update(enable, 1, F0),
     ?assertEqual(on, value(F1)).
 
 update_enable_multi_test() ->
     F0 = new(),
-    F1 = update(enable, 1, F0),
-    F2 = update(disable, 1, F1),
-    F3 = update(enable, 1, F2),
+    {ok, F1} = update(enable, 1, F0),
+    {ok, F2} = update(disable, 1, F1),
+    {ok, F3} = update(enable, 1, F2),
     ?assertEqual(on, value(F3)).
 
 merge_offs_test() ->
@@ -147,25 +147,25 @@ merge_offs_test() ->
 
 merge_simple_test() ->
     F0 = new(),
-    F1 = update(enable, 1, F0),
+    {ok, F1} = update(enable, 1, F0),
     ?assertEqual(on, value(merge(F1, F0))),
     ?assertEqual(on, value(merge(F0, F1))),
     ?assertEqual(on, value(merge(F1, F1))).
 
 merge_concurrent_test() ->
     F0 = new(),
-    F1 = update(enable, 1, F0),
-    F2 = update(disable, 1, F1),
-    F3 = update(enable, 1, F1),
+    {ok, F1} = update(enable, 1, F0),
+    {ok, F2} = update(disable, 1, F1),
+    {ok, F3} = update(enable, 1, F1),
     ?assertEqual(on, value(merge(F1,F3))),
     ?assertEqual(off, value(merge(F1,F2))),
     ?assertEqual(on, value(merge(F2,F3))).
 
 binary_roundtrip_test() ->
     F0 = new(),
-    F1 = update(enable, 1, F0),
-    F2 = update(disable, 1, F1),
-    F3 = update(enable, 2, F2),
+    {ok, F1} = update(enable, 1, F0),
+    {ok, F2} = update(disable, 1, F1),
+    {ok, F3} = update(enable, 2, F2),
     ?assert(equal(from_binary(to_binary(F3)), F3)).
 
 -endif.

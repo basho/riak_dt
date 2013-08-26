@@ -84,7 +84,7 @@ update({remove, Elem}, Actor, ZORSet) ->
 update({incr, Elem, By}, Actor, ZORSet) when By /= 0 ->
     riak_dt_multi:update({update, [{update, ?ELEM(Elem), counter_op(By)}]}, Actor, ZORSet);
 update({incr, _Elem, _By}, _Actor, ZORSet) ->
-    ZORSet.
+    {ok, ZORSet}.
 
 %% Create a counter op the pncounter understands
 counter_op(Amt) when Amt < 0 ->

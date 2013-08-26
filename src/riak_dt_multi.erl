@@ -143,40 +143,53 @@ update({update, Ops}, Actor, {Schema, Values}) ->
 
 %% @Private
 apply_ops([], _Actor, Schema, Values) ->
-    {Schema, Values};
+    {ok, {Schema, Values}};
 apply_ops([{update, {_Name, Mod}=Key, Op} | Rest], Actor, Schema, Values) ->
     %% Add the key to schema
-    NewSchema = riak_dt_vvorset:update({add, Key}, Actor, Schema),
+    {ok, NewSchema} = riak_dt_vvorset:update({add, Key}, Actor, Schema),
     %% Update the value
-    InitialValue0 = Mod:new(),
-    InitialValue = Mod:update(Op, Actor, InitialValue0),
-    NewValues = orddict:update(Key, update_fun(Mod, Op, Actor), InitialValue, Values),
-    apply_ops(Rest, Actor, NewSchema, NewValues);
+    InitialValue = fetch_with_default(Key, Values, Mod:new()),
+    case Mod:update(Op, Actor, InitialValue) of
+        {ok, NewValue} ->
+            NewValues = orddict:store(Key, NewValue, Values),
+            apply_ops(Rest, Actor, NewSchema, NewValues);
+        Error ->
+            Error
+    end;
 apply_ops([{remove, {_Name, Type}=Key} | Rest], Actor, Schema, Values) ->
-    NewSchema = riak_dt_vvorset:update({remove, Key}, Actor, Schema),
     %% Do a reset remove, we keep the value as a tombstone, but we negate it (as best we can)
     Current = value({get_crdt, Key}, {Schema, Values}),
-    NewValues = case Current of
-                error -> Values;
-                CRDT ->
-                    Tombstone = Type:reset(CRDT, Actor),
-                    orddict:store(Key, Tombstone, Values)
-            end,
-    apply_ops(Rest, Actor, NewSchema, NewValues);
+    case Current of
+        error -> {error, {precondition, {not_present, Key}}};
+        CRDT ->
+            {ok, NewSchema} = riak_dt_vvorset:update({remove, Key}, Actor, Schema),
+            Tombstone = Type:reset(CRDT, Actor),
+            NewValues = orddict:store(Key, Tombstone, Values),
+            apply_ops(Rest, Actor, NewSchema, NewValues)
+    end;
 apply_ops([{insert, {_Name, Mod}=Key, CRDT} | Rest], Actor, Schema, Values) ->
     %% Add the key to the schema
     %% Update the value, setting value to `CRDT' or Merging
     %% if key is already present
-    NewSchema = riak_dt_vvorset:update({add, Key}, Actor, Schema),
+    {ok, NewSchema} = riak_dt_vvorset:update({add, Key}, Actor, Schema),
     NewValues = orddict:update(Key, fun(V) -> Mod:merge(V, CRDT) end,
                                CRDT, Values),
+    apply_ops(Rest, Actor, NewSchema, NewValues);
+apply_ops([{add, {_Name, Mod}=Key} | Rest], Actor, Schema, Values) ->
+    %% Add the key to schema
+    {ok, NewSchema} = riak_dt_vvorset:update({add, Key}, Actor, Schema),
+    %% Update the value, adding an empty crdt if not present
+    NewValues = orddict:update(Key, fun(V) -> V end, Mod:new(), Values),
     apply_ops(Rest, Actor, NewSchema, NewValues).
 
-%% @Private
-update_fun(Mod, Op, Actor) ->
-    fun(CRDT) ->
-            Mod:update(Op, Actor, CRDT)
-    end.
+
+fetch_with_default(Key, Values, Default) ->
+    fetch_with_default(orddict:find(Key, Values), Default).
+
+fetch_with_default({ok, Value}, _Default) ->
+    Value;
+fetch_with_default(error, Default) ->
+    Default.
 
 %% @Doc merge two `multi()'s.
 %% Performs a merge on the key set (schema) and then a pairwise
@@ -240,8 +253,12 @@ reset(Map, Actor) ->
 
 reset([], _Actor, Map) ->
     Map;
-reset([Field | Rest], Actor, Map) ->
-    reset(Rest, Actor, update({remove, Field}, Actor, Map)).
+reset([Field | Rest], Actor, Map0) ->
+    %% No need to worry about the precondition error,
+    %% Always called with the current key set
+    %% @see reset/2
+    {ok, Map} = update({remove, Field}, Actor, Map0),
+    reset(Rest, Actor, Map).
 
 %% @Doc a fragment of the Map that can be used for
 %% precondition operations.
@@ -396,14 +413,14 @@ get_for_key({_N, T}=K, ID, Dict) ->
 
 query_test() ->
     Map = new(),
-    Map1 = update({update, [{add, {c, riak_dt_pncounter}},
-                            {add, {s, riak_dt_vvorset}},
-                            {add, {m, riak_dt_multi}},
-                            {add, {l, riak_dt_lwwreg}},
-                            {add, {l2, riak_dt_lwwreg}}]}, a1, Map),
+    {ok, Map1} = update({update, [{add, {c, riak_dt_pncounter}},
+                                  {add, {s, riak_dt_vvorset}},
+                                  {add, {m, riak_dt_multi}},
+                                  {add, {l, riak_dt_lwwreg}},
+                                  {add, {l2, riak_dt_lwwreg}}]}, a1, Map),
     ?assertEqual(5, value(size, Map1)),
 
-    Map2 = update({update, [{remove, {l2, riak_dt_lwwreg}}]}, a2, Map1),
+    {ok, Map2} = update({update, [{remove, {l2, riak_dt_lwwreg}}]}, a2, Map1),
     ?assertEqual(4, value(size, Map2)),
 
     ?assertEqual([{c, riak_dt_pncounter},
@@ -414,7 +431,7 @@ query_test() ->
     ?assert(value({contains, {c, riak_dt_pncounter}}, Map2)),
     ?assertNot(value({contains, {l2, riak_dt_lwwreg}}, Map2)),
 
-    Map3 = update({update, [{update, {c, riak_dt_pncounter}, {increment, 33}},
+    {ok, Map3} = update({update, [{update, {c, riak_dt_pncounter}, {increment, 33}},
                             {update, {l, riak_dt_lwwreg}, {assign, lww_val, 77}}]}, a3, Map2),
 
     ?assertEqual(33, value({get, {c, riak_dt_pncounter}}, Map3)),

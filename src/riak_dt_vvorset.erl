@@ -120,7 +120,7 @@ value(tombstones, {_Actors, Entries}) ->
 
 -spec update(vvorset_op(), actor(), vvorset()) -> vvorset().
 update({add, Elem}, Actor, ORSet) ->
-    add_elem(Actor, ORSet, Elem);
+    {ok, add_elem(Actor, ORSet, Elem)};
 update({remove, Elem}, _Actor, ORSet) ->
     {_Actors, Entries} = ORSet,
     remove_elem(orddict:find(Elem, Entries), Elem, ORSet).
@@ -210,13 +210,13 @@ actor_placeholder(Actor, Actors) ->
     end.
 
 remove_elem({ok, {1, Vclock}}, Elem, {AL, Dict}) ->
-    {AL, orddict:store(Elem, {0, Vclock}, Dict)};
+    {ok, {AL, orddict:store(Elem, {0, Vclock}, Dict)}};
 remove_elem({ok, {0, _Vclock}}, _Elem, ORSet) ->
-    ORSet;
-remove_elem(_, _Elem, ORSet) ->
+    {ok, ORSet};
+remove_elem(_, Elem, _ORSet) ->
     %% What @TODO?
     %% Throw an error? (seems best)
-    ORSet.
+    {error, {precondition, {not_present, Elem}}}.
 
 %% @doc the precondition context is a binary representation of a fragment of the CRDT
 %% that operations with pre-conditions can be applied too.
@@ -300,12 +300,12 @@ eqc_state_value({_Cnt, Dict}) ->
 
 query_test() ->
     Set = new(),
-    Set2 = update({add, bob}, a1, Set),
-    Set3 = update({add, pete}, a2, Set2),
-    Set4 = update({add, sheila}, a3, Set3),
-    Set5 = update({remove, pete}, a3, Set4),
-    Set6 = update({remove, bob}, a2, Set5),
-    Set7 = update({add, dave}, a1, Set6),
+    {ok, Set2} = update({add, bob}, a1, Set),
+    {ok, Set3} = update({add, pete}, a2, Set2),
+    {ok, Set4} = update({add, sheila}, a3, Set3),
+    {ok, Set5} = update({remove, pete}, a3, Set4),
+    {ok, Set6} = update({remove, bob}, a2, Set5),
+    {ok, Set7} = update({add, dave}, a1, Set6),
     ?assertEqual(2, value(size, Set7)),
     ?assert(value({contains, sheila}, Set7)),
     ?assertNot(value({contains, bob}, Set7)),

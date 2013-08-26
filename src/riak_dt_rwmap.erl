@@ -60,26 +60,37 @@ value(_, Map) ->
 update({update, Ops}, Actor, Map) ->
     apply_ops(Ops, Actor, Map).
 
-
 apply_ops([], _Actor, Map) ->
-    Map;
-apply_ops([{update, {_Name, Mod}=Key, Op} | Rest], Actor, Map) ->
-    InitialValueClock =  riak_dt_vclock:increment(Actor, riak_dt_vclock:fresh()),
-    InitialValue = Mod:update(Op, Actor, Mod:new()),
-    Initial = #field{value=InitialValue, clock=InitialValueClock},
-    Map2 = orddict:update(Key, update_fun(Mod, Op, Actor), Initial, Map),
-    apply_ops(Rest, Actor, Map2);
+    {ok, Map};
+apply_ops([{update, {_Name, Mod}=Key, Op} | Rest], Actor, Map0) ->
+    #field{value=Value, clock=Clock}=Field = get_field(orddict:find(Key, Map0), Mod),
+    case Mod:update(Op, Actor, Value) of
+        {ok, NewValue} ->
+            Clock2 = riak_dt_vclock:increment(Actor, Clock),
+            Map = orddict:store(Key, Field#field{value=NewValue,
+                                                 clock=Clock2}),
+            apply_ops(Rest, Actor, Map);
+        Error ->
+            Error
+    end;
 apply_ops([{remove, Key} | Rest], Actor, Map) ->
-    Map2 = tombstone_field(orddict:find(Key, Map), Actor, Key, Map),
-    apply_ops(Rest, Actor, Map2).
+    case tombstone_field(orddict:find(Key, Map), Actor, Key, Map) of
+        precondition_failed ->
+            {error, {precondition, {not_present, Key}}};
+        Map2 ->
+            apply_ops(Rest, Actor, Map2)
+    end;
+apply_ops([{add, Key} | Rest], Actor, Map0) ->
+    #field{clock=Clock}=Field = get_field(Key, Map0),
+    Field2 = Field#field{clock=riak_dt_vclock:increment(Actor, Clock)},
+    Map = orddict:store(Key, Field2, Map0),
+    apply_ops(Rest, Actor, Map).
 
-%% Private
-update_fun(Mod, Op, Actor) ->
-    fun(Field=#field{clock=Clock, value=V}) ->
-            Field#field{clock=riak_dt_vclock:increment(Actor, Clock),
-                        value=Mod:update(Op, Actor, V),
-                        active=true}
-    end.
+
+get_field({ok, Field}, _Mod) ->
+    Field;
+get_field(error, Mod) ->
+    #field{value=Mod:new(), clock=riak_dt_vclock:fresh()}.
 
 tombstone_field({ok, Field=#field{active=true}}, Actor, {_Name, Type}=Key, Map) ->
     #field{clock=Clock} = Field,
@@ -90,10 +101,8 @@ tombstone_field({ok, Field=#field{active=true}}, Actor, {_Name, Type}=Key, Map) 
 tombstone_field({ok, #field{active=false}}, _Actor, _Key, Map) ->
     %% Can't remove a field that's removed, right?
     Map;
-tombstone_field(_, _Actor, _Key, Map) ->
-    %% What @TODO? when you remove a field that isn't present??
-    %% Throw an error? (seems best)
-    Map.
+tombstone_field(_, _Actor, _Key, _Map) ->
+    precondition_failed.
 
 merge(Map1, Map2) ->
     %% for every field:

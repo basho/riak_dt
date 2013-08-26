@@ -115,7 +115,8 @@ create(Mod) ->
     Mod:new().
 
 update(Mod, Op, {ID, C}) ->
-    Mod:update(Op, ID, C).
+    {ok, C2} =Mod:update(Op, ID, C),
+    C2.
 
 merge(Mod, {_IDS, CS}, {_IDD, CD}) ->
     Mod:merge(CS, CD).
