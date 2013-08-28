@@ -114,8 +114,8 @@ equal(_, _) ->
 
 %% @Doc reset to default value
 -spec reset(lwwreg(), term()) -> lwwreg().
-reset({_Value, TS}, _Actor) ->
-    {undefined, TS}.
+reset({_Value, _TS}, _Actor) ->
+    {undefined, 0}.
 
 -define(TAG, 72).
 -define(V1_VERS, 1).
