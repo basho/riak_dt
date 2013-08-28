@@ -67,16 +67,16 @@ next_state(S, _V, _C) ->
 
 %% Precondition, checked before command is added to the command sequence
 precondition(S, {call,?MODULE, update, [_Mod, _Op, Vnode]}) ->
-    #state{vnodes=Vnodes} = S,
-    is_member(Vnode, Vnodes);
+     #state{vnodes=Vnodes} = S,
+     is_member(Vnode, Vnodes);
 precondition(S, {call,?MODULE, Fun, [_Mod, Vnode1, Vnode2]}) when Fun /= create ->
-    #state{vnodes=Vnodes} = S,
-    is_member(Vnode1, Vnodes) and is_member(Vnode2, Vnodes);
+     #state{vnodes=Vnodes} = S,
+     is_member(Vnode1, Vnodes) and is_member(Vnode2, Vnodes);
 precondition(_S, {call, _Mod, _Fun, _Args}) ->
     true.
 
 is_member(Vnode, Vnodes) ->
-    lists:keyfind(Vnode, 1, Vnodes) /= false.
+    lists:member(Vnode, Vnodes).
 
 %% Postcondition, checked after command has been evaluated
 %% OBS: S is the state before next_state(S,_,<command>)
@@ -91,13 +91,13 @@ prop_converge(NumTests, Mod) ->
 prop_converge(Mod) ->
     ?FORALL(Cmds,commands(?MODULE, #state{mod=Mod, mod_state=Mod:init_state()}),
             begin
-                {H,S,Res} = run_commands(?MODULE,Cmds),
+                {_H,S,Res} = run_commands(?MODULE,Cmds),
                 Merged = merge_crdts(Mod, S#state.vnodes),
                 MergedVal = Mod:value(Merged),
                 ExpectedValue = Mod:eqc_state_value(S#state.mod_state),
                 ?WHENFAIL(
                    %% History: ~p\nState: ~p\ H,S,
-                   io:format("History: ~p\nState: ~p", [H,S]),
+                   io:format("History: ~p\nState: ~p", [h,s]),
                    conjunction([{res, equals(Res, ok)},
                                 {total, equals(sort(Mod, MergedVal), sort(Mod, ExpectedValue))}]))
             end).
@@ -115,8 +115,13 @@ create(Mod) ->
     Mod:new().
 
 update(Mod, Op, {ID, C}) ->
-    {ok, C2} =Mod:update(Op, ID, C),
-    C2.
+    %% Fix this for expected errors etc.
+    case Mod:update(Op, ID, C) of
+        {ok, C2} ->
+            C2;
+        _Error ->
+            C
+    end.
 
 merge(Mod, {_IDS, CS}, {_IDD, CD}) ->
     Mod:merge(CS, CD).

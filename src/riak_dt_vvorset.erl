@@ -83,7 +83,9 @@
 -opaque vvorset() :: {actorlist(), entries()}.
 -opaque binary_vvorset() :: binary(). %% A binary that from_binary/1 will operate on.
 
--type vvorset_op() :: {add, member()} | {remove, member()}.
+-type vvorset_op() :: {add, member()} | {remove, member()} |
+                      {add_all, [member()]} | {remove_all, [member()]} |
+                      {update, [vvorset_op()]}.
 -type vvorset_q()  :: size | {contains, term()} | tombstones.
 
 %% a dict of actor() -> Alias::integer() mappings
@@ -119,11 +121,46 @@ value(tombstones, {_Actors, Entries}) ->
     [K || {K, {Active, _Vclock}} <- orddict:to_list(Entries), Active == 0].
 
 -spec update(vvorset_op(), actor(), vvorset()) -> vvorset().
+%% @Doc take a list of Set operations and apply them to the set.
+%% NOTE: either _all_ are applied, or _none_ are.
+update({update, Ops}, Actor, ORSet) ->
+    %% Sort ops, so adds are before removes.
+    apply_ops(lists:sort(Ops), Actor, ORSet);
 update({add, Elem}, Actor, ORSet) ->
     {ok, add_elem(Actor, ORSet, Elem)};
 update({remove, Elem}, _Actor, ORSet) ->
     {_Actors, Entries} = ORSet,
-    remove_elem(orddict:find(Elem, Entries), Elem, ORSet).
+    remove_elem(orddict:find(Elem, Entries), Elem, ORSet);
+update({add_all, Elems}, Actor, ORSet) ->
+    ORSet2 = lists:foldl(fun(E, S) ->
+                        add_elem(Actor, S, E) end,
+                ORSet,
+                         Elems),
+    {ok, ORSet2};
+%% @Doc note: this is atomic, either _all_ `Elems` are removed, or
+%% none are.
+update({remove_all, Elems}, Actor, ORSet) ->
+    remove_all(Elems, Actor, ORSet).
+
+apply_ops([], _Actor, ORSet) ->
+    {ok, ORSet};
+apply_ops([Op | Rest], Actor, ORSet) ->
+    case update(Op, Actor, ORSet) of
+        {ok, ORSet} ->
+            apply_ops(Rest, Actor, ORSet);
+        Error ->
+            Error
+    end.
+
+remove_all([], _Actor, ORSet) ->
+    {ok, ORSet};
+remove_all([Elem | Rest], Actor, ORSet) ->
+    case update({remove, Elem}, Actor, ORSet) of
+        {ok, ORSet2} ->
+            remove_all(Rest, Actor, ORSet2);
+        Error ->
+            Error
+    end.
 
 -spec merge(vvorset(), vvorset()) -> vvorset().
 merge({Actors1, Entries1}, {Actors2, Entries2}) ->
@@ -178,13 +215,14 @@ equal(ORSet1, ORSet2) ->
 %% @Doc reset the set to empty, essentially have `Actor' remove all present members.
 -spec reset(vvorset(), actor()) -> vvorset().
 reset(Set, Actor) ->
-    Members = value(Actor),
+    Members = value(Set),
     reset(Members, Actor, Set).
 
 reset([], _Actor, Set) ->
     Set;
 reset([Member | Rest], Actor, Set) ->
-    reset(Rest, Actor, update({remove, Member}, Actor, Set)).
+    {ok, Set2} = update({remove, Member}, Actor, Set),
+    reset(Rest, Actor, Set2).
 
 %% Private
 -spec add_elem(actor(), vvorset(), member()) -> vvorset().
@@ -260,11 +298,9 @@ generate() ->
 
 %% EQC generator
 gen_op() ->
-    ?LET({Add, Remove}, gen_elems(),
-         oneof([{add, Add}, {remove, Remove}])).
-
-gen_elems() ->
-    ?LET(A, int(), {A, oneof([A, int()])}).
+    oneof([{add, int()}, {remove, int()},
+           {add_all, list(int())},
+           {remove_all, list(int())}]).
 
 init_state() ->
     {0, dict:new()}.
@@ -285,7 +321,27 @@ update_expected(ID, {merge, SourceID}, {Cnt, Dict}) ->
     MR = sets:union(FR, TR),
     {Cnt, dict:store(ID, {MA, MR}, Dict)};
 update_expected(ID, create, {Cnt, Dict}) ->
-    {Cnt, dict:store(ID, {sets:new(), sets:new()}, Dict)}.
+    {Cnt, dict:store(ID, {sets:new(), sets:new()}, Dict)};
+update_expected(ID, {add_all, Elems}, State) ->
+    lists:foldl(fun(Elem, S) ->
+                       update_expected(ID, {add, Elem}, S) end,
+               State,
+               Elems);
+update_expected(ID, {remove_all, Elems}, {_Cnt, Dict}=State) ->
+    %% Only if _all_ elements are in the set do we remove any elems
+    {A, R} = dict:fetch(ID, Dict),
+    Members = [E ||  {E, _X} <- sets:to_list(sets:union(A,R))],
+    case sets:is_subset(sets:from_list(Elems), sets:from_list(Members)) of
+        true ->
+            lists:foldl(fun(Elem, S) ->
+                                update_expected(ID, {remove, Elem}, S) end,
+                        State,
+                        Elems);
+        false ->
+            State
+    end.
+
+
 
 eqc_state_value({_Cnt, Dict}) ->
     {A, R} = dict:fold(fun(_K, {Add, Rem}, {AAcc, RAcc}) ->

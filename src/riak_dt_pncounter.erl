@@ -148,7 +148,7 @@ reset(Amt, Actor, Cntr) when Amt > 0 ->
     {ok, Cntr2} = update({decrement, Amt}, Actor, Cntr),
     Cntr2;
 reset(Amt, Actor, Cntr)  ->
-    {ok, Cntr2} = update({increment, Amt}, Actor, Cntr),
+    {ok, Cntr2} = update({increment, Amt*-1}, Actor, Cntr),
     Cntr2.
 
 -define(TAG, 71).

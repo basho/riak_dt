@@ -158,14 +158,18 @@ apply_ops([{update, {_Name, Mod}=Key, Op} | Rest], Actor, Schema, Values) ->
     end;
 apply_ops([{remove, {_Name, Type}=Key} | Rest], Actor, Schema, Values) ->
     %% Do a reset remove, we keep the value as a tombstone, but we negate it (as best we can)
-    Current = value({get_crdt, Key}, {Schema, Values}),
-    case Current of
-        error -> {error, {precondition, {not_present, Key}}};
-        CRDT ->
-            {ok, NewSchema} = riak_dt_vvorset:update({remove, Key}, Actor, Schema),
-            Tombstone = Type:reset(CRDT, Actor),
-            NewValues = orddict:store(Key, Tombstone, Values),
-            apply_ops(Rest, Actor, NewSchema, NewValues)
+    case riak_dt_vvorset:update({remove, Key}, Actor, Schema) of
+        {ok, NewSchema} ->
+            case value({get_crdt, Key}, {Schema, Values}) of
+                error ->
+                    %% Already a tombstone
+                    apply_ops(Rest, Actor, NewSchema, Values);
+                CRDT ->
+                    Tombstone = Type:reset(CRDT, Actor),
+                    NewValues = orddict:store(Key, Tombstone, Values),
+                    apply_ops(Rest, Actor, NewSchema, NewValues)
+            end;
+        _Error -> {error, {precondition, {not_present, Key}}}
     end;
 apply_ops([{insert, {_Name, Mod}=Key, CRDT} | Rest], Actor, Schema, Values) ->
     %% Add the key to the schema
@@ -322,8 +326,8 @@ gen_update() ->
 
 gen_field() ->
     {binary(), oneof([riak_dt_pncounter, riak_dt_vvorset,
-                      riak_dt_lwwreg,
-                      riak_dt_multi])}.
+                      riak_dt_lwwreg])}.%%,
+%%                      riak_dt_multi])}.
 
 gen_field_op({_Name, Type}) ->
     Type:gen_op().
@@ -343,11 +347,45 @@ generate() ->
 init_state() ->
     {0, dict:new()}.
 
-update_expected(ID, {update, Ops}, Values) ->
-    lists:foldl(fun(Op, V) ->
-                        update_expected(ID, Op, V) end,
-                Values,
-                Ops);
+update_all(ID, Ops, OriginalState) ->
+    update_all(ID, Ops, OriginalState, OriginalState).
+
+update_all(_ID, [], _OriginalState, NewState) ->
+    NewState;
+update_all(ID, [{update, {_Name, Type}=Key, Op} | Rest], OriginalState, {Cnt0, Dict}) ->
+    CurrentValue = get_for_key(Key, ID, Dict),
+    %% handle precondition errors
+    %% any precondition error means the state is not changed at all
+    case Type:update(Op, ID, CurrentValue) of
+        {ok, Updated} ->
+            Cnt = Cnt0+1,
+            ToAdd = {Key, Updated, Cnt},
+            {A, R} = dict:fetch(ID, Dict),
+            update_all(ID, Rest, OriginalState, {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)});
+        _Error ->
+            OriginalState
+    end;
+update_all(ID, [{remove, Field} | Rest], OriginalState, {_, Dict}=NewState) ->
+    {A, R} = dict:fetch(ID, Dict),
+    PresentFields = [E ||  {E, _, _X} <- sets:to_list(sets:union(A,R))],
+    case lists:member(Field, PresentFields) of
+        true ->
+            NewState2 = update_expected(ID, {remove, Field}, NewState),
+            update_all(ID, Rest, OriginalState, NewState2);
+        false ->
+            OriginalState
+    end;
+update_all(ID, [Op | Rest], OriginalState, NewState) ->
+    update_all(ID, Rest, OriginalState, update_expected(ID, Op, NewState)).
+
+update_expected(ID, {update, Ops}, State) ->
+    %% Ops are atomic, all pass or all fail
+    %% return original state if any op failed
+    update_all(ID, Ops, State);
+    %% lists:foldl(fun(Op, V) ->
+    %%                     update_expected(ID, Op, V) end,
+    %%             Values,
+    %%             Ops);
 
 update_expected(ID, {add, {_Name, Type}=Elem}, {Cnt0, Dict}) ->
     Cnt = Cnt0+1,
@@ -356,7 +394,7 @@ update_expected(ID, {add, {_Name, Type}=Elem}, {Cnt0, Dict}) ->
     {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)};
 update_expected(ID, {remove, Elem}, {Cnt, Dict}) ->
     {A, R} = dict:fetch(ID, Dict),
-    ToRem = [ {E, V, X} || {E, V, X} <- sets:to_list(A), E == Elem],
+    ToRem = [{E, V, X} || {E, V, X} <- sets:to_list(A), E == Elem],
     {Cnt, dict:store(ID, {A, sets:union(R, sets:from_list(ToRem))}, Dict)};
 update_expected(ID, {merge, SourceID}, {Cnt, Dict}) ->
     {FA, FR} = dict:fetch(ID, Dict),
@@ -366,13 +404,19 @@ update_expected(ID, {merge, SourceID}, {Cnt, Dict}) ->
     {Cnt, dict:store(ID, {MA, MR}, Dict)};
 update_expected(ID, create, {Cnt, Dict}) ->
     {Cnt, dict:store(ID, {sets:new(), sets:new()}, Dict)};
-update_expected(ID, {update, {_Name, Type}=Key, Op}, {Cnt0, Dict}) ->
+update_expected(ID, {update, {_Name, Type}=Key, Op}, {Cnt0, Dict}=State) ->
     CurrentValue = get_for_key(Key, ID,  Dict),
-    Updated = Type:update(Op, ID, CurrentValue),
-    Cnt = Cnt0+1,
-    ToAdd = {Key, Updated, Cnt},
-    {A, R} = dict:fetch(ID, Dict),
-    {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)};
+    %% handle precondition errors
+    %% any precondition error means the state is not changed at all
+    case Type:update(Op, ID, CurrentValue) of
+        {ok, Updated} ->
+            Cnt = Cnt0+1,
+            ToAdd = {Key, Updated, Cnt},
+            {A, R} = dict:fetch(ID, Dict),
+            {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)};
+        _Error ->
+            State
+    end;
 update_expected(ID, {insert, {_Name, Type}=Key, Value}, {Cnt0, Dict}) ->
     CurrentValue = get_for_key(Key, ID,  Dict),
     Updated = Type:merge(Value, CurrentValue),
