@@ -96,6 +96,10 @@ make_micro_epoch() ->
 -spec merge(lwwreg(), lwwreg()) -> lwwreg().
 merge({Val1, TS1}, {_Val2, TS2}) when TS1 > TS2 ->
     {Val1, TS1};
+merge({_Val1, TS1}, {Val2, TS2}) when TS2 > TS1 ->
+    {Val2, TS2};
+merge(LWWReg1, LWWReg2) when LWWReg1 >= LWWReg2 ->
+    LWWReg1;
 merge(_LWWReg1, LWWReg2) ->
     LWWReg2.
 
@@ -111,7 +115,7 @@ equal(_, _) ->
 %% @Doc reset to default value
 -spec reset(lwwreg(), term()) -> lwwreg().
 reset({_Value, TS}, _Actor) ->
-    {undefined, TS+1}.
+    {undefined, TS}.
 
 -define(TAG, 72).
 -define(V1_VERS, 1).
