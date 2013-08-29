@@ -125,8 +125,8 @@ apply_ops([], _Actor, ORSet) ->
     {ok, ORSet};
 apply_ops([Op | Rest], Actor, ORSet) ->
     case update(Op, Actor, ORSet) of
-        {ok, ORSet} ->
-            apply_ops(Rest, Actor, ORSet);
+        {ok, ORSet2} ->
+            apply_ops(Rest, Actor, ORSet2);
         Error ->
             Error
     end.
@@ -204,10 +204,10 @@ eqc_value_test_() ->
 
 %% EQC generator
 gen_op() ->
-    gen_update().
+    oneof([gen_updates(), gen_update()]).
 
-%% gen_updates() ->
-%%     {update, non_empty(list(gen_update()))}.
+gen_updates() ->
+     {update, non_empty(list(gen_update()))}.
 
 gen_update() ->
     oneof([{add, int()}, {remove, int()},
@@ -217,6 +217,37 @@ gen_update() ->
 init_state() ->
     {0, dict:new()}.
 
+do_updates(_ID, [], _OldState, NewState) ->
+    NewState;
+do_updates(ID, [{_Action, []} | Rest], OldState, NewState) ->
+    do_updates(ID, Rest, OldState, NewState);
+do_updates(ID, [Update | Rest], OldState, NewState) ->
+    case {Update, update_expected(ID, Update, NewState)} of
+        {{Op, Arg}, NewState} when Op == remove;
+                                   Op == remove_all ->
+            %% precondition fail, or idempotent remove?
+            {_Cnt, Dict} = NewState,
+            {_A, R} = dict:fetch(ID, Dict),
+            Removed = [ E || {E, _X} <- sets:to_list(R)],
+            case member(Arg, Removed) of
+                true ->
+                    do_updates(ID, Rest, OldState, NewState);
+                false ->
+                    OldState
+            end;
+        {_, NewNewState} ->
+            do_updates(ID, Rest, OldState, NewNewState)
+    end.
+
+member(_Arg, []) ->
+    false;
+member(Arg, L) when is_list(Arg) ->
+    sets:is_subset(sets:from_list(Arg), sets:from_list(L));
+member(Arg, L) ->
+    lists:member(Arg, L).
+
+update_expected(ID, {update, Updates}, State) ->
+    do_updates(ID, lists:sort(Updates), State, State);
 update_expected(ID, {add, Elem}, {Cnt0, Dict}) ->
     Cnt = Cnt0+1,
     ToAdd = {Elem, Cnt},

@@ -146,8 +146,8 @@ apply_ops([], _Actor, ORSet) ->
     {ok, ORSet};
 apply_ops([Op | Rest], Actor, ORSet) ->
     case update(Op, Actor, ORSet) of
-        {ok, ORSet} ->
-            apply_ops(Rest, Actor, ORSet);
+        {ok, ORSet2} ->
+            apply_ops(Rest, Actor, ORSet2);
         Error ->
             Error
     end.
