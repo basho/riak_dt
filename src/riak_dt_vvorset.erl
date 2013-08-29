@@ -133,8 +133,8 @@ update({remove, Elem}, _Actor, ORSet) ->
     remove_elem(orddict:find(Elem, Entries), Elem, ORSet);
 update({add_all, Elems}, Actor, ORSet) ->
     ORSet2 = lists:foldl(fun(E, S) ->
-                        add_elem(Actor, S, E) end,
-                ORSet,
+                                 add_elem(Actor, S, E) end,
+                         ORSet,
                          Elems),
     {ok, ORSet2};
 %% @Doc note: this is atomic, either _all_ `Elems` are removed, or
@@ -298,59 +298,16 @@ generate() ->
 
 %% EQC generator
 gen_op() ->
-    oneof([{add, int()}, {remove, int()},
-           {add_all, list(int())},
-           {remove_all, list(int())}]).
+   riak_dt_orset:gen_op().
 
 init_state() ->
-    {0, dict:new()}.
+    riak_dt_orset:init_state().
 
-update_expected(ID, {add, Elem}, {Cnt0, Dict}) ->
-    Cnt = Cnt0+1,
-    ToAdd = {Elem, Cnt},
-    {A, R} = dict:fetch(ID, Dict),
-    {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)};
-update_expected(ID, {remove, Elem}, {Cnt, Dict}) ->
-    {A, R} = dict:fetch(ID, Dict),
-    ToRem = [ {E, X} || {E, X} <- sets:to_list(A), E == Elem],
-    {Cnt, dict:store(ID, {A, sets:union(R, sets:from_list(ToRem))}, Dict)};
-update_expected(ID, {merge, SourceID}, {Cnt, Dict}) ->
-    {FA, FR} = dict:fetch(ID, Dict),
-    {TA, TR} = dict:fetch(SourceID, Dict),
-    MA = sets:union(FA, TA),
-    MR = sets:union(FR, TR),
-    {Cnt, dict:store(ID, {MA, MR}, Dict)};
-update_expected(ID, create, {Cnt, Dict}) ->
-    {Cnt, dict:store(ID, {sets:new(), sets:new()}, Dict)};
-update_expected(ID, {add_all, Elems}, State) ->
-    lists:foldl(fun(Elem, S) ->
-                       update_expected(ID, {add, Elem}, S) end,
-               State,
-               Elems);
-update_expected(ID, {remove_all, Elems}, {_Cnt, Dict}=State) ->
-    %% Only if _all_ elements are in the set do we remove any elems
-    {A, R} = dict:fetch(ID, Dict),
-    Members = [E ||  {E, _X} <- sets:to_list(sets:union(A,R))],
-    case sets:is_subset(sets:from_list(Elems), sets:from_list(Members)) of
-        true ->
-            lists:foldl(fun(Elem, S) ->
-                                update_expected(ID, {remove, Elem}, S) end,
-                        State,
-                        Elems);
-        false ->
-            State
-    end.
+update_expected(ID, Op, State) ->
+    riak_dt_orset:update_expected(ID, Op, State).
 
-
-
-eqc_state_value({_Cnt, Dict}) ->
-    {A, R} = dict:fold(fun(_K, {Add, Rem}, {AAcc, RAcc}) ->
-                               {sets:union(Add, AAcc), sets:union(Rem, RAcc)} end,
-                       {sets:new(), sets:new()},
-                       Dict),
-    Remaining = sets:subtract(A, R),
-    Values = [ Elem || {Elem, _X} <- sets:to_list(Remaining)],
-    lists:usort(Values).
+eqc_state_value(State) ->
+    riak_dt_orset:eqc_state_value(State).
 
 -endif.
 
