@@ -354,8 +354,8 @@ update_all(_ID, [], _OriginalState, NewState) ->
     NewState;
 update_all(ID, [{update, {_Name, Type}=Key, Op} | Rest], OriginalState, {Cnt0, Dict}) ->
     CurrentValue = get_for_key(Key, ID, Dict),
-    %% handle precondition errors
-    %% any precondition error means the state is not changed at all
+    %% handle precondition errors any precondition error means the
+    %% state is not changed at all
     case Type:update(Op, ID, CurrentValue) of
         {ok, Updated} ->
             Cnt = Cnt0+1,
@@ -440,18 +440,29 @@ eqc_state_value({_Cnt, Dict}) ->
                 sets:to_list(Remaining)),
     [{K, Type:value(V)} || {{_Name, Type}=K, V} <- dict:to_list(Res)].
 
-
 get_for_key({_N, T}=K, ID, Dict) ->
     {A, R} = dict:fetch(ID, Dict),
     Remaining = sets:subtract(A, R),
     Res = lists:foldl(fun({{_Name, Type}=Key, Value, _X}, Acc) ->
-                        %% if key is in Acc merge with it and replace
-                        dict:update(Key, fun(V) ->
-                                                 Type:merge(V, Value) end,
-                                    Value, Acc) end,
-                dict:new(),
-                sets:to_list(Remaining)),
-    proplists:get_value(K, dict:to_list(Res), T:new()).
+                              %% if key is in Acc merge with it and replace
+                              dict:update(Key, fun(V) ->
+                                                       Type:merge(V, Value) end,
+                                          Value, Acc) end,
+                      dict:new(),
+                      sets:to_list(Remaining)),
+    case proplists:get_value(K, dict:to_list(Res)) of
+        undefined ->
+            %% look for a tombstone, it will be the highest numbered remove
+            R2 = lists:reverse(lists:keysort(3, sets:to_list(R))),
+            case lists:keyfind(K, 1, R2) of
+                false ->
+                    T:new();
+                {K, V, _Cnt} ->
+                    %% reset
+                    T:reset(V, ID)
+            end;
+        V -> V
+    end.
 
 -endif.
 
