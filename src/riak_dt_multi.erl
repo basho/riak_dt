@@ -261,7 +261,7 @@ reset([Field | Rest], Actor, Map0) ->
     %% No need to worry about the precondition error,
     %% Always called with the current key set
     %% @see reset/2
-    {ok, Map} = update({remove, Field}, Actor, Map0),
+    {ok, Map} = update({update, [{remove, Field}]}, Actor, Map0),
     reset(Rest, Actor, Map).
 
 %% @Doc a fragment of the Map that can be used for
@@ -326,8 +326,8 @@ gen_update() ->
 
 gen_field() ->
     {binary(), oneof([riak_dt_pncounter, riak_dt_vvorset,
-                      riak_dt_lwwreg])}.%%,
-%%                      riak_dt_multi])}.
+                      riak_dt_lwwreg,
+                      riak_dt_multi])}.
 
 gen_field_op({_Name, Type}) ->
     Type:gen_op().
