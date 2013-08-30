@@ -24,9 +24,32 @@
 %% elements, a Schema and a value list. The schema is an OR-Set of
 %% {name, type} tuples that identify a field and it's type (type must
 %% be a CRDT module, yes, even this one.)  The value list is a dict of
-%% {name, type} -> CRDT value mappings.  The value list may have it's
-%% CRDT value removed as soon as the key is removed from the
-%% keyset. The Keyset requries consensus for GC.
+%% {name, type} -> CRDT value mappings.
+%%
+%% The value for a given field is tombstoned when the field is
+%% removed. This map uses a reset / remove strategy to generate
+%% tombstones. Reset attempts to set the value of the CRDT back to
+%% bottom, with out break monotonicity. For example, if a counter at
+%% field F has a value of 10, then on remove of F, the counter is
+%% decremented by 10, so it's value is zero, and the field removed
+%% from the keyset. A concurrent modification of that field on another
+%% replica will result in the field being present in the Map, but its
+%% value will be only that of the concurrent updates. This semantic
+%% limits the types of CRDT that may be stored in the Map to those
+%% that have a `reset/2' function. Currently the Map does not enforce
+%% this. It would be nice if it did, or better still if it was
+%% cognizant of a lattice of types so that an attempt to remove a
+%% G-Counter would result in it being replaced to a
+%% PN-Counter. Consider that work to be done.
+%%
+%% NOTE: a concurrent update at another node that appears to have no
+%% effect, or an effect that is contained by the reset / remove
+%% operation will still cause the field to be present. For example:
+%% remove Set with members [a,b,c] from Field F at replica A.
+%% Concurrently, remove member a from Set at Field F at replica B.
+%% After merge, Field F is present with an empty Set. One proposed
+%% future development is to not "count" updates concurrent with
+%% removes that "contain" the update, again, work to be done.
 %%
 %% @end
 
@@ -49,7 +72,7 @@
 %% EQC API
 -ifdef(EQC).
 -export([gen_op/0, update_expected/3, eqc_state_value/1,
-         init_state/0, generate/0, gen_field/0]).
+         init_state/0, gen_field/0]).
 -endif.
 
 -export_type([multi/0, binary_multi/0]).
@@ -63,29 +86,35 @@
                     riak_dt_multi.
 -type valuelist() :: [{field(), crdt()}].
 
--type crdt()  :: riak_dt_gcounter:gcounter() | riak_dt_pncounter:pncounter() |
-                 riak_dt_lwwreg:lwwreg() | riak_dt_orset:orset() |
-                 riak_dt_vvorset:vvorset() | riak_dt_zorset:zorset() |
-                 riak_dt_multi:multi().
+-type crdt()  ::  riak_dt_pncounter:pncounter() |
+                  riak_dt_lwwreg:lwwreg() |
+                  riak_dt_vvorset:vvorset() | riak_dt_orset:orset() |
+                  riak_dt_multi:multi().
 
 -type multi_op() :: {update, [multi_field_update() | multi_field_op()]}.
 
 -type multi_field_op() :: {add, field()} | {remove, field()}.
 -type multi_field_update() :: {update, field(), crdt_op()}.
 
--type crdt_op() :: riak_dt_gcounter:gcounter_op() | riak_dt_pncounter:pncounter_op() |
+-type crdt_op() ::  riak_dt_pncounter:pncounter_op() |
                    riak_dt_lwwreg:lwwreg_op() | riak_dt_orset:orset_op() |
-                   riak_dt_vvorset:vvorset_op() | riak_dt_zorset:zorset_op() |
+                   riak_dt_vvorset:vvorset_op() | riak_dt_od_flag:od_flag_op() |
                    riak_dt_multi:multi_op().
 
 -type multi_q() :: size | {get, field()} | {get_crdt, field()} |
                    keyset | {contains, field()}.
 
+-type values() :: [value()].
+-type value() :: {field(), riak_dt_multi:value() | integer() | [term()] | boolean() | term()}.
+-type precondition_error() :: {error, {precondition, {not_present, field()}}}.
+
+%% @doc Create a new, empty Map.
 -spec new() -> multi().
 new() ->
     {riak_dt_vvorset:new(), orddict:new()}.
 
-%% @doc get the current set of values for this multi
+%% @doc get the current set of values for this Map
+-spec value(multi()) -> values().
 value({Schema, Values}) ->
     PresentFields = riak_dt_vvorset:value(Schema),
     values(PresentFields, Values).
@@ -127,17 +156,23 @@ value({contains, Field}, {Schema, _Values}) ->
     riak_dt_vvorset:value({contains, Field}, Schema).
 
 %% @Doc update the `multi()' or a field in the `multi()' by executing
-%% the `multi_op()'.
-%% `Ops' is a list of one or more of the following ops:
-%% `{update, field(), Op}' where `Op' is any operation supported by the CRDT mod
-%% referenced in the `field()' (`{name, type}'). The `Op' is applied to the value in the value list
-%% for the given key.
-%% `{insert, field(), `Value'} where Value is a `CRDT' of type `Mod' from the `Key' pair
-%% `{Name, Mod}' If there is no local value for `Key' the CRDT is inserted
-%% otherwise, it is merged with the local value.
-%% `{add, field}' where field is `{name, type}'.
-%% `{remove, field}' where field is `{name, type}'
-%% These last too are just the OR-Set operations add/remove on the schema.
+%% the `multi_op()'. `Ops' is a list of one or more of the following
+%% ops:
+%%
+%% `{update, field(), Op} where `Op' is a valid update operation for a
+%% CRDT of type `Mod' from the `Key' pair `{Name, Mod}' If there is no
+%% local value for `Key' a new CRDT is created, the operation applied
+%% and the result inserted otherwise, the operation is applied to the
+%% local value.
+%%
+%% {add, field}' where field is `{name, type}' results in `field'
+%% being added to the Map, and a new crdt of `type' being its value.
+%% `{remove, field}' where field is `{name, type}', results in
+%% `reset/2' being called on the crdt at `field' and the key and value
+%% being tombstoned.
+%%
+%% Either all of `Ops' are performed successfully, or none are.
+-spec update(multi_op(), riak_dt:actor(), multi()) -> {ok, multi()} | precondition_error().
 update({update, Ops}, Actor, {Schema, Values}) ->
     apply_ops(Ops, Actor, Schema, Values).
 
@@ -157,7 +192,7 @@ apply_ops([{update, {_Name, Mod}=Key, Op} | Rest], Actor, Schema, Values) ->
             Error
     end;
 apply_ops([{remove, {_Name, Type}=Key} | Rest], Actor, Schema, Values) ->
-    %% Do a reset remove, we keep the value as a tombstone, but we negate it (as best we can)
+    %% Do a reset remove, we keep the value as a tombstone, but we negate it
     case riak_dt_vvorset:update({remove, Key}, Actor, Schema) of
         {ok, NewSchema} ->
             case value({get_crdt, Key}, {Schema, Values}) of
@@ -171,21 +206,10 @@ apply_ops([{remove, {_Name, Type}=Key} | Rest], Actor, Schema, Values) ->
             end;
         _Error -> {error, {precondition, {not_present, Key}}}
     end;
-apply_ops([{insert, {_Name, Mod}=Key, CRDT} | Rest], Actor, Schema, Values) ->
-    %% Add the key to the schema
-    %% Update the value, setting value to `CRDT' or Merging
-    %% if key is already present
-    {ok, NewSchema} = riak_dt_vvorset:update({add, Key}, Actor, Schema),
-    NewValues = orddict:update(Key, fun(V) -> Mod:merge(V, CRDT) end,
-                               CRDT, Values),
-    apply_ops(Rest, Actor, NewSchema, NewValues);
 apply_ops([{add, {_Name, Mod}=Key} | Rest], Actor, Schema, Values) ->
-    %% Add the key to schema
     {ok, NewSchema} = riak_dt_vvorset:update({add, Key}, Actor, Schema),
-    %% Update the value, adding an empty crdt if not present
     NewValues = orddict:update(Key, fun(V) -> V end, Mod:new(), Values),
     apply_ops(Rest, Actor, NewSchema, NewValues).
-
 
 fetch_with_default(Key, Values, Default) ->
     fetch_with_default(orddict:find(Key, Values), Default).
@@ -202,25 +226,10 @@ fetch_with_default(error, Default) ->
 -spec merge(multi(), multi()) -> multi().
 merge({Schema1, Values1}, {Schema2, Values2}) ->
     NewSchema = riak_dt_vvorset:merge(Schema1, Schema2),
-    PresentFields = riak_dt_vvorset:value(NewSchema),
-    NewValues = merge_values(PresentFields, Values1, Values2, []),
+    NewValues = orddict:merge(fun({_Name, Mod}, V1, V2) ->
+                                      Mod:merge(V1, V2) end,
+                              Values1, Values2),
     {NewSchema, NewValues}.
-
-%% @Private
-merge_values([], _Values1, _Values2, Acc) ->
-    orddict:from_list(Acc);
-merge_values([{_Name, Mod}=Key | Rest], Values1, Values2, Acc) ->
-    V1 = type_safe_fetch(Mod, orddict:find(Key, Values1)),
-    V2 = type_safe_fetch(Mod, orddict:find(Key, Values2)),
-    V = Mod:merge(V1, V2),
-    merge_values(Rest, Values1, Values2, [{Key, V} | Acc]).
-
-%% @Private
-type_safe_fetch(_Mod, {ok, Value}) ->
-    Value;
-type_safe_fetch(Mod, error) ->
-    Mod:new().
-
 
 %% @Doc compare two `multi()'s for equality of  structure
 %% Both schemas and value list must be equal.
@@ -298,10 +307,12 @@ precondition_context(Type, V) ->
 -define(TAG, 77).
 -define(V1_VERS, 1).
 
+-spec to_binary(multi()) -> binary_multi().
 to_binary(Map) ->
     %% @TODO something smarter (recurse down valulist calling to_binary?)
     <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(Map))/binary>>.
 
+-spec from_binary(binary_multi()) -> multi().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
     %% @TODO something smarter
     binary_to_term(Bin).
@@ -315,7 +326,9 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
 eqc_value_test_() ->
     crdt_statem_eqc:run(?MODULE, 1000).
 
-%% EQC generator
+%% ===================================
+%% crdt_statem_eqc callbacks
+%% ===================================
 gen_op() ->
     ?LET(Ops, non_empty(list(gen_update())), {update, Ops}).
 
@@ -332,21 +345,39 @@ gen_field() ->
 gen_field_op({_Name, Type}) ->
     Type:gen_op().
 
-generate() ->
-    ?LET(Fields, list(gen_field()),
-         begin
-             Values = [{F, Type:generate()} || {_Name, Type}=F <- Fields, Type /= riak_dt_multi], %% @TODO fix this, deadlocks otherwise
-             lists:foldl(fun({K, V}, {FSet, VDict}) ->
-                                 Fields2 = riak_dt_vvorset:update({add, K}, choose(1, 50), FSet),
-                                 Values2 = orddict:store(K, V, VDict),
-                                 {Fields2, Values2} end,
-                         riak_dt_multi:new(),
-                         Values)
-                 end).
-
 init_state() ->
     {0, dict:new()}.
 
+update_expected(ID, {update, Ops}, State) ->
+    %% Ops are atomic, all pass or all fail
+    %% return original state if any op failed
+    update_all(ID, Ops, State);
+update_expected(ID, {merge, SourceID}, {Cnt, Dict}) ->
+    {FA, FR} = dict:fetch(ID, Dict),
+    {TA, TR} = dict:fetch(SourceID, Dict),
+    MA = sets:union(FA, TA),
+    MR = sets:union(FR, TR),
+    {Cnt, dict:store(ID, {MA, MR}, Dict)};
+update_expected(ID, create, {Cnt, Dict}) ->
+    {Cnt, dict:store(ID, {sets:new(), sets:new()}, Dict)}.
+
+eqc_state_value({_Cnt, Dict}) ->
+    {A, R} = dict:fold(fun(_K, {Add, Rem}, {AAcc, RAcc}) ->
+                               {sets:union(Add, AAcc), sets:union(Rem, RAcc)} end,
+                       {sets:new(), sets:new()},
+                       Dict),
+    Remaining = sets:subtract(A, R),
+    Res = lists:foldl(fun({{_Name, Type}=Key, Value, _X}, Acc) ->
+                        %% if key is in Acc merge with it and replace
+                        dict:update(Key, fun(V) ->
+                                                 Type:merge(V, Value) end,
+                                    Value, Acc) end,
+                dict:new(),
+                sets:to_list(Remaining)),
+    [{K, Type:value(V)} || {{_Name, Type}=K, V} <- dict:to_list(Res)].
+
+%% @private
+%% @doc Apply the list of update operations to the model
 update_all(ID, Ops, OriginalState) ->
     update_all(ID, Ops, OriginalState, OriginalState).
 
@@ -365,81 +396,26 @@ update_all(ID, [{update, {_Name, Type}=Key, Op} | Rest], OriginalState, {Cnt0, D
         _Error ->
             OriginalState
     end;
-update_all(ID, [{remove, Field} | Rest], OriginalState, {_, Dict}=NewState) ->
+update_all(ID, [{remove, Field} | Rest], OriginalState, {Cnt, Dict}) ->
     {A, R} = dict:fetch(ID, Dict),
     PresentFields = [E ||  {E, _, _X} <- sets:to_list(sets:union(A,R))],
     case lists:member(Field, PresentFields) of
         true ->
-            NewState2 = update_expected(ID, {remove, Field}, NewState),
+            ToRem = [{E, V, X} || {E, V, X} <- sets:to_list(A), E == Field],
+            NewState2 = {Cnt, dict:store(ID, {A, sets:union(R, sets:from_list(ToRem))}, Dict)},
             update_all(ID, Rest, OriginalState, NewState2);
         false ->
             OriginalState
     end;
-update_all(ID, [Op | Rest], OriginalState, NewState) ->
-    update_all(ID, Rest, OriginalState, update_expected(ID, Op, NewState)).
-
-update_expected(ID, {update, Ops}, State) ->
-    %% Ops are atomic, all pass or all fail
-    %% return original state if any op failed
-    update_all(ID, Ops, State);
-    %% lists:foldl(fun(Op, V) ->
-    %%                     update_expected(ID, Op, V) end,
-    %%             Values,
-    %%             Ops);
-
-update_expected(ID, {add, {_Name, Type}=Elem}, {Cnt0, Dict}) ->
+update_all(ID, [{add, {_Name, Type}=Field} | Rest], OriginalState, {Cnt0, Dict}) ->
     Cnt = Cnt0+1,
-    ToAdd = {Elem, Type:new(), Cnt},
+    ToAdd = {Field, Type:new(), Cnt},
     {A, R} = dict:fetch(ID, Dict),
-    {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)};
-update_expected(ID, {remove, Elem}, {Cnt, Dict}) ->
-    {A, R} = dict:fetch(ID, Dict),
-    ToRem = [{E, V, X} || {E, V, X} <- sets:to_list(A), E == Elem],
-    {Cnt, dict:store(ID, {A, sets:union(R, sets:from_list(ToRem))}, Dict)};
-update_expected(ID, {merge, SourceID}, {Cnt, Dict}) ->
-    {FA, FR} = dict:fetch(ID, Dict),
-    {TA, TR} = dict:fetch(SourceID, Dict),
-    MA = sets:union(FA, TA),
-    MR = sets:union(FR, TR),
-    {Cnt, dict:store(ID, {MA, MR}, Dict)};
-update_expected(ID, create, {Cnt, Dict}) ->
-    {Cnt, dict:store(ID, {sets:new(), sets:new()}, Dict)};
-update_expected(ID, {update, {_Name, Type}=Key, Op}, {Cnt0, Dict}=State) ->
-    CurrentValue = get_for_key(Key, ID,  Dict),
-    %% handle precondition errors
-    %% any precondition error means the state is not changed at all
-    case Type:update(Op, ID, CurrentValue) of
-        {ok, Updated} ->
-            Cnt = Cnt0+1,
-            ToAdd = {Key, Updated, Cnt},
-            {A, R} = dict:fetch(ID, Dict),
-            {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)};
-        _Error ->
-            State
-    end;
-update_expected(ID, {insert, {_Name, Type}=Key, Value}, {Cnt0, Dict}) ->
-    CurrentValue = get_for_key(Key, ID,  Dict),
-    Updated = Type:merge(Value, CurrentValue),
-    Cnt = Cnt0+1,
-    ToAdd = {Key, Updated, Cnt},
-    {A, R} = dict:fetch(ID, Dict),
-    {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)}.
+    NewState = {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)},
+    update_all(ID, Rest, OriginalState, NewState).
 
-eqc_state_value({_Cnt, Dict}) ->
-    {A, R} = dict:fold(fun(_K, {Add, Rem}, {AAcc, RAcc}) ->
-                               {sets:union(Add, AAcc), sets:union(Rem, RAcc)} end,
-                       {sets:new(), sets:new()},
-                       Dict),
-    Remaining = sets:subtract(A, R),
-    Res = lists:foldl(fun({{_Name, Type}=Key, Value, _X}, Acc) ->
-                        %% if key is in Acc merge with it and replace
-                        dict:update(Key, fun(V) ->
-                                                 Type:merge(V, Value) end,
-                                    Value, Acc) end,
-                dict:new(),
-                sets:to_list(Remaining)),
-    [{K, Type:value(V)} || {{_Name, Type}=K, V} <- dict:to_list(Res)].
-
+%% @doc get the current, or most recently tombstoned value for a given
+%% key.
 get_for_key({_N, T}=K, ID, Dict) ->
     {A, R} = dict:fetch(ID, Dict),
     Remaining = sets:subtract(A, R),
