@@ -81,12 +81,12 @@
 -type multi() :: {schema(), valuelist()}.
 -type schema() :: riak_dt_vvorset:vvorset().
 -type field() :: {Name::term(), Type::crdt_mod()}.
--type crdt_mod() :: riak_dt_gcounter | riak_dt_pncounter | riak_dt_lwwreg |
-                    riak_dt_orset | riak_dt_vvorset | riak_dt_zorset |
+-type crdt_mod() :: riak_dt_pncounter | riak_dt_lwwreg |
+                    riak_dt_orset | riak_dt_vvorset | riak_dt_od_flag |
                     riak_dt_multi.
 -type valuelist() :: [{field(), crdt()}].
 
--type crdt()  ::  riak_dt_pncounter:pncounter() |
+-type crdt()  ::  riak_dt_pncounter:pncounter() | riak_dt_od_flag:od_flag() |
                   riak_dt_lwwreg:lwwreg() |
                   riak_dt_vvorset:vvorset() | riak_dt_orset:orset() |
                   riak_dt_multi:multi().
@@ -96,7 +96,7 @@
 -type multi_field_op() :: {add, field()} | {remove, field()}.
 -type multi_field_update() :: {update, field(), crdt_op()}.
 
--type crdt_op() ::  riak_dt_pncounter:pncounter_op() |
+-type crdt_op() :: riak_dt_pncounter:pncounter_op() |
                    riak_dt_lwwreg:lwwreg_op() | riak_dt_orset:orset_op() |
                    riak_dt_vvorset:vvorset_op() | riak_dt_od_flag:od_flag_op() |
                    riak_dt_multi:multi_op().
@@ -105,7 +105,7 @@
                    keyset | {contains, field()}.
 
 -type values() :: [value()].
--type value() :: {field(), riak_dt_multi:value() | integer() | [term()] | boolean() | term()}.
+-type value() :: {field(), riak_dt_multi:values() | integer() | [term()] | boolean() | term()}.
 -type precondition_error() :: {error, {precondition, {not_present, field()}}}.
 
 %% @doc Create a new, empty Map.
@@ -426,8 +426,8 @@ get_for_key({_N, T}=K, ID, Dict) ->
                                           Value, Acc) end,
                       dict:new(),
                       sets:to_list(Remaining)),
-    case proplists:get_value(K, dict:to_list(Res)) of
-        undefined ->
+    case dict:find(K, Res) of
+        error ->
             %% look for a tombstone, it will be the highest numbered remove
             R2 = lists:reverse(lists:keysort(3, sets:to_list(R))),
             case lists:keyfind(K, 1, R2) of
@@ -437,7 +437,7 @@ get_for_key({_N, T}=K, ID, Dict) ->
                     %% reset
                     T:reset(V, ID)
             end;
-        V -> V
+        {ok, V} -> V
     end.
 
 -endif.

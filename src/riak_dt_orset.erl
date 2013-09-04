@@ -25,7 +25,7 @@
 -behaviour(riak_dt).
 
 %% API
--export([new/0, value/1, update/3, merge/2, equal/2,
+-export([new/0, value/1, update/3, merge/2, equal/2, reset/2,
          to_binary/1, from_binary/1, value/2, precondition_context/1]).
 
 -ifdef(EQC).
@@ -170,6 +170,15 @@ unique(Actor) ->
 merge_dicts(Dict1, Dict2) ->
     %% for every key in dict1, merge its contents with dict2's content for same key
    orddict:merge(fun(_K, V1, V2) -> ordsets:union(V1, V2) end, Dict1, Dict2).
+
+%% @Doc reset the set to empty, eseentialy have `Actor' remove all
+%% present members.  Equivalent to update({remove_all,
+%% value(`ORSet')}, `Actor', `ORset')
+-spec reset(orset(), actor()) -> orset().
+reset(ORSet, Actor) ->
+    Values = value(ORSet),
+    {ok, ORSet2} = update({remove_all, Values}, Actor, ORSet),
+    ORSet2.
 
 %% @doc the precondition context is a binary representation of a fragment of the CRDT
 %% that operations with pre-conditions can be applied too.
