@@ -77,8 +77,8 @@ value(_, GCnt) ->
 
 %% @doc `increment' the entry in `GCnt' for `Actor' by 1 or `{increment, Amt}'.
 %% returns an updated `gcounter()' or error if `Amt' is not a `pos_integer()'
--spec update(gcounter_op(), term(), gcounter()) ->
-                    gcounter().
+-spec update(gcounter_op(), riak_dt:actor(), gcounter()) ->
+                    {ok, gcounter()}.
 update(increment, Actor, GCnt) ->
     {ok, increment_by(1, Actor, GCnt)};
 update({increment, Amount}, Actor, GCnt) when is_integer(Amount), Amount > 0 ->

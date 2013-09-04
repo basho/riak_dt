@@ -41,10 +41,10 @@
 -export([init_state/0, gen_op/0, update_expected/3, eqc_state_value/1]).
 -endif.
 
--export_type([orset/0, binary_orset/0]).
+-export_type([orset/0, binary_orset/0, orset_op/0]).
 -opaque orset() :: {entries(), entries()}.
 
--opaque binary_orset() :: binary(). %% A binary that from_binary/1 will operate on.
+-type binary_orset() :: binary(). %% A binary that from_binary/1 will operate on.
 
 -type orset_op() :: {add, member()} | {remove, member()} |
                     {add_all, [member()]} | {remove_all, [member()]} |
@@ -87,7 +87,8 @@ value(_, ORSet) ->
     value(ORSet).
 
 
--spec update(orset_op(), actor(), orset()) -> orset().
+-spec update(orset_op(), actor(), orset()) -> {ok, orset()} |
+                                              {error, {precondition ,{not_present, member()}}}.
 update({update, Ops}, Actor, ORSet) ->
     apply_ops(lists:sort(Ops), Actor, ORSet);
 update({add, Elem}, Actor, {ADict0, RDict}) ->
@@ -186,9 +187,9 @@ reset(ORSet, Actor) ->
 %% The system can then apply a remove to this context and merge it with a replica.
 %% Especially useful for hybrid op/state systems where the context of an operation is
 %% needed at a replica without sending the entire state to the client.
--spec precondition_context(orset()) -> binary_orset().
+-spec precondition_context(orset()) -> orset().
 precondition_context({ADict, _RDict}) ->
-    to_binary({ADict, orddict:new()}).
+    {ADict, orddict:new()}.
 
 -define(TAG, 76).
 -define(V1_VERS, 1).

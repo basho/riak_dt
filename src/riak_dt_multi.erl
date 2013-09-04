@@ -75,7 +75,7 @@
          init_state/0, gen_field/0]).
 -endif.
 
--export_type([multi/0, binary_multi/0]).
+-export_type([multi/0, binary_multi/0, multi_op/0]).
 
 -type binary_multi() :: binary(). %% A binary that from_binary/1 will accept
 -type multi() :: {schema(), valuelist()}.
@@ -279,12 +279,12 @@ reset([Field | Rest], Actor, Map0) ->
 %% The values are just those values that are present
 %% We use either the values precondition_context
 %% or the whole CRDT
--spec precondition_context(multi()) -> binary_multi().
+-spec precondition_context(multi()) -> multi().
 precondition_context({KeySet0, Values0}) ->
-    KeySet = riak_dt_vvorset:from_binary(riak_dt_vvorset:precondition_context(KeySet0)),
+    KeySet = riak_dt_vvorset:precondition_context(KeySet0),
     Present = riak_dt_vvorset:value(KeySet),
     Values = precondition_context(Present, Values0, orddict:new()),
-    to_binary({KeySet, Values}).
+    {KeySet, Values}.
 
 precondition_context([], _, Acc) ->
     Acc;
@@ -294,7 +294,7 @@ precondition_context([{_Name, Type}=Field | Rest], Values, Acc) ->
     precondition_context(Rest, Values, orddict:store(Field, Ctx, Acc)).
 
 precondition_context(Type, V) ->
-    case lists:member(precondition_context, Type:module_info(exports)) of
+    case lists:member({precondition_context, 1}, Type:module_info(exports)) of
         true ->
             Type:precondition_context(V);
         false ->

@@ -120,7 +120,8 @@ value({contains, Elem}, ORset) ->
 value(tombstones, {_Actors, Entries}) ->
     [K || {K, {Active, _Vclock}} <- orddict:to_list(Entries), Active == 0].
 
--spec update(vvorset_op(), actor(), vvorset()) -> vvorset().
+-spec update(vvorset_op(), actor(), vvorset()) -> {ok, vvorset()} |
+                                                  {error, {precondition ,{not_present, member()}}}.
 %% @Doc take a list of Set operations and apply them to the set.
 %% NOTE: either _all_ are applied, or _none_ are.
 update({update, Ops}, Actor, ORSet) ->
@@ -262,10 +263,10 @@ remove_elem(_, Elem, _ORSet) ->
 %% The system can then apply a remove to this context and merge it with a replica.
 %% Especially useful for hybrid op/state systems where the context of an operation is
 %% needed at a replica without sending the entire state to the client.
--spec precondition_context(vvorset()) -> binary_vvorset().
+-spec precondition_context(vvorset()) -> vvorset().
 precondition_context({AL, Entries}) ->
-    to_binary({AL, [Add || {_K, {Active, _Clock}}=Add <- orddict:to_list(Entries),
-                 Active == 1]}).
+    {AL, [Add || {_K, {Active, _Clock}}=Add <- orddict:to_list(Entries),
+                 Active == 1]}.
 
 -define(TAG, 75).
 -define(V1_VERS, 1).

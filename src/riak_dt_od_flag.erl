@@ -37,7 +37,7 @@
 
 -export_type([od_flag/0, od_flag_op/0]).
 
--opaque od_flag() :: {ordsets:ordset(), ordsets:ordset()}.
+-opaque od_flag() :: {ordsets:ordset(binary()), ordsets:ordset(binary())}.
 -type od_flag_op() :: enable | disable.
 
 % EQC generator
