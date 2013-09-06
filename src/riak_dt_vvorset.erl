@@ -83,7 +83,9 @@
 -opaque vvorset() :: {actorlist(), entries()}.
 -opaque binary_vvorset() :: binary(). %% A binary that from_binary/1 will operate on.
 
--type vvorset_op() :: {add, member()} | {remove, member()}.
+-type vvorset_op() :: {add, member()} | {remove, member()} |
+                      {add_all, [member()]} | {remove_all, [member()]} |
+                      {update, [vvorset_op()]}.
 -type vvorset_q()  :: size | {contains, term()} | tombstones.
 
 %% a dict of actor() -> Alias::integer() mappings
@@ -118,12 +120,48 @@ value({contains, Elem}, ORset) ->
 value(tombstones, {_Actors, Entries}) ->
     [K || {K, {Active, _Vclock}} <- orddict:to_list(Entries), Active == 0].
 
--spec update(vvorset_op(), actor(), vvorset()) -> vvorset().
+-spec update(vvorset_op(), actor(), vvorset()) -> {ok, vvorset()} |
+                                                  {error, {precondition ,{not_present, member()}}}.
+%% @Doc take a list of Set operations and apply them to the set.
+%% NOTE: either _all_ are applied, or _none_ are.
+update({update, Ops}, Actor, ORSet) ->
+    %% Sort ops, so adds are before removes.
+    apply_ops(lists:sort(Ops), Actor, ORSet);
 update({add, Elem}, Actor, ORSet) ->
-    add_elem(Actor, ORSet, Elem);
+    {ok, add_elem(Actor, ORSet, Elem)};
 update({remove, Elem}, _Actor, ORSet) ->
     {_Actors, Entries} = ORSet,
-    remove_elem(orddict:find(Elem, Entries), Elem, ORSet).
+    remove_elem(orddict:find(Elem, Entries), Elem, ORSet);
+update({add_all, Elems}, Actor, ORSet) ->
+    ORSet2 = lists:foldl(fun(E, S) ->
+                                 add_elem(Actor, S, E) end,
+                         ORSet,
+                         Elems),
+    {ok, ORSet2};
+%% @Doc note: this is atomic, either _all_ `Elems` are removed, or
+%% none are.
+update({remove_all, Elems}, Actor, ORSet) ->
+    remove_all(Elems, Actor, ORSet).
+
+apply_ops([], _Actor, ORSet) ->
+    {ok, ORSet};
+apply_ops([Op | Rest], Actor, ORSet) ->
+    case update(Op, Actor, ORSet) of
+        {ok, ORSet2} ->
+            apply_ops(Rest, Actor, ORSet2);
+        Error ->
+            Error
+    end.
+
+remove_all([], _Actor, ORSet) ->
+    {ok, ORSet};
+remove_all([Elem | Rest], Actor, ORSet) ->
+    case update({remove, Elem}, Actor, ORSet) of
+        {ok, ORSet2} ->
+            remove_all(Rest, Actor, ORSet2);
+        Error ->
+            Error
+    end.
 
 -spec merge(vvorset(), vvorset()) -> vvorset().
 merge({Actors1, Entries1}, {Actors2, Entries2}) ->
@@ -178,13 +216,14 @@ equal(ORSet1, ORSet2) ->
 %% @Doc reset the set to empty, essentially have `Actor' remove all present members.
 -spec reset(vvorset(), actor()) -> vvorset().
 reset(Set, Actor) ->
-    Members = value(Actor),
+    Members = value(Set),
     reset(Members, Actor, Set).
 
 reset([], _Actor, Set) ->
     Set;
 reset([Member | Rest], Actor, Set) ->
-    reset(Rest, Actor, update({remove, Member}, Actor, Set)).
+    {ok, Set2} = update({remove, Member}, Actor, Set),
+    reset(Rest, Actor, Set2).
 
 %% Private
 -spec add_elem(actor(), vvorset(), member()) -> vvorset().
@@ -210,13 +249,13 @@ actor_placeholder(Actor, Actors) ->
     end.
 
 remove_elem({ok, {1, Vclock}}, Elem, {AL, Dict}) ->
-    {AL, orddict:store(Elem, {0, Vclock}, Dict)};
+    {ok, {AL, orddict:store(Elem, {0, Vclock}, Dict)}};
 remove_elem({ok, {0, _Vclock}}, _Elem, ORSet) ->
-    ORSet;
-remove_elem(_, _Elem, ORSet) ->
+    {ok, ORSet};
+remove_elem(_, Elem, _ORSet) ->
     %% What @TODO?
     %% Throw an error? (seems best)
-    ORSet.
+    {error, {precondition, {not_present, Elem}}}.
 
 %% @doc the precondition context is a binary representation of a fragment of the CRDT
 %% that operations with pre-conditions can be applied too.
@@ -224,10 +263,10 @@ remove_elem(_, _Elem, ORSet) ->
 %% The system can then apply a remove to this context and merge it with a replica.
 %% Especially useful for hybrid op/state systems where the context of an operation is
 %% needed at a replica without sending the entire state to the client.
--spec precondition_context(vvorset()) -> binary_vvorset().
+-spec precondition_context(vvorset()) -> vvorset().
 precondition_context({AL, Entries}) ->
-    to_binary({AL, [Add || {_K, {Active, _Clock}}=Add <- orddict:to_list(Entries),
-                 Active == 1]}).
+    {AL, [Add || {_K, {Active, _Clock}}=Add <- orddict:to_list(Entries),
+                 Active == 1]}.
 
 -define(TAG, 75).
 -define(V1_VERS, 1).
@@ -260,52 +299,27 @@ generate() ->
 
 %% EQC generator
 gen_op() ->
-    ?LET({Add, Remove}, gen_elems(),
-         oneof([{add, Add}, {remove, Remove}])).
-
-gen_elems() ->
-    ?LET(A, int(), {A, oneof([A, int()])}).
+   riak_dt_orset:gen_op().
 
 init_state() ->
-    {0, dict:new()}.
+    riak_dt_orset:init_state().
 
-update_expected(ID, {add, Elem}, {Cnt0, Dict}) ->
-    Cnt = Cnt0+1,
-    ToAdd = {Elem, Cnt},
-    {A, R} = dict:fetch(ID, Dict),
-    {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)};
-update_expected(ID, {remove, Elem}, {Cnt, Dict}) ->
-    {A, R} = dict:fetch(ID, Dict),
-    ToRem = [ {E, X} || {E, X} <- sets:to_list(A), E == Elem],
-    {Cnt, dict:store(ID, {A, sets:union(R, sets:from_list(ToRem))}, Dict)};
-update_expected(ID, {merge, SourceID}, {Cnt, Dict}) ->
-    {FA, FR} = dict:fetch(ID, Dict),
-    {TA, TR} = dict:fetch(SourceID, Dict),
-    MA = sets:union(FA, TA),
-    MR = sets:union(FR, TR),
-    {Cnt, dict:store(ID, {MA, MR}, Dict)};
-update_expected(ID, create, {Cnt, Dict}) ->
-    {Cnt, dict:store(ID, {sets:new(), sets:new()}, Dict)}.
+update_expected(ID, Op, State) ->
+    riak_dt_orset:update_expected(ID, Op, State).
 
-eqc_state_value({_Cnt, Dict}) ->
-    {A, R} = dict:fold(fun(_K, {Add, Rem}, {AAcc, RAcc}) ->
-                               {sets:union(Add, AAcc), sets:union(Rem, RAcc)} end,
-                       {sets:new(), sets:new()},
-                       Dict),
-    Remaining = sets:subtract(A, R),
-    Values = [ Elem || {Elem, _X} <- sets:to_list(Remaining)],
-    lists:usort(Values).
+eqc_state_value(State) ->
+    riak_dt_orset:eqc_state_value(State).
 
 -endif.
 
 query_test() ->
     Set = new(),
-    Set2 = update({add, bob}, a1, Set),
-    Set3 = update({add, pete}, a2, Set2),
-    Set4 = update({add, sheila}, a3, Set3),
-    Set5 = update({remove, pete}, a3, Set4),
-    Set6 = update({remove, bob}, a2, Set5),
-    Set7 = update({add, dave}, a1, Set6),
+    {ok, Set2} = update({add, bob}, a1, Set),
+    {ok, Set3} = update({add, pete}, a2, Set2),
+    {ok, Set4} = update({add, sheila}, a3, Set3),
+    {ok, Set5} = update({remove, pete}, a3, Set4),
+    {ok, Set6} = update({remove, bob}, a2, Set5),
+    {ok, Set7} = update({add, dave}, a1, Set6),
     ?assertEqual(2, value(size, Set7)),
     ?assert(value({contains, sheila}, Set7)),
     ?assertNot(value({contains, bob}, Set7)),
