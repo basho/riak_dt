@@ -69,7 +69,7 @@ value(_, Flag) ->
     Flag.
 
 update(disable, _Actor, _Flag) ->
-    off.
+    {ok, off}.
 
 merge(FA, FB) ->
     flag_and(FA, FB).
@@ -107,13 +107,13 @@ new_test() ->
 
 update_enable_test() ->
     F0 = new(),
-    F1 = update(disable, 1, F0),
+    {ok, F1} = update(disable, 1, F0),
     ?assertEqual(off, F1).
 
 update_enable_multi_test() ->
     F0 = new(),
-    F1 = update(disable, 1, F0),
-    F2 = update(disable, 1, F1),
+    {ok, F1} = update(disable, 1, F0),
+    {ok, F2} = update(disable, 1, F1),
     ?assertEqual(off, F2).
 
 merge_offs_test() ->
@@ -122,17 +122,17 @@ merge_offs_test() ->
 
 merge_on_left_test() ->
     F0 = new(),
-    F1 = update(disable, 1, F0),
+    {ok, F1} = update(disable, 1, F0),
     ?assertEqual(off, merge(F1, F0)).
 
 merge_on_right_test() ->
     F0 = new(),
-    F1 = update(disable, 1, F0),
+    {ok, F1} = update(disable, 1, F0),
     ?assertEqual(off, merge(F0, F1)).
 
 merge_on_both_test() ->
     F0 = new(),
-    F1 = update(disable, 1, F0),
+    {ok, F1} = update(disable, 1, F0),
     ?assertEqual(off, merge(F1, F1)).
 
 -endif.

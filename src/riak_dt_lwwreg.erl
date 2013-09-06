@@ -72,19 +72,20 @@ value(timestamp, {_V, TS}) ->
 -spec update(lwwreg_op(), term(), lwwreg()) ->
                     lwwreg().
 update({assign, Value, TS}, _Actor, {_OldVal, OldTS}) when is_integer(TS), TS > 0, TS >= OldTS ->
-    {Value, TS};
+    {ok, {Value, TS}};
 update({assign, _Value, _TS}, _Actor, OldLWWReg) ->
-    OldLWWReg;
+    {ok, OldLWWReg};
 %% For when users don't provide timestamps
 %% don't think it is a good idea to mix server and client timestamps
 update({assign, Value}, _Actor, {OldVal, OldTS}) ->
     MicroEpoch = make_micro_epoch(),
-    case MicroEpoch > OldTS of
-        true ->
-            {Value, MicroEpoch};
-        false ->
-            {OldVal, OldTS}
-    end.
+    LWW = case MicroEpoch > OldTS of
+              true ->
+                  {Value, MicroEpoch};
+              false ->
+                  {OldVal, OldTS}
+          end,
+    {ok, LWW}.
 
 make_micro_epoch() ->
     {Mega, Sec, Micro} = os:timestamp(),
@@ -95,6 +96,10 @@ make_micro_epoch() ->
 -spec merge(lwwreg(), lwwreg()) -> lwwreg().
 merge({Val1, TS1}, {_Val2, TS2}) when TS1 > TS2 ->
     {Val1, TS1};
+merge({_Val1, TS1}, {Val2, TS2}) when TS2 > TS1 ->
+    {Val2, TS2};
+merge(LWWReg1, LWWReg2) when LWWReg1 >= LWWReg2 ->
+    LWWReg1;
 merge(_LWWReg1, LWWReg2) ->
     LWWReg2.
 
@@ -109,8 +114,8 @@ equal(_, _) ->
 
 %% @Doc reset to default value
 -spec reset(lwwreg(), term()) -> lwwreg().
-reset({_Value, TS}, _Actor) ->
-    {undefined, TS+1}.
+reset({_Value, _TS}, _Actor) ->
+    {undefined, 0}.
 
 -define(TAG, 72).
 -define(V1_VERS, 1).
@@ -163,7 +168,10 @@ eqc_value_test_() ->
 %% EQC generator
 generate() ->
     ?LET({Op, Actor}, {gen_op(), char()},
-         riak_dt_lwwreg:update(Op, Actor, riak_dt_lwwreg:new())).
+         begin
+             {ok, Lww} = riak_dt_lwwreg:update(Op, Actor, riak_dt_lwwreg:new()),
+             Lww
+         end).
 
 init_state() ->
     {undefined, 0}.
@@ -197,16 +205,16 @@ value_test() ->
 
 update_assign_test() ->
     LWW0 = new(),
-    LWW1 = update({assign, value1, 2}, actor1, LWW0),
-    LWW2 = update({assign, value0, 1}, actor1, LWW1),
+    {ok, LWW1} = update({assign, value1, 2}, actor1, LWW0),
+    {ok, LWW2} = update({assign, value0, 1}, actor1, LWW1),
     ?assertEqual({value1, 2}, LWW2),
-    LWW3 = update({assign, value2, 3}, actor1, LWW2),
+    {ok, LWW3} = update({assign, value2, 3}, actor1, LWW2),
     ?assertEqual({value2, 3}, LWW3).
 
 update_assign_ts_test() ->
     LWW0 = new(),
-    LWW1 = update({assign, value0}, actr, LWW0),
-    LWW2 = update({assign, value1}, actr, LWW1),
+    {ok, LWW1} = update({assign, value0}, actr, LWW0),
+    {ok, LWW2} = update({assign, value1}, actr, LWW1),
     ?assertMatch({value1, _}, LWW2).
 
 merge_test() ->
@@ -227,17 +235,17 @@ equal_test() ->
 
 roundtrip_bin_test() ->
     LWW = new(),
-    LWW1 = update({assign, 2}, a1, LWW),
-    LWW2 = update({assign, 4}, a2, LWW1),
-    LWW3 = update({assign, 89}, a3, LWW2),
-    LWW4 = update({assign, <<"this is a binary">>}, a4, LWW3),
+    {ok, LWW1} = update({assign, 2}, a1, LWW),
+    {ok, LWW2} = update({assign, 4}, a2, LWW1),
+    {ok, LWW3} = update({assign, 89}, a3, LWW2),
+    {ok, LWW4} = update({assign, <<"this is a binary">>}, a4, LWW3),
     Bin = to_binary(LWW4),
     Decoded = from_binary(Bin),
     ?assert(equal(LWW4, Decoded)).
 
 query_test() ->
     LWW = new(),
-    LWW1 = update({assign, value, 100}, a1, LWW),
+    {ok, LWW1} = update({assign, value, 100}, a1, LWW),
     ?assertEqual(100, value(timestamp, LWW1)).
 
 -endif.

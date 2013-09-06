@@ -93,19 +93,19 @@ value(negative, PNCnt) ->
 %% `Actor' is any term, and the 3rd argument is the `pncounter()' to update.
 %%
 %% returns the updated `pncounter()'
--spec update(pncounter_op(), term(), pncounter()) -> pncounter().
+-spec update(pncounter_op(), term(), pncounter()) -> {ok, pncounter()}.
 update(increment, Actor, PNCnt) ->
     update({increment, 1}, Actor, PNCnt);
 update(decrement, Actor, PNCnt) ->
     update({decrement, 1}, Actor, PNCnt);
 update({_IncrDecr, 0}, _Actor, PNCnt) ->
-    PNCnt;
+    {ok, PNCnt};
 update({increment, By}, Actor, PNCnt) when is_integer(By), By > 0 ->
-    increment_by(By, Actor, PNCnt);
+    {ok, increment_by(By, Actor, PNCnt)};
 update({increment, By}, Actor, PNCnt) when is_integer(By), By < 0 ->
     update({decrement, -By}, Actor, PNCnt);
 update({decrement, By}, Actor, PNCnt) when is_integer(By), By > 0 ->
-    decrement_by(By, Actor, PNCnt).
+    {ok, decrement_by(By, Actor, PNCnt)}.
 
 %% @doc Merge two `pncounter()'s to a single `pncounter()'. This is the Least Upper Bound
 %% function described in the literature.
@@ -145,9 +145,11 @@ reset(Cntr, Actor) ->
 reset(0, _Actor, Cntr) ->
     Cntr;
 reset(Amt, Actor, Cntr) when Amt > 0 ->
-    update({decrement, Amt}, Actor, Cntr);
+    {ok, Cntr2} = update({decrement, Amt}, Actor, Cntr),
+    Cntr2;
 reset(Amt, Actor, Cntr)  ->
-    update({increment, Amt}, Actor, Cntr).
+    {ok, Cntr2} = update({increment, Amt*-1}, Actor, Cntr),
+    Cntr2.
 
 -define(TAG, 71).
 -define(V1_VERS, 1).
@@ -206,17 +208,20 @@ change_versions(Version, Version, PNCnt)  ->
 change_versions(?V1_VERS, ?V2_VERS, {P,N}) ->
     PNCnt0 = new(),
     PNCnt1 = lists:foldl(fun({Actor,Inc},PNCnt) ->
-                            update({increment,Inc}, Actor, PNCnt)
+                                 {ok, PNCnt2} = update({increment,Inc}, Actor, PNCnt),
+                                 PNCnt2
                          end, PNCnt0, P),
     PNCnt2 = lists:foldl(fun({Actor,Dec},PNCnt) ->
-                            update({decrement,Dec}, Actor, PNCnt)
+                                 {ok, PNCnt2} = update({decrement,Dec}, Actor, PNCnt),
+                                 PNCnt2
                          end, PNCnt1, N),
     PNCnt2;
 change_versions(?V2_VERS, ?V1_VERS, PNCnt) when is_list(PNCnt) ->
     OldPN = {riak_dt_gcounter:new(), riak_dt_gcounter:new()},
     {P, N} = lists:foldl(fun({Actor,Inc,Dec},{P1,N1}) ->
-                             {riak_dt_gcounter:update({increment,Inc},Actor,P1),
-                              riak_dt_gcounter:update({increment,Dec},Actor,N1)}
+                                 {ok, Inc2} = riak_dt_gcounter:update({increment,Inc},Actor,P1),
+                                 {ok, Dec2} = riak_dt_gcounter:update({increment,Dec},Actor,N1),
+                                 {Inc2, Dec2}
                          end, OldPN, PNCnt),
     {P, N}.
 
@@ -252,7 +257,9 @@ eqc_value_test_() ->
 generate() ->
     ?LET(Ops, list(gen_op()),
          lists:foldl(fun(Op, Cntr) ->
-                             riak_dt_pncounter:update(Op, choose(1, 50), Cntr) end,
+                             {ok, Cntr2} = riak_dt_pncounter:update(Op, choose(1, 50), Cntr),
+                             Cntr2
+                     end,
                      riak_dt_pncounter:new(),
                      Ops)).
 
@@ -295,28 +302,28 @@ value_test() ->
 
 update_increment_test() ->
     PNCnt0 = new(),
-    PNCnt1 = update(increment, 1, PNCnt0),
-    PNCnt2 = update(increment, 2, PNCnt1),
-    PNCnt3 = update(increment, 1, PNCnt2),
+    {ok, PNCnt1} = update(increment, 1, PNCnt0),
+    {ok, PNCnt2} = update(increment, 2, PNCnt1),
+    {ok, PNCnt3} = update(increment, 1, PNCnt2),
     ?assertEqual([{1,2,0}, {2,1,0}], PNCnt3).
 
 update_increment_by_test() ->
     PNCnt0 = new(),
-    PNCnt1 = update({increment, 7}, 1, PNCnt0),
+    {ok, PNCnt1} = update({increment, 7}, 1, PNCnt0),
     ?assertEqual([{1,7,0}], PNCnt1).
 
 update_decrement_test() ->
     PNCnt0 = new(),
-    PNCnt1 = update(increment, 1, PNCnt0),
-    PNCnt2 = update(increment, 2, PNCnt1),
-    PNCnt3 = update(increment, 1, PNCnt2),
-    PNCnt4 = update(decrement, 1, PNCnt3),
+    {ok, PNCnt1} = update(increment, 1, PNCnt0),
+    {ok, PNCnt2} = update(increment, 2, PNCnt1),
+    {ok, PNCnt3} = update(increment, 1, PNCnt2),
+    {ok, PNCnt4} = update(decrement, 1, PNCnt3),
     ?assertEqual([{1,2,1}, {2,1,0}], PNCnt4).
 
 update_decrement_by_test() ->
     PNCnt0 = new(),
-    PNCnt1 = update({increment, 7}, 1, PNCnt0),
-    PNCnt2 = update({decrement, 5}, 1, PNCnt1),
+    {ok, PNCnt1} = update({increment, 7}, 1, PNCnt0),
+    {ok, PNCnt2} = update({decrement, 5}, 1, PNCnt1),
     ?assertEqual([{1,7,5}], PNCnt2).
 
 merge_test() ->
@@ -354,14 +361,14 @@ usage_test() ->
     PNCnt1 = new(),
     PNCnt2 = new(),
     ?assert(equal(PNCnt1, PNCnt2)),
-    PNCnt1_1 = update({increment, 2}, a1, PNCnt1),
-    PNCnt2_1 = update(increment, a2, PNCnt2),
+    {ok, PNCnt1_1} = update({increment, 2}, a1, PNCnt1),
+    {ok, PNCnt2_1} = update(increment, a2, PNCnt2),
     PNCnt3 = merge(PNCnt1_1, PNCnt2_1),
-    PNCnt2_2 = update({increment, 3}, a3, PNCnt2_1),
-    PNCnt3_1 = update(increment, a4, PNCnt3),
-    PNCnt3_2 = update(increment, a1, PNCnt3_1),
-    PNCnt3_3 = update({decrement, 2}, a5, PNCnt3_2),
-    PNCnt2_3 = update(decrement, a2, PNCnt2_2),
+    {ok, PNCnt2_2} = update({increment, 3}, a3, PNCnt2_1),
+    {ok, PNCnt3_1} = update(increment, a4, PNCnt3),
+    {ok, PNCnt3_2} = update(increment, a1, PNCnt3_1),
+    {ok, PNCnt3_3} = update({decrement, 2}, a5, PNCnt3_2),
+    {ok, PNCnt2_3} = update(decrement, a2, PNCnt2_2),
     ?assertEqual([{a5,0,2},
                   {a1,3,0},
                   {a4,1,0},
@@ -370,10 +377,10 @@ usage_test() ->
 
 roundtrip_bin_test() ->
     PN = new(),
-    PN1 = update({increment, 2}, <<"a1">>, PN),
-    PN2 = update({decrement, 1000000000000000000000000}, douglas_Actor, PN1),
-    PN3 = update(increment, [{very, ["Complex"], <<"actor">>}, honest], PN2),
-    PN4 = update(decrement, "another_acotr", PN3),
+    {ok, PN1} = update({increment, 2}, <<"a1">>, PN),
+    {ok, PN2} = update({decrement, 1000000000000000000000000}, douglas_Actor, PN1),
+    {ok, PN3} = update(increment, [{very, ["Complex"], <<"actor">>}, honest], PN2),
+    {ok, PN4} = update(decrement, "another_acotr", PN3),
     Bin = to_binary(PN4),
     Decoded = from_binary(Bin),
     ?assert(equal(PN4, Decoded)).
@@ -387,10 +394,10 @@ update_bin_test() ->
 
 query_test() ->
     PN = new(),
-    PN1 = update({increment, 50}, a1, PN),
-    PN2 = update({increment, 50}, a2, PN1),
-    PN3 = update({decrement, 15}, a3, PN2),
-    PN4 = update({decrement, 10}, a4, PN3),
+    {ok, PN1} = update({increment, 50}, a1, PN),
+    {ok, PN2} = update({increment, 50}, a2, PN1),
+    {ok, PN3} = update({decrement, 15}, a3, PN2),
+    {ok, PN4} = update({decrement, 10}, a4, PN3),
     ?assertEqual(75, value(PN4)),
     ?assertEqual(100, value(positive, PN4)),
     ?assertEqual(25, value(negative, PN4)).
