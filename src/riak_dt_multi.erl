@@ -29,9 +29,9 @@
 %% The value for a given field is tombstoned when the field is
 %% removed. This map uses a reset / remove strategy to generate
 %% tombstones. Reset attempts to set the value of the CRDT back to
-%% bottom, with out break monotonicity. For example, if a counter at
+%% bottom, without break monotonicity. For example, if a counter at
 %% field F has a value of 10, then on remove of F, the counter is
-%% decremented by 10, so it's value is zero, and the field removed
+%% decremented by 10, so its value is zero, and the field removed
 %% from the keyset. A concurrent modification of that field on another
 %% replica will result in the field being present in the Map, but its
 %% value will be only that of the concurrent updates. This semantic
@@ -165,9 +165,9 @@ value({contains, Field}, {Schema, _Values}) ->
 %% and the result inserted otherwise, the operation is applied to the
 %% local value.
 %%
-%% {add, field}' where field is `{name, type}' results in `field'
+%% {add, `field()'}' where field is `{name, type}' results in `field'
 %% being added to the Map, and a new crdt of `type' being its value.
-%% `{remove, field}' where field is `{name, type}', results in
+%% `{remove, `field()'}' where field is `{name, type}', results in
 %% `reset/2' being called on the crdt at `field' and the key and value
 %% being tombstoned.
 %%

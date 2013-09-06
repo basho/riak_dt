@@ -181,12 +181,13 @@ reset(ORSet, Actor) ->
     {ok, ORSet2} = update({remove_all, Values}, Actor, ORSet),
     ORSet2.
 
-%% @doc the precondition context is a binary representation of a fragment of the CRDT
-%% that operations with pre-conditions can be applied too.
-%% In the case of OR-Sets this is the set of adds observed.
-%% The system can then apply a remove to this context and merge it with a replica.
-%% Especially useful for hybrid op/state systems where the context of an operation is
-%% needed at a replica without sending the entire state to the client.
+%% @doc the precondition context is a fragment of the CRDT that
+%% operations with pre-conditions can be applied too.  In the case of
+%% OR-Sets this is the set of adds observed.  The system can then
+%% apply a remove to this context and merge it with a replica.
+%% Especially useful for hybrid op/state systems where the context of
+%% an operation is needed at a replica without sending the entire
+%% state to the client.
 -spec precondition_context(orset()) -> orset().
 precondition_context({ADict, _RDict}) ->
     {ADict, orddict:new()}.

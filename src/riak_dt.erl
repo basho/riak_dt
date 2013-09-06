@@ -27,11 +27,12 @@
 -type crdt() :: term().
 -type operation() :: term().
 -type actor() :: term().
+-type value() :: term().
 -type error() :: term().
 
 -callback new() -> crdt().
 -callback value(crdt()) -> term().
--callback value(term(), crdt()) -> term().
+-callback value(term(), crdt()) -> value().
 -callback update(operation(), actor(), crdt()) -> {ok, crdt()} | {error, error()}.
 -callback merge(crdt(), crdt()) -> crdt().
 -callback equal(crdt(), crdt()) -> boolean().
