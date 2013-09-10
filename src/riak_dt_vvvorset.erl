@@ -71,7 +71,6 @@
 -export([new/0, value/1, value/2]).
 -export([update/3, merge/2, equal/2, reset/2]).
 -export([to_binary/1, from_binary/1]).
--export([precondition_context/1]).
 
 %% EQC API
 -ifdef(EQC).
@@ -99,7 +98,7 @@
 %% knowledge about adds / removes than a UUID per add.
 -type entries() :: [{member(), member_info()}].
 
--type member_info() :: {boolean(), riak_dt_vclock:vclock()}.
+-type member_info() :: riak_dt_vclock:vclock().
 -type member() :: term().
 
 -spec new() -> vvorset().
@@ -110,24 +109,20 @@ new() ->
 
 -spec value(vvorset()) -> [member()].
 value({_Clock, _Actors, Entries}) ->
-    [K || {K, {Active, _Vclock}} <- orddict:to_list(Entries), Active == 1].
+    [K || {K, _Vclock} <- orddict:to_list(Entries)].
 
-%% @doc Query `OR-Set`
 -spec value(vvorset_q(), vvorset()) -> term().
 value(size, ORset) ->
     length(value(ORset));
 value({contains, Elem}, ORset) ->
-    lists:member(Elem, value(ORset));
-value(tombstones, {_Clock, _Actors, Entries}) ->
-    [K || {K, {Active, _Vclock}} <- orddict:to_list(Entries), Active == 0].
+    lists:member(Elem, value(ORset)).
 
 -spec update(vvorset_op(), actor(), vvorset()) -> {ok, vvorset()} |
                                                   {error, {precondition ,{not_present, member()}}}.
 %% @Doc take a list of Set operations and apply them to the set.
 %% NOTE: either _all_ are applied, or _none_ are.
 update({update, Ops}, Actor, ORSet) ->
-    %% Sort ops, so adds are before removes.
-    apply_ops(lists:sort(Ops), Actor, ORSet);
+    apply_ops(Ops, Actor, ORSet);
 update({add, Elem}, Actor, ORSet) ->
     {ok, add_elem(Actor, ORSet, Elem)};
 update({remove, Elem}, _Actor, ORSet) ->
@@ -166,20 +161,59 @@ remove_all([Elem | Rest], Actor, ORSet) ->
 
 -spec merge(vvorset(), vvorset()) -> vvorset().
 merge({Clock1, Actors1, Entries1}, {Clock2, Actors2, Entries2}) ->
-    %% for every key in Entries1, merge its contents with Entries2's content for same key
-    %% if the keys values are both active or both deleted, simply merge the clocks
-    %% if one is active and one is deleted, check that the deleted dominates the added
-    %% if so, set to that value and deleted, otherwise keep as is (no need to merge vclocks?)
-    %% Either way we have to restructure _all_ the vclocks to reflect the merged actor ids
     Actors = merge_actors(Actors1, Actors2),
     Clock = vclock_merge(Clock1, Clock2, Actors1, Actors2, Actors),
-    {Clock, Actors, orddict:merge(fun(_K, {Bool, V1}, {Bool, V2}) ->
-                                   {Bool, vclock_merge(V1, V2, Actors1, Actors2, Actors)};
-                     (_K, {0, V1}, {1, V2}) ->
-                                   is_active_or_removed(V1, V2, Actors1, Actors2, Actors);
-                     (_K, {1, V1}, {0, V2}) ->
-                                   is_active_or_removed(V2, V1, Actors2, Actors1, Actors) end,
-                     Entries1, Entries2)}.
+
+    SetClock1 = riak_dt_vclock:replace_actors(orddict:to_list(Actors1), Clock1, 2),
+    SetClock2 = riak_dt_vclock:replace_actors(orddict:to_list(Actors2), Clock2, 2),
+    %% If an element is in both dicts, merge it
+    %% If it occurs in one, then see if it's clock is dominated by the others whole set clock
+    %% If so, then drop it, if not, keep it
+    Keys1 = sets:from_list(orddict:fetch_keys(Entries1)),
+    Keys2 = sets:from_list(orddict:fetch_keys(Entries2)),
+    CommonKeys = sets:intersection(Keys1, Keys2),
+    Unique1 = sets:subtract(Keys1, CommonKeys),
+    Unique2 = sets:subtract(Keys2, CommonKeys),
+    %% All common keys need their clocks merging
+    Entries00 = sets:fold(fun(Key, Acc) ->
+                                  V1 = orddict:fetch(Key, Entries1),
+                                  V2 = orddict:fetch(Key, Entries2),
+                                  V = vclock_merge(V1, V2, Actors1, Actors2, Actors),
+                                  orddict:store(Key, V, Acc) end,
+                          orddict:new(),
+                          CommonKeys),
+    %% Consider all LHS's unique keys
+    Entries0 = sets:fold(fun(Key, Acc) ->
+                                 LHSClock = orddict:fetch(Key, Entries1),
+                                 LHSClock1 = riak_dt_vclock:replace_actors(orddict:to_list(Actors1), LHSClock, 2),
+                                 case (not riak_dt_vclock:descends(SetClock2, LHSClock1)) of
+                                     true ->
+                                         NewClock =  riak_dt_vclock:replace_actors(orddict:to_list(Actors), LHSClock1),
+                                         orddict:store(Key, NewClock, Acc);
+                                     false ->
+                                         Acc
+                                 end
+                         end,
+                         Entries00,
+                         Unique1),
+
+    %% Consider all RHS's unique keys
+    Entries = sets:fold(fun(Key, Acc) ->
+                                RHSClock = orddict:fetch(Key, Entries2),
+                                RHSClock1 = riak_dt_vclock:replace_actors(orddict:to_list(Actors2), RHSClock, 2),
+                                case (not riak_dt_vclock:descends(SetClock1, RHSClock1)) of
+                                    true ->
+                                        NewClock =  riak_dt_vclock:replace_actors(orddict:to_list(Actors), RHSClock1),
+                                        orddict:store(Key, NewClock, Acc);
+                                    false ->
+                                        Acc
+                                end
+                        end,
+                        Entries0,
+                        Unique2),
+
+
+    {Clock, Actors, Entries}.
 
 -spec merge_actors(actorlist(), actorlist()) -> actorlist().
 merge_actors(Actors1, Actors2) ->
@@ -201,15 +235,15 @@ vclock_merge(V10, V20, Actors1, Actors2, MergedActors) ->
 
 %% @Doc determine if the entry is active or removed.
 %% First argument is a remove vclock, second is an active vclock
-is_active_or_removed(RemoveClock0, AddClock0, RemActors, AddActors, MergedActors) ->
-    RemoveClock = riak_dt_vclock:replace_actors(orddict:to_list(RemActors), RemoveClock0, 2),
-    AddClock = riak_dt_vclock:replace_actors(orddict:to_list(AddActors), AddClock0, 2),
-    case (not riak_dt_vclock:descends(RemoveClock, AddClock)) of
-        true ->
-            {1, riak_dt_vclock:replace_actors(orddict:to_list(MergedActors), AddClock)};
-        false ->
-            {0, riak_dt_vclock:replace_actors(orddict:to_list(MergedActors), RemoveClock)}
-    end.
+%% is_active_or_removed(RemoveClock0, AddClock0, RemActors, AddActors, MergedActors) ->
+%%     RemoveClock = riak_dt_vclock:replace_actors(orddict:to_list(RemActors), RemoveClock0, 2),
+%%     AddClock = riak_dt_vclock:replace_actors(orddict:to_list(AddActors), AddClock0, 2),
+%%     case (not riak_dt_vclock:descends(RemoveClock, AddClock)) of
+%%         true ->
+%%             {1, riak_dt_vclock:replace_actors(orddict:to_list(MergedActors), AddClock)};
+%%         false ->
+%%             {0, riak_dt_vclock:replace_actors(orddict:to_list(MergedActors), RemoveClock)}
+%%     end.
 
 -spec equal(vvorset(), vvorset()) -> boolean().
 equal(ORSet1, ORSet2) ->
@@ -232,7 +266,7 @@ reset([Member | Rest], Actor, Set) ->
 add_elem(Actor, {Clock, Actors0, Entries}, Elem) ->
     {Placeholder, Actors} = actor_placeholder(Actor, Actors0),
     NewClock = riak_dt_vclock:increment(Placeholder, Clock),
-    {NewClock, Actors, orddict:store(Elem, {1, NewClock}, Entries)}.
+    {NewClock, Actors, orddict:store(Elem, NewClock, Entries)}.
 
 -spec actor_placeholder(actor(), actorlist()) -> {non_neg_integer(), actorlist()}.
 actor_placeholder(Actor, Actors) ->
@@ -244,25 +278,13 @@ actor_placeholder(Actor, Actors) ->
             {Placeholder, orddict:store(Actor, Placeholder, Actors)}
     end.
 
-remove_elem({ok, {1, Vclock}}, Elem, {Clock, AL, Dict}) ->
-    {ok, {Clock, AL, orddict:store(Elem, {0, Vclock}, Dict)}};
-remove_elem({ok, {0, _Vclock}}, _Elem, ORSet) ->
-    {ok, ORSet};
+remove_elem({ok, _Vclock}, Elem, {Clock, AL, Dict}) ->
+    %% TODO Should I increment the set wide vclock here???
+    {ok, {Clock, AL, orddict:erase(Elem, Dict)}};
 remove_elem(_, Elem, _ORSet) ->
     %% What @TODO?
     %% Throw an error? (seems best)
     {error, {precondition, {not_present, Elem}}}.
-
-%% @doc the precondition context is a binary representation of a fragment of the CRDT
-%% that operations with pre-conditions can be applied too.
-%% In the case of OR-Sets this is the set of adds observed.
-%% The system can then apply a remove to this context and merge it with a replica.
-%% Especially useful for hybrid op/state systems where the context of an operation is
-%% needed at a replica without sending the entire state to the client.
--spec precondition_context(vvorset()) -> vvorset().
-precondition_context({AL, Entries}) ->
-    {AL, [Add || {_K, {Active, _Clock}}=Add <- orddict:to_list(Entries),
-                 Active == 1]}.
 
 -define(TAG, 75).
 -define(V1_VERS, 1).
@@ -289,36 +311,102 @@ eqc_value_test_() ->
 generate() ->
     ?LET(Members, list(int()),
          lists:foldl(fun(M, Set) ->
-                            riak_dt_vvorset:update({add, M}, choose(1, 50), Set) end,
+                            riak_dt_vvvorset:update({add, M}, choose(1, 50), Set) end,
                     riak_dt_vvorset:new(),
                     Members)).
 
 %% EQC generator
 gen_op() ->
-   riak_dt_orset:gen_op().
+    oneof([gen_updates(), gen_update()]).
+
+gen_updates() ->
+     {update, non_empty(list(gen_update()))}.
+
+gen_update() ->
+    oneof([{add, int()}, {remove, int()},
+           {add_all, list(int())},
+           {remove_all, list(int())}]).
 
 init_state() ->
-    riak_dt_orset:init_state().
+    {0, dict:new()}.
 
-update_expected(ID, Op, State) ->
-    riak_dt_orset:update_expected(ID, Op, State).
+do_updates(_ID, [], _OldState, NewState) ->
+    NewState;
+do_updates(ID, [{_Action, []} | Rest], OldState, NewState) ->
+    do_updates(ID, Rest, OldState, NewState);
+do_updates(ID, [Update | Rest], OldState, NewState) ->
+    case {Update, update_expected(ID, Update, NewState)} of
+        {{Op, Arg}, NewState} when Op == remove;
+                                   Op == remove_all ->
+            %% precondition fail, or idempotent remove?
+            {_Cnt, Dict} = NewState,
+            {_A, R} = dict:fetch(ID, Dict),
+            Removed = [ E || {E, _X} <- sets:to_list(R)],
+            case member(Arg, Removed) of
+                true ->
+                    OldState;
+                false ->
+                    OldState
+            end;
+        {_, NewNewState} ->
+            do_updates(ID, Rest, OldState, NewNewState)
+    end.
 
-eqc_state_value(State) ->
-    riak_dt_orset:eqc_state_value(State).
+member(_Arg, []) ->
+    false;
+member(Arg, L) when is_list(Arg) ->
+    sets:is_subset(sets:from_list(Arg), sets:from_list(L));
+member(Arg, L) ->
+    lists:member(Arg, L).
+
+update_expected(ID, {update, Updates}, State) ->
+    do_updates(ID, lists:sort(Updates), State, State);
+update_expected(ID, {add, Elem}, {Cnt0, Dict}) ->
+    Cnt = Cnt0+1,
+    ToAdd = {Elem, Cnt},
+    {A, R} = dict:fetch(ID, Dict),
+    {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)};
+update_expected(ID, {remove, Elem}, {Cnt, Dict}) ->
+    {A, R} = dict:fetch(ID, Dict),
+    ToRem = [ {E, X} || {E, X} <- sets:to_list(A), E == Elem],
+    {Cnt, dict:store(ID, {A, sets:union(R, sets:from_list(ToRem))}, Dict)};
+update_expected(ID, {merge, SourceID}, {Cnt, Dict}) ->
+    {FA, FR} = dict:fetch(ID, Dict),
+    {TA, TR} = dict:fetch(SourceID, Dict),
+    MA = sets:union(FA, TA),
+    MR = sets:union(FR, TR),
+    {Cnt, dict:store(ID, {MA, MR}, Dict)};
+update_expected(ID, create, {Cnt, Dict}) ->
+    {Cnt, dict:store(ID, {sets:new(), sets:new()}, Dict)};
+update_expected(ID, {add_all, Elems}, State) ->
+    lists:foldl(fun(Elem, S) ->
+                       update_expected(ID, {add, Elem}, S) end,
+               State,
+               Elems);
+update_expected(ID, {remove_all, Elems}, {_Cnt, Dict}=State) ->
+    %% Only if _all_ elements are in the set do we remove any elems
+    {A, R} = dict:fetch(ID, Dict),
+    Members = [E ||  {E, _X} <- sets:to_list(sets:union(A,R))],
+    case sets:is_subset(sets:from_list(Elems), sets:from_list(Members)) of
+        true ->
+            lists:foldl(fun(Elem, S) ->
+                                update_expected(ID, {remove, Elem}, S) end,
+                        State,
+                        Elems);
+        false ->
+            State
+    end.
+
+
+eqc_state_value({_Cnt, Dict}) ->
+    {A, R} = dict:fold(fun(_K, {Add, Rem}, {AAcc, RAcc}) ->
+                               {sets:union(Add, AAcc), sets:union(Rem, RAcc)} end,
+                       {sets:new(), sets:new()},
+                       Dict),
+    Remaining = sets:subtract(A, R),
+    Values = [ Elem || {Elem, _X} <- sets:to_list(Remaining)],
+    lists:usort(Values).
 
 -endif.
-
-query_test() ->
-    Set = new(),
-    {ok, Set2} = update({add, bob}, a1, Set),
-    {ok, Set3} = update({add, pete}, a2, Set2),
-    {ok, Set4} = update({add, sheila}, a3, Set3),
-    {ok, Set5} = update({remove, pete}, a3, Set4),
-    {ok, Set6} = update({remove, bob}, a2, Set5),
-    {ok, Set7} = update({add, dave}, a1, Set6),
-    ?assertEqual(2, value(size, Set7)),
-    ?assert(value({contains, sheila}, Set7)),
-    ?assertNot(value({contains, bob}, Set7)),
-    ?assertEqual([bob, pete], value(tombstones, Set7)).
 
 -endif.
