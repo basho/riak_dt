@@ -133,7 +133,8 @@ crdt_equals(Mod, {_IDS, CS}, {_IDD, CD}) ->
 %% Helpers
 %% The orset CRDT returns a list, it has no guarantees about order
 %% list equality expects lists in order
-sort(Mod, L) when Mod == riak_dt_vvorset; Mod == riak_dt_multi  ->
+sort(Mod, L) when Mod == riak_dt_vvorset; Mod == riak_dt_multi; Mod == riak_dt_orset;
+                  Mod == riak_dt_gset ->
     lists:sort(L);
 sort(_, Other) ->
     Other.

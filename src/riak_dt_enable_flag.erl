@@ -40,23 +40,6 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
-%% EQC generator
--ifdef(EQC).
-init_state() -> 
-    off.    
-
-gen_op() ->
-    enable.
-
-update_expected(_ID, enable, _Prev) ->
-    on;
-update_expected(_ID, _Op, Prev) ->
-    Prev.
-
-eqc_state_value(S) ->
-    S.
--endif.
-
 -define(TAG, 79).
 
 new() ->
@@ -98,6 +81,22 @@ flag_or(off, off) ->
 -ifdef(TEST).
 
 -ifdef(EQC).
+
+%% EQC generator
+init_state() ->
+    off.
+
+gen_op() ->
+    enable.
+
+update_expected(_ID, enable, _Prev) ->
+    on;
+update_expected(_ID, _Op, Prev) ->
+    Prev.
+
+eqc_state_value(S) ->
+    S.
+
 eqc_value_test_() ->
     crdt_statem_eqc:run(?MODULE, 1000).
 -endif.
