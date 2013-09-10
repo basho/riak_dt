@@ -83,7 +83,7 @@ maybe_merge(State, _N) ->
 
 perform(add, {I, Mod, Val0, AL0}) ->
     Elem = crypto:rand_uniform(1, 100),
-    Val = Mod:update({add, Elem}, <<I:64>>, Val0),
+    {ok, Val} = Mod:update({add, Elem}, <<I:64>>, Val0),
     AL = ordsets:add_element(Elem, AL0),
     {I, Mod, Val, AL};
 perform(remove, {I, Mod, Val0, AL0}) ->
@@ -93,7 +93,7 @@ perform(remove, {I, Mod, Val0, AL0}) ->
         Size ->
             Idx = crypto:rand_uniform(1, Size),
             Elem = lists:nth(Idx, ordsets:to_list(AL0)),
-            Val = Mod:update({remove, Elem}, <<I:64>>, Val0),
+            {ok, Val} = Mod:update({remove, Elem}, <<I:64>>, Val0),
             AL = ordsets:del_element(Elem, AL0),
             {I, Mod, Val, AL}
     end;

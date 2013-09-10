@@ -34,7 +34,7 @@
 
 -module(riak_dt_pncounter).
 
--export([new/0, new/2, value/1, value/2, reset/2,
+-export([new/0, new/2, value/1, value/2,
          update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
 -export([to_binary/2, from_binary/2, current_version/1, change_versions/3]).
 
@@ -134,22 +134,6 @@ merge([{Act,IncA,DecA}=ACntA|RestA],PNCntB, Acc) ->
 -spec equal(pncounter(), pncounter()) -> boolean().
 equal(PNCntA, PNCntB) ->
     lists:sort(PNCntA) =:= lists:sort(PNCntB).
-
-%% @Doc reset the PN-Counter to zero (based on it's current value) by
-%% writing an increment in `Actor''s name.
--spec reset(pncounter(), term()) -> pncounter().
-reset(Cntr, Actor) ->
-    Amt = value(Cntr),
-    reset(Amt, Actor, Cntr).
-
-reset(0, _Actor, Cntr) ->
-    Cntr;
-reset(Amt, Actor, Cntr) when Amt > 0 ->
-    {ok, Cntr2} = update({decrement, Amt}, Actor, Cntr),
-    Cntr2;
-reset(Amt, Actor, Cntr)  ->
-    {ok, Cntr2} = update({increment, Amt*-1}, Actor, Cntr),
-    Cntr2.
 
 -define(TAG, 71).
 -define(V1_VERS, 1).

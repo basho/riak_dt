@@ -31,7 +31,7 @@
 -module(riak_dt_lwwreg).
 
 -export([new/0, value/1, value/2, update/3, merge/2,
-         reset/2, equal/2, to_binary/1, from_binary/1]).
+         equal/2, to_binary/1, from_binary/1]).
 
 %% EQC API
 -ifdef(EQC).
@@ -111,11 +111,6 @@ equal({Val, TS}, {Val, TS}) ->
     true;
 equal(_, _) ->
     false.
-
-%% @Doc reset to default value
--spec reset(lwwreg(), term()) -> lwwreg().
-reset({_Value, _TS}, _Actor) ->
-    {undefined, 0}.
 
 -define(TAG, 72).
 -define(V1_VERS, 1).
