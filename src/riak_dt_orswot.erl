@@ -414,7 +414,7 @@ update_expected(ID, {remove_all, Elems}, {_Cnt, Dict}=State) ->
     %% DO NOT consider tombstones as "in" the set, orswot does not have idempotent remove
     In = sets:subtract(A, R),
     Members = [ Elem || {Elem, _X} <- sets:to_list(In)],
-    case is_sub_bag(Elems, Members) of
+    case is_sub_bag(Elems, lists:usort(Members)) of
         true ->
             lists:foldl(fun(Elem, S) ->
                                 update_expected(ID, {remove, Elem}, S) end,
