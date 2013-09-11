@@ -257,7 +257,7 @@ remove_elem(_, Elem, _ORSet) ->
     %% Throw an error? (seems best)
     {error, {precondition, {not_present, Elem}}}.
 
-%% @doc the precondition context is a binary representation of a fragment of the CRDT
+%% @doc the precondition context is a fragment of the CRDT
 %% that operations with pre-conditions can be applied too.
 %% In the case of OR-Sets this is the set of adds observed.
 %% The system can then apply a remove to this context and merge it with a replica.
