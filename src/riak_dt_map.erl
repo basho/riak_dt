@@ -365,7 +365,8 @@ update_all(ID, [{update, {_Name, Type}=Key, Op} | Rest], OriginalState, {Cnt0, D
     end;
 update_all(ID, [{remove, Field} | Rest], OriginalState, {Cnt, Dict}) ->
     {A, R} = dict:fetch(ID, Dict),
-    PresentFields = [E ||  {E, _, _X} <- sets:to_list(sets:union(A,R))],
+    In = sets:subtract(A, R),
+    PresentFields = [E ||  {E, _, _X} <- sets:to_list(In)],
     case lists:member(Field, PresentFields) of
         true ->
             ToRem = [{E, V, X} || {E, V, X} <- sets:to_list(A), E == Field],
@@ -393,32 +394,6 @@ get_for_key({_N, T}=K, ID, Dict) ->
                 dict:new(),
                 sets:to_list(Remaining)),
     proplists:get_value(K, dict:to_list(Res), T:new()).
-
-%% @doc get the current, or most recently tombstoned value for a given
-%% key.
-%% get_for_key({_N, T}=K, ID, Dict) ->
-%%     {A, R} = dict:fetch(ID, Dict),
-%%     Remaining = sets:subtract(A, R),
-%%     Res = lists:foldl(fun({{_Name, Type}=Key, Value, _X}, Acc) ->
-%%                               %% if key is in Acc merge with it and replace
-%%                               dict:update(Key, fun(V) ->
-%%                                                        Type:merge(V, Value) end,
-%%                                           Value, Acc) end,
-%%                       dict:new(),
-%%                       sets:to_list(Remaining)),
-%%     case dict:find(K, Res) of
-%%         error ->
-%%             %% look for a tombstone, it will be the highest numbered remove
-%%             R2 = lists:reverse(lists:keysort(3, sets:to_list(R))),
-%%             case lists:keyfind(K, 1, R2) of
-%%                 false ->
-%%                     T:new();
-%%                 {K, V, _Cnt} ->
-%%                     %% reset
-%%                     T:reset(V, ID)
-%%             end;
-%%         {ok, V} -> V
-%%     end.
 
 -endif.
 
