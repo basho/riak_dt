@@ -91,13 +91,13 @@ prop_converge(NumTests, Mod) ->
 prop_converge(Mod) ->
     ?FORALL(Cmds,commands(?MODULE, #state{mod=Mod, mod_state=Mod:init_state()}),
             begin
-                {H,S,Res} = run_commands(?MODULE,Cmds),
+                {_H,S,Res} = run_commands(?MODULE,Cmds),
                 Merged = merge_crdts(Mod, S#state.vnodes),
                 MergedVal = Mod:value(Merged),
                 ExpectedValue = Mod:eqc_state_value(S#state.mod_state),
                 ?WHENFAIL(
                    %% History: ~p\nState: ~p\ H,S,
-                   io:format("History: ~p\nState: ~p~n", [H, S]),
+                   io:format("History: h\nState: s~n", []),
                    conjunction([{res, equals(Res, ok)},
                                 {total, equals(sort(Mod, MergedVal), sort(Mod, ExpectedValue))}]))
             end).
@@ -134,7 +134,7 @@ crdt_equals(Mod, {_IDS, CS}, {_IDD, CD}) ->
 %% The orset CRDT returns a list, it has no guarantees about order
 %% list equality expects lists in order
 sort(Mod, L) when Mod == riak_dt_vvorset; Mod == riak_dt_multi; Mod == riak_dt_orset;
-                  Mod == riak_dt_gset ->
+                  Mod == riak_dt_gset; Mod == riak_dt_orswot; Mod == riak_dt_map ->
     lists:sort(L);
 sort(_, Other) ->
     Other.
