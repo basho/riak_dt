@@ -25,7 +25,7 @@
 -behaviour(riak_dt).
 
 %% API
--export([new/0, value/1, update/3, merge/2, equal/2, reset/2,
+-export([new/0, value/1, update/3, merge/2, equal/2,
          to_binary/1, from_binary/1, value/2]).
 
 -ifdef(EQC).
@@ -80,12 +80,6 @@ merge(GSet1, GSet2) ->
 equal(GSet1, GSet2) ->
     ordsets:is_subset(GSet1, GSet2) andalso
         ordsets:is_subset(GSet2, GSet1).
-
-
-%% @Doc THIS IS NON-MONOTONIC!
--spec reset(gset(), actor()) -> gset().
-reset(_GSet, _Actor) ->
-    new().
 
 -define(TAG, 79).
 -define(V1_VERS, 1).

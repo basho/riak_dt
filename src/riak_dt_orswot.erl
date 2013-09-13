@@ -69,7 +69,7 @@
 
 %% API
 -export([new/0, value/1, value/2]).
--export([update/3, merge/2, equal/2, reset/2]).
+-export([update/3, merge/2, equal/2]).
 -export([to_binary/1, from_binary/1]).
 -export([precondition_context/1]).
 
@@ -245,18 +245,6 @@ vclock_merge(V10, V20, Actors1, Actors2, MergedActors) ->
 -spec equal(orswot(), orswot()) -> boolean().
 equal(ORSet1, ORSet2) ->
     ORSet1 == ORSet2.
-
-%% @Doc reset the set to empty, essentially have `Actor' remove all present members.
--spec reset(orswot(), actor()) -> orswot().
-reset(Set, Actor) ->
-    Members = value(Set),
-    reset(Members, Actor, Set).
-
-reset([], _Actor, Set) ->
-    Set;
-reset([Member | Rest], Actor, Set) ->
-    {ok, Set2} = update({remove, Member}, Actor, Set),
-    reset(Rest, Actor, Set2).
 
 %% Private
 -spec add_elem(actor(), orswot(), member()) -> orswot().
