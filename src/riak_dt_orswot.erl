@@ -203,6 +203,10 @@ has_seen_dot({Actor, ClockCount}, {Actor, DotCount}) when ClockCount >= DotCount
 has_seen_dot(_, _) ->
     false.
 
+%% @doc None of this is strictly needed for correctness, we could just
+%% as easily take all the LHS entries for common keys. However,
+%% `equal/2' requires a deterministoc value for common keys. There is
+%% probably a better way to get that.
 merge_common_keys(CommonKeys, Entries1, Entries2, Actors1, Actors2, MergedActors) ->
     sets:fold(fun(Key, Acc) ->
                       V1 = orddict:fetch(Key, Entries1),
@@ -212,7 +216,6 @@ merge_common_keys(CommonKeys, Entries1, Entries2, Actors1, Actors2, MergedActors
                       orddict:store(Key, NewDot, Acc) end,
               orddict:new(),
               CommonKeys).
-
 
 greatest([Dot]) ->
     Dot;
