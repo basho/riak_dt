@@ -205,7 +205,7 @@ has_seen_dot(_, _) ->
 
 %% @doc None of this is strictly needed for correctness, we could just
 %% as easily take all the LHS entries for common keys. However,
-%% `equal/2' requires a deterministoc value for common keys. There is
+%% `equal/2' requires a deterministic value for common keys. There is
 %% probably a better way to get that.
 merge_common_keys(CommonKeys, Entries1, Entries2, Actors1, Actors2, MergedActors) ->
     sets:fold(fun(Key, Acc) ->
