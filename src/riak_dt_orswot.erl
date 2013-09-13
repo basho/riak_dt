@@ -185,27 +185,41 @@ merge({Clock1, LHSActors, LHSEntries}, {Clock2, RHSActors, RHSEntries}) ->
 
 merge_disjoint_keys(Keys, Entries, SetClock, LocalActors, MergedActors, Accumulator) ->
     sets:fold(fun(Key, Acc) ->
-                      Birthdate0 = orddict:fetch(Key, Entries),
-                      Birthdate = riak_dt_vclock:replace_actors(orddict:to_list(LocalActors), Birthdate0, 2),
-                      case (not riak_dt_vclock:descends(SetClock, Birthdate)) of
-                          true ->
-                              NewClock = riak_dt_vclock:replace_actors(orddict:to_list(MergedActors), Birthdate),
-                              orddict:store(Key, NewClock, Acc);
+                      {Actor0, Count} = orddict:fetch(Key, Entries),
+                      {Real, Actor0} = lists:keyfind(Actor0, 2, LocalActors),
+                      case has_seen_dot({Real, riak_dt_vclock:get_counter(Real, SetClock)}, {Real, Count}) of
                           false ->
+                              [NewDot] = riak_dt_vclock:replace_actors(orddict:to_list(MergedActors), [{Real, Count}]),
+                              orddict:store(Key, NewDot, Acc);
+                          true ->
                               Acc
                       end
               end,
               Accumulator,
               Keys).
 
+has_seen_dot({Actor, ClockCount}, {Actor, DotCount}) when ClockCount >= DotCount ->
+    true;
+has_seen_dot(_, _) ->
+    false.
+
 merge_common_keys(CommonKeys, Entries1, Entries2, Actors1, Actors2, MergedActors) ->
     sets:fold(fun(Key, Acc) ->
                       V1 = orddict:fetch(Key, Entries1),
                       V2 = orddict:fetch(Key, Entries2),
-                      V = vclock_merge(V1, V2, Actors1, Actors2, MergedActors),
-                      orddict:store(Key, V, Acc) end,
+                      V = vclock_merge([V1], [V2], Actors1, Actors2, MergedActors),
+                      NewDot = greatest(V),
+                      orddict:store(Key, NewDot, Acc) end,
               orddict:new(),
               CommonKeys).
+
+
+greatest([Dot]) ->
+    Dot;
+greatest([{A1, C1}, {_A2, C2}]) when C1 >= C2 ->
+    {A1, C1};
+greatest([_, D2]) ->
+    D2.
 
 -spec merge_actors(actorlist(), actorlist()) -> actorlist().
 merge_actors(Actors1, Actors2) ->
@@ -246,7 +260,8 @@ reset([Member | Rest], Actor, Set) ->
 add_elem(Actor, {Clock, Actors0, Entries}, Elem) ->
     {Placeholder, Actors} = actor_placeholder(Actor, Actors0),
     NewClock = riak_dt_vclock:increment(Placeholder, Clock),
-    {NewClock, Actors, orddict:store(Elem, NewClock, Entries)}.
+    Dot = riak_dt_vclock:get_counter(Placeholder, NewClock),
+    {NewClock, Actors, orddict:store(Elem, {Placeholder, Dot}, Entries)}.
 
 -spec actor_placeholder(actor(), actorlist()) -> {non_neg_integer(), actorlist()}.
 actor_placeholder(Actor, Actors) ->
