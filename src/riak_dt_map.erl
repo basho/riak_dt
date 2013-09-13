@@ -56,11 +56,11 @@
 
 -type binary_map() :: binary(). %% A binary that from_binary/1 will accept
 -type map() :: {schema(), valuelist()}.
--type schema() :: riak_dt_vvorset:vvorset().
+-type schema() :: riak_dt_orswot:orswot(field()).
 -type field() :: {Name::term(), Type::crdt_mod()}.
 -type crdt_mod() :: riak_dt_pncounter | riak_dt_lwwreg |
                     riak_dt_orset | riak_dt_vvorset | riak_dt_od_flag |
-                    riak_dt_map.
+                    riak_dt_map | riak_dt_orswot.
 -type valuelist() :: [{field(), crdt()}].
 
 -type crdt()  ::  riak_dt_pncounter:pncounter() | riak_dt_od_flag:od_flag() |
@@ -195,6 +195,7 @@ fetch_with_default(error, Default) ->
 merge({Schema1, Values1}, {Schema2, Values2}) ->
     NewSchema = riak_dt_orswot:merge(Schema1, Schema2),
     %% Only merge values present in new schema
+    %% @TODO IN FACT only merge things where the dots are different in the OR-Set field
     PresentFields = riak_dt_orswot:value(NewSchema),
     NewValues = merge_values(PresentFields, Values1, Values2, []),
     {NewSchema, NewValues}.
