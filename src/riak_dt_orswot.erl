@@ -335,57 +335,6 @@ gen_update() ->
            {add_all, list(int())},
            {remove_all, list(int())}]).
 
-%% init_state() ->
-%%     sets:new().
-
-%% do_updates(_ID, [], _OldState, NewState) ->
-%%     NewState;
-%% do_updates(ID, [{_Action, []} | Rest], OldState, NewState) ->
-%%     do_updates(ID, Rest, OldState, NewState);
-%% do_updates(ID, [Update | Rest], OldState, NewState) ->
-%%     case {Update, update_expected(ID, Update, NewState)} of
-%%         {{Op, _Arg}, NewState} when Op == remove;
-%%                                     Op == remove_all ->
-%%             %% precondition failure?
-%%             OldState;
-%%         {_, NewNewState} ->
-%%             do_updates(ID, Rest, OldState, NewNewState)
-%%     end.
-
-%% update_expected(ID, {update, Updates}, State) ->
-%%     do_updates(ID, lists:sort(Updates), State, State);
-%% update_expected(_ID, {add, Elem}, State) ->
-%%     sets:add_element(Elem, State);
-%% update_expected(_ID, {remove, Elem}, State) ->
-%%     case sets:is_element(Elem, State) of
-%%         true ->
-%%             sets:del_element(Elem, State);
-%%         false ->
-%%             State
-%%     end;
-%% update_expected(_ID, {merge, _SourceId}, Set) ->
-%%     Set;
-%% update_expected(_ID, create, State) ->
-%%     State;
-%% update_expected(ID, {add_all, Elems}, State) ->
-%%     lists:foldl(fun(Elem, S) ->
-%%                        update_expected(ID, {add, Elem}, S) end,
-%%                State,
-%%                 Elems);
-%% update_expected(_ID, {remove_all, []}, State) ->
-%%     State;
-%% update_expected(_ID, {remove_all, Elems}, State) ->
-%%     ElemSet = sets:from_list(Elems),
-%%     case sets:is_subset(ElemSet, State) of
-%%         true ->
-%%             sets:subtract(ElemSet, State);
-%%         false ->
-%%             State
-%%     end.
-
-%%  eqc_state_value(State) ->
-%%     sets:to_list(State).
-
 init_state() ->
     {0, dict:new()}.
 
