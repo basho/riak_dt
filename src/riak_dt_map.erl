@@ -20,7 +20,7 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc a multi CRDT holder.  A Document-ish thing.  Consists of two
+%% @doc a multi CRDT holder. A Document-ish thing. Consists of two
 %% elements, a Schema and a value list. The schema is an OR-Set of
 %% {name, type} tuples that identify a field and it's type (type must
 %% be a CRDT module, yes, even this one.)  The value list is a dict of
@@ -59,7 +59,7 @@
 -type schema() :: riak_dt_orswot:orswot(field()).
 -type field() :: {Name::term(), Type::crdt_mod()}.
 -type crdt_mod() :: riak_dt_pncounter | riak_dt_lwwreg |
-                    riak_dt_orset | riak_dt_vvorset | riak_dt_od_flag |
+                    riak_dt_od_flag |
                     riak_dt_map | riak_dt_orswot.
 -type valuelist() :: [{field(), crdt()}].
 
@@ -144,11 +144,14 @@ value({contains, Field}, {Schema, _Values}) ->
 %%
 %% {add, `field()'}' where field is `{name, type}' results in `field'
 %% being added to the Map, and a new crdt of `type' being its value.
-%% `{remove, `field()'}' where field is `{name, type}', results in
-%% `reset/2' being called on the crdt at `field' and the key and value
-%% being tombstoned.
+%% `{remove, `field()'}' where field is `{name, type}', results in the
+%% crdt at `field' and the key and value being removed. A concurrent
+%% `update' | `add' will win over a remove.
 %%
 %% Either all of `Ops' are performed successfully, or none are.
+%%
+%% @see riak_dt_orswot for more details.
+
 -spec update(map_op(), riak_dt:actor(), map()) -> {ok, map()} | precondition_error().
 update({update, Ops}, Actor, {Schema, Values}) ->
     apply_ops(Ops, Actor, Schema, Values).
@@ -157,9 +160,7 @@ update({update, Ops}, Actor, {Schema, Values}) ->
 apply_ops([], _Actor, Schema, Values) ->
     {ok, {Schema, Values}};
 apply_ops([{update, {_Name, Mod}=Key, Op} | Rest], Actor, Schema, Values) ->
-    %% Add the key to schema
     {ok, NewSchema} = riak_dt_orswot:update({add, Key}, Actor, Schema),
-    %% Update the value
     InitialValue = fetch_with_default(Key, Values, Mod:new()),
     case Mod:update(Op, Actor, InitialValue) of
         {ok, NewValue} ->
@@ -187,10 +188,9 @@ fetch_with_default({ok, Value}, _Default) ->
 fetch_with_default(error, Default) ->
     Default.
 
-%% @Doc merge two `map()'s.
-%% Performs a merge on the key set (schema) and then a pairwise
-%% merge on all values in the value list.
-%% This is the LUB function.
+%% @Doc merge two `map()'s.  Performs a merge on the key set (schema)
+%% and then a pairwise merge on all values in the value list.  This is
+%% the LUB function.
 -spec merge(map(), map()) -> map().
 merge({Schema1, Values1}, {Schema2, Values2}) ->
     NewSchema = riak_dt_orswot:merge(Schema1, Schema2),
@@ -215,21 +215,20 @@ type_safe_fetch(_Mod, {ok, Value}) ->
 type_safe_fetch(Mod, error) ->
     Mod:new().
 
-%% @Doc compare two `map()'s for equality of  structure
-%% Both schemas and value list must be equal.
-%% Performs a pariwise equals for all values in the value lists
+%% @Doc compare two `map()'s for equality of structure Both schemas
+%% and value list must be equal. Performs a pariwise equals for all
+%% values in the value lists
 -spec equal(map(), map()) -> boolean().
 equal({Schema1, Values1}, {Schema2, Values2}) ->
     riak_dt_orswot:equal(Schema1, Schema2)  andalso pairwise_equals(Values1, Values2).
 
-%% @Private
-%% Note, only called when we know that 2 schema are equal.
+%% @Private Note, only called when we know that 2 schema are equal.
 %% Both dicts therefore have the same set of keys.
 pairwise_equals(Values1, Values2) ->
     short_cicuit_equals(orddict:to_list(Values1), Values2).
 
-%% @Private
-%% Compare each value. Return false as soon as any pair are not equal.
+%% @Private Compare each value. Return false as soon as any pair are
+%% not equal.
 short_cicuit_equals([], _Values2) ->
     true;
 short_cicuit_equals([{{_Name, Type}=Key, Val1} | Rest], Values2) ->
@@ -241,12 +240,10 @@ short_cicuit_equals([{{_Name, Type}=Key, Val1} | Rest], Values2) ->
             false
     end.
 
-%% @Doc a fragment of the Map that can be used for
-%% precondition operations.
-%% The schema is just the active Key Set
-%% The values are just those values that are present
-%% We use either the values precondition_context
-%% or the whole CRDT
+%% @Doc a "fragment" of the Map that can be used for precondition
+%% operations. The schema is just the active Key Set The values are
+%% just those values that are present We use either the values
+%% precondition_context or the whole CRDT
 -spec precondition_context(map()) -> map().
 precondition_context({KeySet0, Values0}) ->
     KeySet = riak_dt_orswot:precondition_context(KeySet0),
