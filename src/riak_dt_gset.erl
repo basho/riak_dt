@@ -20,6 +20,14 @@
 %%
 %% -------------------------------------------------------------------
 
+%% @doc a Grow Only Set. Items may be added, but never removed.
+%%
+%% @reference Marc Shapiro, Nuno Preguiça, Carlos Baquero, Marek
+%% Zawirski (2011) A comprehensive study of Convergent and Commutative
+%% Replicated Data Types. http://hal.upmc.fr/inria-00555588/
+%%
+%% @end
+
 -module(riak_dt_gset).
 
 -behaviour(riak_dt).
