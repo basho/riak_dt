@@ -24,24 +24,24 @@
 %% elements. Should an add and remove be concurrent, the add wins. In
 %% this implementation there is a version vector for the whole set.
 %% When an element is added to the set, the version vector is
-%% incremented and stored against the element as its "birthdate" (see
-%% note below.) Every time the element is re-added to the set, it's
-%% "birthdate" is updated to that of the clock resulting from the add.
-%% When an element is removed, we simply drop it, no tombstones.
+%% incremented and the `{actor(), count()}' pair for that increment is
+%% stored against the element as its "birth dot". Every time the
+%% element is re-added to the set, its "birth dot" is updated to that
+%% of the `{actor(), count()}' version vector entry resulting from the
+%% add. When an element is removed, we simply drop it, no tombstones.
 %%
 %% When an element exists in replica A and not replica B, is it
 %% because A added it and B has not yet seen that, or that B removed
 %% it and A has not yet seen that? Usually the presence of a tombstone
-%% arbitrates. In this implementation we compare the "birthdate" of
-%% the present element to the clock in the set it is absent from. If
-%% the element clock dominates, that means the other set has yet to
-%% see this add, and the item is in the set. If the Set clock
-%% dominates, that means the other Set has removed this element
-%% already, and the item is not in the set. Simples.
+%% arbitrates. In this implementation we compare the "birth dot" of
+%% the present element to the clock in the Set it is absent from. If
+%% the element dot is not "seen" by the Set clock, that means the
+%% other set has yet to see this add, and the item is in the merged
+%% Set. If the Set clock dominates the dot, that means the other Set
+%% has removed this element already, and the item is not in the merged
+%% Set.
 %%
-%% @note Carlos Baquero rightly pointed out that a more efficient
-%% representation would be a DVVSet, where each elements "birthdate"
-%% is the Dot on the Set version vector. Next time, Carlos, next time.
+%% Essentially we've made a dotted version vector.
 %%
 %% @see riak_dt_multi, riak_dt_vclock
 %%
@@ -53,6 +53,9 @@
 %% Shapiro, Carlos Baquero, Valter Balegas, Sérgio Duarte (2012) An
 %% Optimized Conﬂict-free Replicated Set
 %% http://arxiv.org/abs/1210.3368
+%%
+%% @reference Nuno Preguiça, Carlos Baquero, Paulo Sérgio Almeida,
+%% Victor Fonte, Ricardo Gonçalves http://arxiv.org/abs/1011.5808
 %%
 %% @end
 -module(riak_dt_orswot).
