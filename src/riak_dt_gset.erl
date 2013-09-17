@@ -58,8 +58,7 @@
 
 -type actor() :: riak_dt:actor().
 
-%% an orddict
--type members() :: [member()].
+-type members() :: orddict:orddict(member()).
 -type member() :: term().
 
 -spec new() -> gset().
@@ -78,7 +77,10 @@ value(_, GSet) ->
 
 -spec update(gset_op(), actor(), gset()) -> {ok, gset()}.
 update({add, Elem}, _Actor, GSet) ->
-    {ok, ordsets:add_element(Elem, GSet)}.
+    {ok, ordsets:add_element(Elem, GSet)};
+update({add_all, Elems}, _Actor, GSet) ->
+    {ok, ordsets:union(GSet, ordsets:from_list(Elems))}.
+
 
 -spec merge(gset(), gset()) -> gset().
 merge(GSet1, GSet2) ->
@@ -86,8 +88,7 @@ merge(GSet1, GSet2) ->
 
 -spec equal(gset(), gset()) -> boolean().
 equal(GSet1, GSet2) ->
-    ordsets:is_subset(GSet1, GSet2) andalso
-        ordsets:is_subset(GSet2, GSet1).
+    GSet1 == GSet2.
 
 -define(TAG, 79).
 -define(V1_VERS, 1).
@@ -112,7 +113,8 @@ eqc_value_test_() ->
 
 %% EQC generator
 gen_op() ->
-    {add, int()}.
+    oneof([{add, int()},
+           {add_all, non_empty(list(int()))}]).
 
 init_state() ->
     dict:new().
@@ -120,6 +122,10 @@ init_state() ->
 update_expected(ID, {add, Elem}, Dict) ->
     dict:update(ID, fun(Set) -> sets:add_element(Elem, Set) end,
                 sets:add_element(Elem, sets:new()),
+                Dict);
+update_expected(ID, {add_all, Elems}, Dict) ->
+    dict:update(ID, fun(Set) -> sets:union(sets:from_list(Elems), Set) end,
+                sets:from_list(Elems),
                 Dict);
 update_expected(ID, {merge, SourceID}, Dict) ->
     Replica1 = dict:fetch(SourceID, Dict),
