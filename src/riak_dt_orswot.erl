@@ -277,16 +277,14 @@ gen_updates() ->
 
 gen_update() ->
     oneof([{add, int()}, {remove, int()},
-           {add_all, list(int())},
-           {remove_all, list(int())}]).
+           {add_all, non_empty(list(int()))},
+           {remove_all, non_empty(list(int()))}]).
 
 init_state() ->
     {0, dict:new()}.
 
 do_updates(_ID, [], _OldState, NewState) ->
     NewState;
-do_updates(ID, [{_Action, []} | Rest], OldState, NewState) ->
-    do_updates(ID, Rest, OldState, NewState);
 do_updates(ID, [Update | Rest], OldState, NewState) ->
     case {Update, update_expected(ID, Update, NewState)} of
         {{Op, _Arg}, NewState} when Op == remove;
