@@ -31,7 +31,7 @@
 
 -module(riak_dt_vclock).
 
--export([fresh/0,descends/2,merge/1,get_counter/2,
+-export([fresh/0,descends/2,merge/1,get_counter/2, subtract_dots/2,
 	increment/2,all_nodes/1,equal/2, replace_actors/2, replace_actors/3]).
 
 -ifdef(TEST).
@@ -65,7 +65,28 @@ descends(Va, Vb) ->
             false;
         {_, CtrA} ->
             (CtrA >= CtrB) andalso descends(Va,RestB)
-        end.
+    end.
+
+%% @doc subtract the VClock from the DotList.
+%% what this means is that any {actor(), count()} pair in
+%% DotList that is <= an entry in  VClock is removed from DotList
+%% Example [{a, 3}, {b, 2}, {d, 14}, {g, 22}] -
+%%         [{a, 4}, {b, 1}, {c, 1}, {d, 14}, {e, 5}, {f, 2}] =
+%%         [{{b, 2}, {g, 22}]
+-spec subtract_dots(vclock(), vclock()) -> vclock().
+subtract_dots(DotList, VClock) ->
+    drop_dots(DotList, VClock, []).
+
+drop_dots([], _Clock, NewDots) ->
+    lists:sort(NewDots);
+drop_dots([{Actor, Count}=Dot | Rest], Clock, Acc) ->
+    case get_counter(Actor, Clock) of
+        Cnt when Cnt >= Count ->
+            %% Dot is dominated by clock, drop it
+            drop_dots(Rest, Clock, Acc);
+        _ ->
+            drop_dots(Rest, Clock, [Dot | Acc])
+    end.
 
 % @doc Combine all VClocks in the input list into their least possible
 %      common descendant.

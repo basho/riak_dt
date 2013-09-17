@@ -83,7 +83,7 @@
 
 -export_type([orswot/0, orswot_op/0, binary_orswot/0]).
 
--opaque orswot() :: {riak_dt_vclock:vclock(), actorlist(), entries()}.
+-opaque orswot() :: {riak_dt_vclock:vclock(), entries()}.
 -opaque binary_orswot() :: binary(). %% A binary that from_binary/1 will operate on.
 
 -type orswot_op() ::  {add, member()} | {remove, member()} |
@@ -91,30 +91,26 @@
                       {update, [orswot_op()]}.
 -type orswot_q()  :: size | {contains, term()}.
 
-%% a dict of actor() -> Alias::integer() mappings
-%% Reason being to keep the dots as small as
-%% possible and not repeat actor names over and over.
--type actorlist() :: [ {actor(), integer()} ].
 -type actor() :: riak_dt:actor().
 
-%% a dict of member() -> member_info() mappings.
-%% The `dot()' is a more effecient way of storing
-%% knowledge about adds / removes than a UUID per add.
--type entries() :: [{member(), member_info()}].
+%% a dict of member() -> minimal_clock() mappings.  The
+%% `minimal_clock()' is a more effecient way of storing knowledge
+%% about adds / removes than a UUID per add.
+-type entries() :: [{member(), minimal_clock()}].
 
--type member_info() :: dot().
--type dot() :: {ActorAlias::pos_integer(), Count::pos_integer()}.
+%% a minimal clock is just the dots for the element, each dot being an
+%% actor and event counter for when the element was added.
+-type minimal_clock() :: [dot()].
+-type dot() :: {actor(), Count::pos_integer()}.
 -type member() :: term().
 
 -spec new() -> orswot().
 new() ->
-    %% Use a dict of actors, and represent the actors as ints
-    %% a sort of compression.
-    {riak_dt_vclock:fresh(), orddict:new(), orddict:new()}.
+    {riak_dt_vclock:fresh(), orddict:new()}.
 
 -spec value(orswot()) -> [member()].
-value({_Clock, _Actors, Entries}) ->
-    [K || {K, _Vclock} <- orddict:to_list(Entries)].
+value({_Clock, Entries}) ->
+    [K || {K, _Dots} <- orddict:to_list(Entries)].
 
 -spec value(orswot_q(), orswot()) -> term().
 value(size, ORset) ->
@@ -131,7 +127,7 @@ update({update, Ops}, Actor, ORSet) ->
 update({add, Elem}, Actor, ORSet) ->
     {ok, add_elem(Actor, ORSet, Elem)};
 update({remove, Elem}, _Actor, ORSet) ->
-    {_Clock, _Actors, Entries} = ORSet,
+    {_Clock, Entries} = ORSet,
     remove_elem(orddict:find(Elem, Entries), Elem, ORSet);
 update({add_all, Elems}, Actor, ORSet) ->
     ORSet2 = lists:foldl(fun(E, S) ->
@@ -166,37 +162,34 @@ remove_all([Elem | Rest], Actor, ORSet) ->
     end.
 
 -spec merge(orswot(), orswot()) -> orswot().
-merge({Clock1, LHSActors, LHSEntries}, {Clock2, RHSActors, RHSEntries}) ->
-    Actors = merge_actors(LHSActors, RHSActors),
-    Clock = vclock_merge(Clock1, Clock2, LHSActors, RHSActors, Actors),
-
-    LHSClock = riak_dt_vclock:replace_actors(orddict:to_list(LHSActors), Clock1, 2),
-    RHSClock = riak_dt_vclock:replace_actors(orddict:to_list(RHSActors), Clock2, 2),
+merge({LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
+    Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
     %% If an element is in both dicts, merge it. If it occurs in one,
-    %% then see if its dot is dominated by the others whole set clock
-    %% If so, then drop it, if not, keep it
+    %% then see if its dots are dominated by the others whole set
+    %% clock. If so, then drop it, if not, keep it.
     LHSKeys = sets:from_list(orddict:fetch_keys(LHSEntries)),
     RHSKeys = sets:from_list(orddict:fetch_keys(RHSEntries)),
     CommonKeys = sets:intersection(LHSKeys, RHSKeys),
     LHSUnique = sets:subtract(LHSKeys, CommonKeys),
     RHSUnique = sets:subtract(RHSKeys, CommonKeys),
 
-    Entries00 = merge_common_keys(CommonKeys, LHSEntries, RHSEntries, LHSActors, RHSActors, Actors),
-    Entries0 = merge_disjoint_keys(LHSUnique, LHSEntries, RHSClock, LHSActors, Actors, Entries00),
-    Entries = merge_disjoint_keys(RHSUnique, RHSEntries, LHSClock, RHSActors, Actors, Entries0),
+    Entries00 = merge_common_keys(CommonKeys, LHSEntries, RHSEntries),
+    Entries0 = merge_disjoint_keys(LHSUnique, LHSEntries, RHSClock, Entries00),
+    Entries = merge_disjoint_keys(RHSUnique, RHSEntries, LHSClock, Entries0),
 
-    {Clock, Actors, Entries}.
+    {Clock, Entries}.
 
 %% @doc check if each element in `Entries' should be in the merged
 %% set.
-merge_disjoint_keys(Keys, Entries, SetClock, LocalActors, MergedActors, Accumulator) ->
+merge_disjoint_keys(Keys, Entries, SetClock, Accumulator) ->
     sets:fold(fun(Key, Acc) ->
-                      {Actor0, Count} = orddict:fetch(Key, Entries),
-                      {Real, Actor0} = lists:keyfind(Actor0, 2, LocalActors),
-                      case has_seen_dot({Real, riak_dt_vclock:get_counter(Real, SetClock)}, {Real, Count}) of
+                      Dots = orddict:fetch(Key, Entries),
+                      case riak_dt_vclock:descends(SetClock, Dots) of
                           false ->
-                              [NewDot] = riak_dt_vclock:replace_actors(orddict:to_list(MergedActors), [{Real, Count}]),
-                              orddict:store(Key, NewDot, Acc);
+                              %% Optimise the set of stored dots to
+                              %% include only those unseen
+                              NewDots = riak_dt_vclock:subtract_dots(Dots, SetClock),
+                              orddict:store(Key, NewDots, Acc);
                           true ->
                               Acc
                       end
@@ -204,56 +197,15 @@ merge_disjoint_keys(Keys, Entries, SetClock, LocalActors, MergedActors, Accumula
               Accumulator,
               Keys).
 
-has_seen_dot({Actor, ClockCount}, {Actor, DotCount}) when ClockCount >= DotCount ->
-    true;
-has_seen_dot(_, _) ->
-    false.
-
-%% @doc None of this is strictly needed for correctness, we could just
-%% as easily take all the LHS entries for common keys. However,
-%% `equal/2' requires a deterministic value for common keys. There is
-%% probably a better way to get that, but for now we just take the
-%% largest entry. When the count part of the dot is equal, we use the
-%% actor to arbitrate.
-merge_common_keys(CommonKeys, Entries1, Entries2, Actors1, Actors2, MergedActors) ->
+%% @doc merges the minimal clocks for the common entries in both sets.
+merge_common_keys(CommonKeys, Entries1, Entries2) ->
     sets:fold(fun(Key, Acc) ->
                       V1 = orddict:fetch(Key, Entries1),
                       V2 = orddict:fetch(Key, Entries2),
-                      V = vclock_merge([V1], [V2], Actors1, Actors2, MergedActors),
-                      NewDot = greatest_dot(V),
-                      orddict:store(Key, NewDot, Acc) end,
+                      V = riak_dt_vclock:merge([V1, V2]),
+                      orddict:store(Key, V, Acc) end,
               orddict:new(),
               CommonKeys).
-
-greatest_dot([Dot]) ->
-    Dot;
-greatest_dot([{A1, C1}, {_A2, C2}]) when C1 > C2 ->
-    {A1, C1};
-greatest_dot([{_A1, C1}, {A2, C2}]) when C1 < C2 ->
-    {A2, C2};
-%% Counts are equal, use the actor
-greatest_dot([D1, D2]) when D1 > D2 ->
-    D1;
-greatest_dot([_, D2]) ->
-    D2.
-
--spec merge_actors(actorlist(), actorlist()) -> actorlist().
-merge_actors(Actors1, Actors2) ->
-    AL = [Actor || Actor <- orddict:fetch_keys(Actors1) ++ orddict:fetch_keys(Actors2)],
-    Sorted = lists:usort(AL),
-    {_Cnt, NewActors} = lists:foldl(fun(E, {Cnt, Dict}) ->
-                                            {Cnt+1, orddict:store(E, Cnt, Dict)} end,
-                                    {1, orddict:new()},
-                                    Sorted),
-    NewActors.
-
--spec vclock_merge(riak_dt_vclock:vclock(), riak_dt_vclock:vclock(),
-                   actorlist(), actorlist(), actorlist()) -> riak_dt_vclock:vclock().
-vclock_merge(V10, V20, Actors1, Actors2, MergedActors) ->
-    V1 = riak_dt_vclock:replace_actors(orddict:to_list(Actors1), V10, 2),
-    V2 = riak_dt_vclock:replace_actors(orddict:to_list(Actors2), V20, 2),
-    Merged = riak_dt_vclock:merge([V1, V2]),
-    riak_dt_vclock:replace_actors(orddict:to_list(MergedActors), Merged).
 
 -spec equal(orswot(), orswot()) -> boolean().
 equal(ORSet1, ORSet2) ->
@@ -261,24 +213,19 @@ equal(ORSet1, ORSet2) ->
 
 %% Private
 -spec add_elem(actor(), orswot(), member()) -> orswot().
-add_elem(Actor, {Clock, Actors0, Entries}, Elem) ->
-    {Placeholder, Actors} = actor_placeholder(Actor, Actors0),
-    NewClock = riak_dt_vclock:increment(Placeholder, Clock),
-    Dot = riak_dt_vclock:get_counter(Placeholder, NewClock),
-    {NewClock, Actors, orddict:store(Elem, {Placeholder, Dot}, Entries)}.
+add_elem(Actor, {Clock, Entries}, Elem) ->
+    NewClock = riak_dt_vclock:increment(Actor, Clock),
+    Dot = [{Actor, riak_dt_vclock:get_counter(Actor, NewClock)}],
+    {NewClock, update_entry(Elem, Entries, Dot)}.
 
--spec actor_placeholder(actor(), actorlist()) -> {non_neg_integer(), actorlist()}.
-actor_placeholder(Actor, Actors) ->
-    case orddict:find(Actor, Actors) of
-        {ok, Placeholder} ->
-            {Placeholder, Actors};
-        error ->
-            Placeholder = orddict:size(Actors) +1,
-            {Placeholder, orddict:store(Actor, Placeholder, Actors)}
-    end.
+update_entry(Elem, Entries, Dot) ->
+    orddict:update(Elem, fun(Clock) ->
+                                 riak_dt_vclock:merge([Clock, Dot]) end,
+                   Dot,
+                   Entries).
 
-remove_elem({ok, _Vclock}, Elem, {Clock, AL, Dict}) ->
-    {ok, {Clock, AL, orddict:erase(Elem, Dict)}};
+remove_elem({ok, _Vclock}, Elem, {Clock, Dict}) ->
+    {ok, {Clock, orddict:erase(Elem, Dict)}};
 remove_elem(_, Elem, _ORSet) ->
     {error, {precondition, {not_present, Elem}}}.
 
