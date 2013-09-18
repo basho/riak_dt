@@ -247,17 +247,17 @@ equal({Clock1, Values1}, {Clock2, Values2}) ->
 %% @Private Note, only called when we know that 2 sets of fields are
 %% equal. Both dicts therefore have the same set of keys.
 pairwise_equals(Values1, Values2) ->
-    short_cicuit_equals(orddict:to_list(Values1), Values2).
+    short_circuit_equals(orddict:to_list(Values1), Values2).
 
 %% @Private
 %% Compare each value. Return false as soon as any pair are not equal.
-short_cicuit_equals([], _Values2) ->
+short_circuit_equals([], _Values2) ->
     true;
-short_cicuit_equals([{{_Name, Mod}=Field, {Dot1,Val1}} | Rest], Values2) ->
+short_circuit_equals([{{_Name, Mod}=Field, {Dot1,Val1}} | Rest], Values2) ->
     {Dot2, Val2} = orddict:fetch(Field, Values2),
     case {riak_dt_vclock:equal(Dot1, Dot2), Mod:equal(Val1, Val2)} of
         {true, true} ->
-            short_cicuit_equals(Rest, Values2);
+            short_circuit_equals(Rest, Values2);
         _ ->
             false
     end.
