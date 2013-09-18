@@ -116,15 +116,15 @@ value({_Clock, Values}) ->
 %% @TODO add a query for getting a subset of fields
 %% including submap fields (Maybe kvc like?)
 -spec value(map_q(), map()) -> term().
-value(size, Map) ->
-    length(keys(Map));
+value(size, {_Clock, Dict}) ->
+    length(keys(Dict));
 value({get, {_Name, Mod}=Field}, Map) ->
     case value({get_crdt, Field}, Map) of
         error -> error;
         CRDT -> Mod:value(CRDT)
     end;
 value({get_crdt, {_Name, Mod}=Field}, {_Clock, Values}) ->
-    get_crdt(ordict:find(Field, Values), Mod);
+    get_crdt(orddict:find(Field, Values), Mod);
 value(keyset, {_Clock, Values}) ->
     keys(Values);
 value({contains, Field}, {_Clock, Values}) ->
