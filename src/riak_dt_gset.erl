@@ -58,7 +58,7 @@
 
 -type actor() :: riak_dt:actor().
 
--type members() :: orddict:orddict(member()).
+-type members() :: ordsets:ordset(member()).
 -type member() :: term().
 
 -spec new() -> gset().

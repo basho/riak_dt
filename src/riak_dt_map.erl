@@ -56,7 +56,7 @@
 
 -type binary_map() :: binary(). %% A binary that from_binary/1 will accept
 -type map() :: {schema(), valuelist()}.
--type schema() :: riak_dt_orswot:orswot(field()).
+-type schema() :: riak_dt_orswot:orswot().
 -type field() :: {Name::term(), Type::crdt_mod()}.
 -type crdt_mod() :: riak_dt_pncounter | riak_dt_lwwreg |
                     riak_dt_od_flag |
