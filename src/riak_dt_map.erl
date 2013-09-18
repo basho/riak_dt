@@ -55,13 +55,17 @@
 -export_type([map/0, binary_map/0, map_op/0]).
 
 -type binary_map() :: binary(). %% A binary that from_binary/1 will accept
--type map() :: {schema(), valuelist()}.
--type schema() :: riak_dt_orswot:orswot().
+-type map() :: {riak_dt_vclock:vclock(), valuelist()}.
 -type field() :: {Name::term(), Type::crdt_mod()}.
 -type crdt_mod() :: riak_dt_pncounter | riak_dt_lwwreg |
                     riak_dt_od_flag |
                     riak_dt_map | riak_dt_orswot.
--type valuelist() :: [{field(), crdt()}].
+-type valuelist() :: [{field(), {minimal_clock(), crdt()}}].
+
+%% a minimal clock is just the dots for the element, each dot being an
+%% actor and event counter for when the element was added.
+-type minimal_clock() :: [dot()].
+-type dot() :: {riak_dt:actor(), Count::pos_integer()}.
 
 -type crdt()  ::  riak_dt_pncounter:pncounter() | riak_dt_od_flag:od_flag() |
                   riak_dt_lwwreg:lwwreg() |
@@ -88,49 +92,47 @@
 %% @doc Create a new, empty Map.
 -spec new() -> map().
 new() ->
-    {riak_dt_orswot:new(), orddict:new()}.
+    {riak_dt_vclock:fresh(), orddict:new()}.
 
 %% @doc get the current set of values for this Map
 -spec value(map()) -> values().
-value({Schema, Values}) ->
-    PresentFields = riak_dt_orswot:value(Schema),
-    values(PresentFields, Values).
-
-%% @private
-values(PresentFields, Values) ->
-    values(PresentFields, Values, []).
-
-%% @private
-values([], _Values, Acc) ->
-    Acc;
-values([{_Name, Mod}=Key | Rest], Values, Acc) ->
-    CRDT = orddict:fetch(Key, Values),
-    Val = Mod:value(CRDT),
-    values(Rest, Values, [{Key, Val} | Acc]).
+value({_Clock, Values}) ->
+    orddict:fold(fun({_Name, Mod}=Key, {_Dots, Value}, Acc) ->
+                       [{Key, Mod:value(Value)} | Acc] end,
+                 [],
+                 Values).
 
 %% @doc execute the given `map_q()' against the given
 %% `map()'.
 %% @TODO add a query for getting a subset of fields
 %% including submap fields (Maybe kvc like?)
 -spec value(map_q(), map()) -> term().
-value(size, {Schema, _Values}) ->
-    riak_dt_orswot:value(size, Schema);
+value(size, {_Clock, Values}) ->
+    length(keys(Values));
 value({get, {_Name, Mod}=Field}, Map) ->
     case value({get_crdt, Field}, Map) of
         error -> error;
         CRDT -> Mod:value(CRDT)
     end;
-value({get_crdt, Field}, {Schema, Values}) ->
-    case riak_dt_orswot:value({contains, Field}, Schema) of
-        true ->
-            orddict:fetch(Field, Values);
-        false ->
-            error
-    end;
-value(keyset, {Schema, _Values}) ->
-    riak_dt_orswot:value(Schema);
-value({contains, Field}, {Schema, _Values}) ->
-    riak_dt_orswot:value({contains, Field}, Schema).
+value({get_crdt, {_Name, Mod}=Field}, {_Clock, Values}) ->
+    get_crdt(orddict:find(Field, Values), Mod);
+value(keyset, {_Clock, Values}) ->
+    keys(Values);
+value({contains, Field}, {_Clock, Values}) ->
+    lists:member(Field, keys(Values)).
+
+get_crdt(Entry, Mod) ->
+    get_crdt(Entry, Mod, false).
+
+get_crdt({ok, {_Dot, Value}}, _Mod, _) ->
+    Value;
+get_crdt(error, _Mod, false) ->
+    error;
+get_crdt(error, Mod, true) ->
+    Mod:new().
+
+keys(Values) ->
+    orddict:fetch_keys(Values).
 
 %% @Doc update the `map()' or a field in the `map()' by executing
 %% the `map_op()'. `Ops' is a list of one or more of the following
@@ -153,121 +155,101 @@ value({contains, Field}, {Schema, _Values}) ->
 %% @see riak_dt_orswot for more details.
 
 -spec update(map_op(), riak_dt:actor(), map()) -> {ok, map()} | precondition_error().
-update({update, Ops}, Actor, {Schema, Values}) ->
-    apply_ops(Ops, Actor, Schema, Values).
+update({update, Ops}, Actor, {Clock, Values}) ->
+    apply_ops(Ops, Actor, Clock, Values).
 
 %% @Private
-apply_ops([], _Actor, Schema, Values) ->
-    {ok, {Schema, Values}};
-apply_ops([{update, {_Name, Mod}=Key, Op} | Rest], Actor, Schema, Values) ->
-    {ok, NewSchema} = riak_dt_orswot:update({add, Key}, Actor, Schema),
-    InitialValue = fetch_with_default(Key, Values, Mod:new()),
+apply_ops([], _Actor, Clock, Values) ->
+    {ok, {Clock, Values}};
+apply_ops([{update, {_Name, Mod}=Field, Op} | Rest], Actor, Clock, Values) ->
+    InitialValue = get_crdt(orddict:find(Field, Values), Mod, true),
     case Mod:update(Op, Actor, InitialValue) of
         {ok, NewValue} ->
-            NewValues = orddict:store(Key, NewValue, Values),
-            apply_ops(Rest, Actor, NewSchema, NewValues);
+            NewClock = riak_dt_vclock:increment(Actor, Clock),
+            NewDot = {Actor, riak_dt_vclock:get_counter(Actor, NewClock)},
+            NewValues = orddict:store(Field, {[NewDot], NewValue}, Values),
+            apply_ops(Rest, Actor, NewClock, NewValues);
         Error ->
             Error
     end;
-apply_ops([{remove, Key} | Rest], Actor, Schema, Values) ->
-    case riak_dt_orswot:update({remove, Key}, Actor, Schema) of
-        {ok, NewSchema} ->
-            apply_ops(Rest, Actor, NewSchema, orddict:erase(Key, Values));
-        _Error -> {error, {precondition, {not_present, Key}}}
+apply_ops([{remove, Field} | Rest], Actor, Clock, Values) ->
+    case orddict:is_key(Field, Values) of
+        true->
+            apply_ops(Rest, Actor, Clock, orddict:erase(Field, Values));
+        false -> {error, {precondition, {not_present, Field}}}
     end;
-apply_ops([{add, {_Name, Mod}=Key} | Rest], Actor, Schema, Values) ->
-    {ok, NewSchema} = riak_dt_orswot:update({add, Key}, Actor, Schema),
-    NewValues = orddict:update(Key, fun(V) -> V end, Mod:new(), Values),
-    apply_ops(Rest, Actor, NewSchema, NewValues).
+apply_ops([{add, {_Name, Mod}=Field} | Rest], Actor, Clock, Values) ->
+    InitialValue = get_crdt(orddict:find(Field, Values), Mod, true),
+    NewClock = riak_dt_vclock:increment(Actor, Clock),
+    Dot = {Actor, riak_dt_vclock:get_counter(Actor, NewClock)},
+    NewValues = orddict:store(Field, {[Dot], InitialValue}, Values),
+    apply_ops(Rest, Actor, NewClock, NewValues).
 
-fetch_with_default(Key, Values, Default) ->
-    fetch_with_default(orddict:find(Key, Values), Default).
-
-fetch_with_default({ok, Value}, _Default) ->
-    Value;
-fetch_with_default(error, Default) ->
-    Default.
-
-%% @Doc merge two `map()'s.  Performs a merge on the key set (schema)
-%% and then a pairwise merge on all values in the value list.  This is
-%% the LUB function.
+%% @Doc merge two `map()'s.  and then a pairwise merge on all values
+%% in the value list.  This is the LUB function.
 -spec merge(map(), map()) -> map().
-merge({Schema1, Values1}, {Schema2, Values2}) ->
-    NewSchema = riak_dt_orswot:merge(Schema1, Schema2),
-    %% Only merge values present in new schema
-    %% @TODO IN FACT only merge things where the dots are different in the OR-Set field
-    PresentFields = riak_dt_orswot:value(NewSchema),
-    NewValues = merge_values(PresentFields, Values1, Values2, []),
-    {NewSchema, NewValues}.
+merge({LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
+    Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
+    %% If an element is in both dicts, merge it. If it occurs in one,
+    %% then see if its dots are dominated by the others whole set
+    %% clock. If so, then drop it, if not, keep it.
+    LHSFields = sets:from_list(orddict:fetch_keys(LHSEntries)),
+    RHSFields = sets:from_list(orddict:fetch_keys(RHSEntries)),
+    CommonFields = sets:intersection(LHSFields, RHSFields),
+    LHSUnique = sets:subtract(LHSFields, CommonFields),
+    RHSUnique = sets:subtract(RHSFields, CommonFields),
 
-%% @Private
-merge_values([], _Values1, _Values2, Acc) ->
-    orddict:from_list(Acc);
-merge_values([{_Name, Mod}=Key | Rest], Values1, Values2, Acc) ->
-    V1 = type_safe_fetch(Mod, orddict:find(Key, Values1)),
-    V2 = type_safe_fetch(Mod, orddict:find(Key, Values2)),
-    V = Mod:merge(V1, V2),
-    merge_values(Rest, Values1, Values2, [{Key, V} | Acc]).
+    Entries00 = merge_common_fields(CommonFields, LHSEntries, RHSEntries),
+    Entries0 = merge_disjoint_fields(LHSUnique, LHSEntries, RHSClock, Entries00),
+    Entries = merge_disjoint_fields(RHSUnique, RHSEntries, LHSClock, Entries0),
 
-%% @Private
-type_safe_fetch(_Mod, {ok, Value}) ->
-    Value;
-type_safe_fetch(Mod, error) ->
-    Mod:new().
+    {Clock, Entries}.
+
+%% @doc check if each element in `Entries' should be in the merged
+%% set.
+merge_disjoint_fields(Fields, Entries, SetClock, Accumulator) ->
+    sets:fold(fun(Field, Acc) ->
+                      {Dots, Value} = orddict:fetch(Field, Entries),
+                      case riak_dt_vclock:descends(SetClock, Dots) of
+                          false ->
+                              %% Optimise the set of stored dots to
+                              %% include only those unseen
+                              NewDots = riak_dt_vclock:subtract_dots(Dots, SetClock),
+                              orddict:store(Field, {NewDots, Value}, Acc);
+                          true ->
+                              Acc
+                      end
+              end,
+              Accumulator,
+              Fields).
+
+%% @doc merges the minimal clocks and values for the common entries in
+%% both sets.
+merge_common_fields(CommonFields, Entries1, Entries2) ->
+    sets:fold(fun({_Name, Mod}=Field, Acc) ->
+                      {Dots1, V1} = orddict:fetch(Field, Entries1),
+                      {Dots2, V2} = orddict:fetch(Field, Entries2),
+                      Dots = riak_dt_vclock:merge([Dots1, Dots2]),
+                      V = Mod:merge(V1, V2),
+                      orddict:store(Field, {Dots, V}, Acc) end,
+              orddict:new(),
+              CommonFields).
 
 %% @Doc compare two `map()'s for equality of structure Both schemas
 %% and value list must be equal. Performs a pariwise equals for all
 %% values in the value lists
 -spec equal(map(), map()) -> boolean().
-equal({Schema1, Values1}, {Schema2, Values2}) ->
-    riak_dt_orswot:equal(Schema1, Schema2)  andalso pairwise_equals(Values1, Values2).
+equal({Clock1, Values1}, {Clock2, Values2}) ->
+    riak_dt_vclock:equal(Clock1, Clock2) andalso Values1 == Values2.
 
-%% @Private Note, only called when we know that 2 schema are equal.
-%% Both dicts therefore have the same set of keys.
-pairwise_equals(Values1, Values2) ->
-    short_cicuit_equals(orddict:to_list(Values1), Values2).
-
-%% @Private Compare each value. Return false as soon as any pair are
-%% not equal.
-short_cicuit_equals([], _Values2) ->
-    true;
-short_cicuit_equals([{{_Name, Type}=Key, Val1} | Rest], Values2) ->
-    Val2 = orddict:fetch(Key, Values2),
-    case Type:equal(Val1, Val2) of
-        true ->
-            short_cicuit_equals(Rest, Values2);
-        false ->
-            false
-    end.
 
 %% @Doc a "fragment" of the Map that can be used for precondition
 %% operations. The schema is just the active Key Set The values are
 %% just those values that are present We use either the values
 %% precondition_context or the whole CRDT
 -spec precondition_context(map()) -> map().
-precondition_context({KeySet0, Values0}) ->
-    KeySet = riak_dt_orswot:precondition_context(KeySet0),
-    Present = riak_dt_orswot:value(KeySet),
-    Values = precondition_context(Present, Values0, orddict:new()),
-    {KeySet, Values}.
-
-precondition_context([], _, Acc) ->
-    Acc;
-precondition_context([{_Name, Type}=Field | Rest], Values, Acc) ->
-    V = orddict:fetch(Field, Values),
-    Ctx = precondition_context(Type, V),
-    precondition_context(Rest, Values, orddict:store(Field, Ctx, Acc)).
-
-precondition_context(Type, V) ->
-    case lists:member({precondition_context, 1}, Type:module_info(exports)) of
-        true ->
-            Type:precondition_context(V);
-        false ->
-            V   %% if there is no smaller precondition context, use the whole value
-                %% I suspect a smarter thing would be use nothing, or
-                %% the value/1 value But that makes update more
-                %% complex (the context would no longer be a CRDT)
-    end.
+precondition_context(Map) ->
+    Map.
 
 -define(TAG, 77).
 -define(V1_VERS, 1).
