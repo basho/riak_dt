@@ -42,7 +42,7 @@
 -endif.
 
 -export_type([orset/0, binary_orset/0, orset_op/0]).
--opaque orset() :: {entries(), entries()}.
+-opaque orset() :: orddict:orddict().
 
 -type binary_orset() :: binary(). %% A binary that from_binary/1 will operate on.
 
@@ -51,126 +51,53 @@
                     {update, [orset_op()]}.
 
 -type actor() :: riak_dt:actor().
-
-%% an orddict
--type entries() :: [{member(), uniques()}].
-
-%% an ordset
--type uniques() :: [unique()].
-%% 0..2^27-1
-%% @see phash/2
--type unique() :: non_neg_integer().
 -type member() :: term().
 
 -spec new() -> orset().
 new() ->
-    {orddict:new(), orddict:new()}.
+    orddict:new().
 
 -spec value(orset()) -> [member()].
-value({ADict, RDict}) ->
-    orddict:fetch_keys(orddict:filter(fun(K, V) ->
-                                        case orddict:find(K, RDict) of
-                                            {ok, RSet} ->
-                                                case
-                                                    ordsets:to_list(ordsets:subtract(V, RSet)) of
-                                                    [] -> false;
-                                                    _ -> true
-                                                end;
-                                            error -> true
-                                        end
-                                end,
-                                ADict)).
+value(ORDict0) ->
+    ORDict1 = orddict:filter(fun(_Elem, Tokens) ->
+            ValidTokens = [Token || {Token, false} <- orddict:to_list(Tokens)],
+            length(ValidTokens) > 0
+        end, ORDict0),
+    orddict:fetch_keys(ORDict1).
 
-%% @Doc note: not implemented yet, same as `value/1'
 -spec value(any(), orset()) -> [member()].
-value(_, ORSet) ->
+value(_,ORSet) ->
     value(ORSet).
-
 
 -spec update(orset_op(), actor(), orset()) -> {ok, orset()} |
                                               {error, {precondition ,{not_present, member()}}}.
-update({update, Ops}, Actor, ORSet) ->
-    apply_ops(lists:sort(Ops), Actor, ORSet);
-update({add, Elem}, Actor, {ADict0, RDict}) ->
-    ADict = add_elem(Actor, ADict0, Elem),
-    {ok, {ADict, RDict}};
-update({remove, Elem}, _Actor, {ADict, RDict0}) ->
-    case remove_elem(orddict:find(Elem, ADict), Elem, RDict0) of
-        {error, _}=Error ->
-            Error;
-        RDict ->
-            {ok, {ADict, RDict}}
-    end;
-update({add_all, Elems}, Actor, {ADict, RDict}) ->
-    ADict2 = lists:foldl(fun(E, S) ->
-                                 add_elem(Actor, S, E) end,
-                         ADict,
-                         Elems),
-    {ok, {ADict2, RDict}};
-%% @Doc note: this is atomic, either _all_ `Elems` are removed, or
-%% none are.
-update({remove_all, Elems}, Actor, ORSet) ->
-    remove_all(Elems, Actor, ORSet).
-
-remove_all([], _Actor, ORSet) ->
-    {ok, ORSet};
-remove_all([Elem | Rest], Actor, ORSet) ->
-    case update({remove, Elem}, Actor, ORSet) of
-        {ok, ORSet2} ->
-            remove_all(Rest, Actor, ORSet2);
-        Error ->
-            Error
-    end.
-
-apply_ops([], _Actor, ORSet) ->
-    {ok, ORSet};
-apply_ops([Op | Rest], Actor, ORSet) ->
-    case update(Op, Actor, ORSet) of
-        {ok, ORSet2} ->
-            apply_ops(Rest, Actor, ORSet2);
-        Error ->
-            Error
-    end.
+update({add,Elem}, Actor, ORDict) ->
+    Token = unique(Actor),
+    add_elem(Elem,Token,ORDict);
+update({add_all,Elems}, Actor, ORDict0) ->
+    OD = lists:foldl(fun(Elem,ORDict) ->
+                {ok, ORDict1} = update({add,Elem},Actor,ORDict),
+                ORDict1
+            end, ORDict0, Elems),
+    {ok, OD};
+update({remove,Elem}, _Actor, ORDict) ->
+    remove_elem(Elem, ORDict);
+update({remove_all,Elems}, _Actor, ORDict0) ->
+    remove_elems(Elems, ORDict0);
+update({update, Ops}, Actor, ORDict) ->
+    apply_ops(lists:sort(Ops), Actor, ORDict).
 
 -spec merge(orset(), orset()) -> orset().
-merge({ADict1, RDict1}, {ADict2, RDict2}) ->
-    MergedADict = merge_dicts(ADict1, ADict2),
-    MergedRDict = merge_dicts(RDict1, RDict2),
-    {MergedADict, MergedRDict}.
+merge(ORDictA, ORDictB) ->
+    orddict:merge(fun(_Elem,TokensA,TokensB) ->
+            orddict:merge(fun(_Token,BoolA,BoolB) ->
+                    BoolA or BoolB
+                end, TokensA, TokensB)
+        end, ORDictA, ORDictB).
 
 -spec equal(orset(), orset()) -> boolean().
-equal({ADict1, RDict1}, {ADict2, RDict2}) ->
-    ADict1 == ADict2 andalso RDict1 == RDict2.
-
-%% Private
-add_elem(Actor, Dict, Elem) ->
-    Unique = unique(Actor),
-    add_unique(orddict:find(Elem, Dict), Dict, Elem, Unique).
-
-remove_elem({ok, Set0}, Elem, RDict) ->
-    case orddict:find(Elem, RDict) of
-        {ok, Set} ->
-            orddict:store(Elem, ordsets:union(Set, Set0), RDict);
-        error ->
-            orddict:store(Elem, Set0, RDict)
-    end;
-remove_elem(error, Elem, _RDict) ->
-    %% Can't remove an element not in the ADict
-    {error, {precondition, {not_present, Elem}}}.
-
-add_unique({ok, Set0}, Dict, Elem, Unique) ->
-    Set = ordsets:add_element(Unique, Set0),
-    orddict:store(Elem, Set, Dict);
-add_unique(error, Dict, Elem, Unique) ->
-    Set = ordsets:from_list([Unique]),
-    orddict:store(Elem, Set, Dict).
-
-unique(Actor) ->
-    erlang:phash2({Actor, erlang:now()}).
-
-merge_dicts(Dict1, Dict2) ->
-    %% for every key in dict1, merge its contents with dict2's content for same key
-   orddict:merge(fun(_K, V1, V2) -> ordsets:union(V1, V2) end, Dict1, Dict2).
+equal(ORDictA, ORDictB) ->
+    ORDictA == ORDictB. % Everything inside is ordered, so this should work
 
 %% @doc the precondition context is a fragment of the CRDT that
 %% operations with pre-conditions can be applied too.  In the case of
@@ -180,8 +107,13 @@ merge_dicts(Dict1, Dict2) ->
 %% an operation is needed at a replica without sending the entire
 %% state to the client.
 -spec precondition_context(orset()) -> orset().
-precondition_context({ADict, _RDict}) ->
-    {ADict, orddict:new()}.
+precondition_context(ORDict) ->
+    orddict:fold(fun(Elem, Tokens, ORDict1) ->
+            case minimum_tokens(Tokens) of
+                []      -> ORDict1;
+                Tokens1 -> orddict:store(Elem, Tokens1, ORDict1)
+            end
+        end, orddict:new(), ORDict).
 
 -define(TAG, 76).
 -define(V1_VERS, 1).
@@ -194,6 +126,50 @@ to_binary(ORSet) ->
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
     %% @TODO something smarter
     binary_to_term(Bin).
+
+%% Private
+add_elem(Elem,Token,ORDict) ->
+    case orddict:find(Elem, ORDict) of
+        {ok, Tokens} -> Tokens1 = orddict:store(Token, false, Tokens),
+                        {ok, orddict:store(Elem, Tokens1, ORDict)};
+        error        -> Tokens = orddict:store(Token, false, orddict:new()),
+                        {ok, orddict:store(Elem, Tokens, ORDict)}
+    end.
+
+remove_elem(Elem, ORDict) ->
+    case orddict:find(Elem, ORDict) of
+        {ok, Tokens} -> Tokens1 = orddict:fold(fun(Token, _, Tokens0) ->
+                                orddict:store(Token, true, Tokens0)
+                            end, orddict:new(), Tokens),
+                        {ok, orddict:store(Elem, Tokens1, ORDict)};
+        error        -> {error, {precondition, {not_present, Elem}}}
+    end.
+
+
+remove_elems([], ORDict) ->
+    {ok, ORDict};
+remove_elems([Elem|Rest], ORDict) ->
+    case remove_elem(Elem,ORDict) of
+        {ok, ORDict1} -> remove_elems(Rest, ORDict1);
+        Error         -> Error
+    end.
+
+
+apply_ops([], _Actor, ORDict) ->
+    {ok, ORDict};
+apply_ops([Op | Rest], Actor, ORDict) ->
+    case update(Op, Actor, ORDict) of
+        {ok, ORDict1} -> apply_ops(Rest, Actor, ORDict1);
+        Error -> Error
+    end.
+
+unique(_Actor) ->
+    crypto:strong_rand_bytes(20).
+
+minimum_tokens(Tokens) ->
+    orddict:filter(fun(_Token, Removed) ->
+            not Removed
+        end, Tokens).
 
 %% ===================================================================
 %% EUnit tests
@@ -285,7 +261,6 @@ update_expected(ID, {remove_all, Elems}, {_Cnt, Dict}=State) ->
         false ->
             State
     end.
-
 
 eqc_state_value({_Cnt, Dict}) ->
     {A, R} = dict:fold(fun(_K, {Add, Rem}, {AAcc, RAcc}) ->
