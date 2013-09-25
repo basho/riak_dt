@@ -42,7 +42,7 @@
 -endif.
 
 -export_type([orset/0, binary_orset/0, orset_op/0]).
--opaque orset() :: orddict:orddict(member(), uniques()).
+-opaque orset() :: orddict:orddict().
 
 -type binary_orset() :: binary(). %% A binary that from_binary/1 will operate on.
 
@@ -51,12 +51,6 @@
                     {update, [orset_op()]}.
 
 -type actor() :: riak_dt:actor().
-
-%% an ordset
--type uniques() :: orddict:orddict(unique(),boolean()).
-%% 0..2^27-1
-%% @see phash/2
--type unique() :: non_neg_integer().
 -type member() :: term().
 
 -spec new() -> orset().
@@ -123,7 +117,7 @@ reset(ORDict, Actor) ->
 %% state to the client.
 -spec precondition_context(orset()) -> orset().
 precondition_context(ORDict) ->
-    ordict:fold(fun(Elem, Tokens, ORDict1) ->
+    orddict:fold(fun(Elem, Tokens, ORDict1) ->
             case minimum_tokens(Tokens) of
                 []      -> ORDict1;
                 Tokens1 -> orddict:store(Elem, Tokens1, ORDict1)
