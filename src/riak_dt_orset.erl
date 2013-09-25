@@ -178,8 +178,8 @@ apply_ops([Op | Rest], Actor, ORDict) ->
         Error -> Error
     end.
 
-unique(Actor) ->
-    erlang:phash2({Actor, erlang:now()}).
+unique(_Actor) ->
+    crypto:strong_rand_bytes(20).
 
 minimum_tokens(Tokens) ->
     orddict:filter(fun(_Token, Removed) ->
