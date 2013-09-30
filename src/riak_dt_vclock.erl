@@ -32,7 +32,8 @@
 -module(riak_dt_vclock).
 
 -export([fresh/0,descends/2,merge/1,get_counter/2, subtract_dots/2,
-	increment/2,all_nodes/1,equal/2, replace_actors/2, replace_actors/3]).
+	increment/2,all_nodes/1,equal/2, actors/1, replace_actors/2, replace_actors/3,
+         to_binary/1, from_binary/1]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -147,8 +148,20 @@ all_nodes(VClock) ->
 equal(VA,VB) ->
     lists:sort(VA) =:= lists:sort(VB).
 
+actors(Clock) ->
+    [Actor || {Actor, _Count} <- sort(Clock)].
+
+sort(Clock) ->
+    lists:sort(Clock).
+
+to_binary(Clock) ->
+    term_to_binary(sort(Clock)).
+
+from_binary(Bin) ->
+    binary_to_term(Bin).
+
 %% @doc replace actors in the vclock with those in the provided
-%% 2 tuple list, assumes the first element in the
+%% 2 tuple list, the first element in the
 %% actor map is present in the clock, and the second will
 %% replace it.
 -spec replace_actors([{vclock_node(), vclock_node()}], vclock()) -> vclock().
