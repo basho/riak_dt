@@ -67,6 +67,7 @@
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) ->
                               io:format(user, Str, Args) end, P)).
+-define(NUMTESTS, 1000).
 -endif.
 
 -ifdef(TEST).
@@ -323,7 +324,8 @@ binary_to_elem(<<0, Bin/binary>>) ->
 -ifdef(EQC).
 
 bin_roundtrip_test_() ->
-    ?_assertEqual(true, quickcheck(numtests(100, ?QC_OUT(prop_bin_roundtrip())))).
+    {timeout, 30000,
+     ?_assertEqual(true, quickcheck(numtests(?NUMTESTS, ?QC_OUT(prop_bin_roundtrip()))))}.
 
 prop_bin_roundtrip() ->
     ?FORALL(Set, generate(),
@@ -350,7 +352,7 @@ range(Value) ->
     {N * 10, (N +1) * 10}.
 
 eqc_value_test_() ->
-    crdt_statem_eqc:run(?MODULE, 1000).
+    crdt_statem_eqc:run(?MODULE, ?NUMTESTS).
 
 generate() ->
     ?LET({Ops, Actors}, {non_empty(list(gen_op(fun() -> bitstring(20*8) end))), non_empty(list(bitstring(16*8)))},
