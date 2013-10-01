@@ -49,7 +49,7 @@
 %% EQC API
 -ifdef(EQC).
 -export([gen_op/0, update_expected/3, eqc_state_value/1,
-         init_state/0, gen_field/0]).
+         init_state/0, gen_field/0, generate/0, size/1]).
 -endif.
 
 -export_type([map/0, binary_map/0, map_op/0]).
@@ -273,15 +273,130 @@ precondition_context(Map) ->
 -define(TAG, 77).
 -define(V1_VERS, 1).
 
--spec to_binary(map()) -> binary_map().
 to_binary(Map) ->
-    %% @TODO something smarter (recurse down valulist calling to_binary?)
-    <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(Map))/binary>>.
+    {ModMap, <<?TAG:8/integer, ?V1_VERS:8/integer, MapBin/binary>>} =  to_binary(Map, orddict:new()),
+    ModMapBin = mod_map_to_binary(ModMap),
+    ModMapBinLen = byte_size(ModMapBin),
+    <<?TAG:8/integer, ?V1_VERS:8/integer,
+      ModMapBinLen:32/integer,
+      ModMapBin:ModMapBinLen/binary,
+      MapBin/binary>>.
 
 -spec from_binary(binary_map()) -> map().
-from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
-    %% @TODO something smarter
+from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer,
+              ModMapBinLen:32/integer, ModMapBin:ModMapBinLen/binary,
+              MapBin/binary>>) ->
+    ModMap = mod_map_from_binary(ModMapBin),
+    from_binary(MapBin, ModMap).
+
+to_binary({Clock, Fields}, ModMap0) ->
+    Actors0 = riak_dt_vclock:actors(Clock),
+    Actors = lists:zip(Actors0, lists:seq(1, length(Actors0))),
+    BinClock = riak_dt_vclock:to_binary(Clock),
+    ClockLen = byte_size(BinClock),
+    %% since each minimal clock can be at _most_ the size of the
+    %% vclock for the set, this saves us reserving 4 bytes for clock
+    %% len for each entry if we only needs 1 (for example)
+    ClockLenFieldLen = bit_size(binary:encode_unsigned(ClockLen)),
+    {ModMap, BinFields} = fields_to_binary(Fields, ClockLenFieldLen, Actors, ModMap0, <<>>),
+    {ModMap, <<?TAG:8/integer, ?V1_VERS:8/integer,
+      ClockLenFieldLen:8/integer,
+      ClockLen:ClockLenFieldLen/integer,
+      BinClock:ClockLen/binary,
+      BinFields/binary>>}.
+
+from_binary(<<ClockLenFieldLen:8/integer, ClockLen:ClockLenFieldLen/integer,
+              BinClock:ClockLen/binary, BinFields/binary>>, ModMap) ->
+    Clock = riak_dt_vclock:from_binary(BinClock),
+    Actors0 = riak_dt_vclock:actors(Clock),
+    Actors = lists:zip(lists:seq(1, length(Actors0)), Actors0),
+    Fields = binary_to_fields(BinFields, ClockLenFieldLen, Actors, ModMap, orddict:new()),
+    {Clock, Fields}.
+
+fields_to_binary([], _, _, ModMap, BinFields) ->
+    {ModMap, BinFields};
+fields_to_binary([{Field, {Clock0, CRDT}} | Rest], ClockLenFieldLen, Actors, ModMap0, Acc) ->
+    {ModMap, CRDTBin} = crdt_to_binary(Field, CRDT, ModMap0),
+    CRDTBinLen = byte_size(CRDTBin),
+    Clock = riak_dt_vclock:replace_actors(Actors, Clock0),
+    ClockBin = riak_dt_vclock:to_binary(Clock),
+    ClockLen = byte_size(ClockBin),
+    Bin = <<CRDTBinLen:32/integer, CRDTBin:CRDTBinLen/binary,
+            ClockLen:ClockLenFieldLen/integer, ClockBin:ClockLen/binary>>,
+    fields_to_binary(Rest, ClockLenFieldLen, Actors, ModMap, <<Acc/binary, Bin/binary>>).
+
+crdt_to_binary({Name, Mod}, CRDT, ModMap0) ->
+    NameBin = name_to_bin(Name),
+    NameBinLen = byte_size(NameBin),
+    {ModMapping, ModMap} = mod_mapping(Mod, ModMap0),
+    {ModMap2, ValueBin} = value_to_binary(Mod, CRDT, ModMap),
+    ValueBinLen = byte_size(ValueBin),
+    Bin = <<ModMapping:8/integer,
+            NameBinLen:32/integer,
+            NameBin:NameBinLen/binary,
+            ValueBinLen:32/integer,
+            ValueBin:ValueBinLen/binary>>,
+    {ModMap2, Bin}.
+
+mod_map_to_binary(ModMap) ->
+    term_to_binary(ModMap).
+
+name_to_bin(Name) when is_binary(Name) ->
+    <<1, Name/binary>>;
+name_to_bin(Name) ->
+    <<0, (term_to_binary(Name))/binary>>.
+
+value_to_binary(?MODULE, Value, ModMap) ->
+    to_binary(Value, ModMap);
+value_to_binary(Mod, Value, ModMap) ->
+    {ModMap, Mod:to_binary(Value)}.
+
+mod_mapping(Mod, ModMap0) ->
+    case orddict:find(Mod, ModMap0) of
+        error ->
+            NewMapping = orddict:size(ModMap0) + 1,
+            {NewMapping, orddict:store(Mod, NewMapping, ModMap0)};
+        {ok, Mapping} ->
+            {Mapping, ModMap0}
+    end.
+
+binary_to_fields(<<>>, _, _, _, Fields) ->
+    Fields;
+binary_to_fields(<<CRDTBinLen:32/integer, CRDTBin:CRDTBinLen/binary, Rest0/binary>>,
+                 ClockLenFieldLen, Actors, ModMap, Acc) ->
+    <<ClockLen:ClockLenFieldLen/integer, ClockBin:ClockLen/binary, Rest/binary>> = Rest0,
+    {Field, CRDT} = binary_to_crdt(CRDTBin, ModMap),
+    Clock0 = riak_dt_vclock:from_binary(ClockBin),
+    Clock = riak_dt_vclock:replace_actors(Actors, Clock0),
+    Fields = orddict:store(Field, {Clock, CRDT}, Acc),
+    binary_to_fields(Rest, ClockLenFieldLen, Actors, ModMap, Fields).
+
+binary_to_crdt(<<ModMapping:8/integer,
+            NameBinLen:32/integer,
+            NameBin:NameBinLen/binary,
+            ValueBinLen:32/integer,
+            ValueBin:ValueBinLen/binary>>, ModMap) ->
+    Mod = mod_from_mapping(ModMapping, ModMap),
+    Name = binary_to_name(NameBin),
+    Value = binary_to_value(ValueBin, Mod, ModMap),
+    {{Name, Mod}, Value}.
+
+mod_from_mapping(ModMapping, ModMap) ->
+    {Mod, ModMapping} = lists:keyfind(ModMapping, 2, ModMap),
+    Mod.
+
+binary_to_name(<<1, Bin/binary>>) ->
+    Bin;
+binary_to_name(<<0, Bin/binary>>) ->
     binary_to_term(Bin).
+
+binary_to_value(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>, ?MODULE, ModMap) ->
+    from_binary(Bin, ModMap);
+binary_to_value(Bin, Mod, _) ->
+    Mod:from_binary(Bin).
+
+mod_map_from_binary(ModMapBin) ->
+    binary_to_term(ModMapBin).
 
 %% ===================================================================
 %% EUnit tests
@@ -289,12 +404,36 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
 -ifdef(TEST).
 
 -ifdef(EQC).
+-define(NUMTESTS, 1000).
+
+bin_roundtrip_test_() ->
+    crdt_statem_eqc:run_binary_rt(?MODULE, ?NUMTESTS).
+
 eqc_value_test_() ->
-    crdt_statem_eqc:run(?MODULE, 1000).
+    crdt_statem_eqc:run(?MODULE, ?NUMTESTS).
 
 %% ===================================
 %% crdt_statem_eqc callbacks
 %% ===================================
+size(Map) ->
+    byte_size(term_to_binary(Map)) div 10.
+
+generate() ->
+        ?LET({Ops, Actors}, {non_empty(list(gen_op())), non_empty(list(bitstring(16*8)))},
+         lists:foldl(fun(Op, Map) ->
+                             Actor = case length(Actors) of
+                                         1 -> hd(Actors);
+                                         _ -> lists:nth(crypto:rand_uniform(1, length(Actors)), Actors)
+                                     end,
+                             case riak_dt_map:update(Op, Actor, Map) of
+                                 {ok, M} -> M;
+                                 _ -> Map
+                             end
+                     end,
+                     riak_dt_map:new(),
+                     Ops)).
+
+
 gen_op() ->
     ?LET(Ops, non_empty(list(gen_update())), {update, Ops}).
 
@@ -304,7 +443,7 @@ gen_update() ->
                 {update, Field, gen_field_op(Field)}])).
 
 gen_field() ->
-    {binary(), oneof([riak_dt_pncounter, riak_dt_orswot,
+    {non_empty(binary()), oneof([riak_dt_pncounter, riak_dt_orswot,
                       riak_dt_lwwreg,
                       riak_dt_map])}.
 

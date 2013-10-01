@@ -82,8 +82,9 @@
 
 %% EQC API
 -ifdef(EQC).
--export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0, generate/0,
-         prop_bin_roundtrip/0]).
+-export([gen_op/0, update_expected/3, eqc_state_value/1]).
+-export([init_state/0, generate/0, size/1]).
+
 -endif.
 
 -export_type([orswot/0, orswot_op/0, binary_orswot/0]).
@@ -324,35 +325,13 @@ binary_to_elem(<<0, Bin/binary>>) ->
 -ifdef(EQC).
 
 bin_roundtrip_test_() ->
-    {timeout, 30000,
-     ?_assertEqual(true, quickcheck(numtests(?NUMTESTS, ?QC_OUT(prop_bin_roundtrip()))))}.
-
-prop_bin_roundtrip() ->
-    ?FORALL(Set, generate(),
-            begin
-                Bin = riak_dt_orswot:to_binary(Set),
-                Set2 = riak_dt_orswot:from_binary(Bin),
-                collect({range(riak_dt_orswot:value(size, Set)),
-                         range(bytes_smaller(Bin, term_to_binary(Set)))},
-                        ?WHENFAIL(
-                           begin
-                               io:format("Gen ~p~n", [Set]),
-                               io:format("Rountripped ~p~n", [Set2])
-                           end,
-                           riak_dt_orswot:equal(Set, Set2)))
-            end).
-
-bytes_smaller(Bin1, Bin2) ->
-   trunc(((byte_size(Bin2) - byte_size(Bin1)) / byte_size(Bin1)) *  100).
-
-range(0) ->
-    0;
-range(Value) ->
-    N = Value div 10,
-    {N * 10, (N +1) * 10}.
+    crdt_statem_eqc:run_binary_rt(?MODULE, ?NUMTESTS).
 
 eqc_value_test_() ->
     crdt_statem_eqc:run(?MODULE, ?NUMTESTS).
+
+size(Set) ->
+    value(size, Set).
 
 generate() ->
     ?LET({Ops, Actors}, {non_empty(list(gen_op(fun() -> bitstring(20*8) end))), non_empty(list(bitstring(16*8)))},
