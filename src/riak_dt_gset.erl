@@ -90,7 +90,7 @@ merge(GSet1, GSet2) ->
 equal(GSet1, GSet2) ->
     GSet1 == GSet2.
 
--define(TAG, 79).
+-define(TAG, 82).
 -define(V1_VERS, 1).
 
 -spec to_binary(gset()) -> binary_gset().
