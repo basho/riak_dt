@@ -64,6 +64,10 @@
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
+-define(QC_OUT(P),
+        eqc:on_output(fun(Str, Args) ->
+                              io:format(user, Str, Args) end, P)).
+-define(NUMTESTS, 1000).
 -endif.
 
 -ifdef(TEST).
@@ -78,13 +82,15 @@
 
 %% EQC API
 -ifdef(EQC).
--export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0, generate/0]).
+-export([gen_op/0, update_expected/3, eqc_state_value/1]).
+-export([init_state/0, generate/0, size/1]).
+
 -endif.
 
 -export_type([orswot/0, orswot_op/0, binary_orswot/0]).
 
 -opaque orswot() :: {riak_dt_vclock:vclock(), entries()}.
--opaque binary_orswot() :: binary(). %% A binary that from_binary/1 will operate on.
+-type binary_orswot() :: binary(). %% A binary that from_binary/1 will operate on.
 
 -type orswot_op() ::  {add, member()} | {remove, member()} |
                       {add_all, [member()]} | {remove_all, [member()]} |
@@ -104,6 +110,8 @@
 -type dot() :: {actor(), Count::pos_integer()}.
 -type member() :: term().
 
+-type precondition_error() :: {error, {precondition ,{not_present, member()}}}.
+
 -spec new() -> orswot().
 new() ->
     {riak_dt_vclock:fresh(), orddict:new()}.
@@ -119,7 +127,7 @@ value({contains, Elem}, ORset) ->
     lists:member(Elem, value(ORset)).
 
 -spec update(orswot_op(), actor(), orswot()) -> {ok, orswot()} |
-                                                  {error, {precondition ,{not_present, member()}}}.
+                                                precondition_error().
 %% @doc take a list of Set operations and apply them to the set.
 %% NOTE: either _all_ are applied, or _none_ are.
 update({update, Ops}, Actor, ORSet) ->
@@ -181,6 +189,8 @@ merge({LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
 
 %% @doc check if each element in `Entries' should be in the merged
 %% set.
+-spec merge_disjoint_keys(set(), orddict:orddict(),
+                          riak_dt_vclock:vclock(), orddict:orddict()) -> orddict:orddict().
 merge_disjoint_keys(Keys, Entries, SetClock, Accumulator) ->
     sets:fold(fun(Key, Acc) ->
                       Dots = orddict:fetch(Key, Entries),
@@ -198,6 +208,7 @@ merge_disjoint_keys(Keys, Entries, SetClock, Accumulator) ->
               Keys).
 
 %% @doc merges the minimal clocks for the common entries in both sets.
+-spec merge_common_keys(set(), orddict:orddict(), orddict:orddict()) -> orddict:orddict().
 merge_common_keys(CommonKeys, Entries1, Entries2) ->
     sets:fold(fun(Key, Acc) ->
                       V1 = orddict:fetch(Key, Entries1),
@@ -208,8 +219,22 @@ merge_common_keys(CommonKeys, Entries1, Entries2) ->
               CommonKeys).
 
 -spec equal(orswot(), orswot()) -> boolean().
-equal(ORSet1, ORSet2) ->
-    ORSet1 == ORSet2.
+equal({Clock1, Entries1}, {Clock2, Entries2}) ->
+    riak_dt_vclock:equal(Clock1, Clock2) andalso
+        orddict:fetch_keys(Entries1) == orddict:fetch_keys(Entries2) andalso
+        clocks_equal(Entries1, Entries2).
+
+-spec clocks_equal(orddict:orddict(), orddict:orddict()) -> boolean().
+clocks_equal([], _) ->
+    true;
+clocks_equal([{Elem, Clock1} | Rest], Entries2) ->
+    Clock2 = orddict:fetch(Elem, Entries2),
+    case riak_dt_vclock:equal(Clock1, Clock2) of
+        true ->
+            clocks_equal(Rest, Entries2);
+        false ->
+            false
+    end.
 
 %% Private
 -spec add_elem(actor(), orswot(), member()) -> orswot().
@@ -218,13 +243,19 @@ add_elem(Actor, {Clock, Entries}, Elem) ->
     Dot = [{Actor, riak_dt_vclock:get_counter(Actor, NewClock)}],
     {NewClock, update_entry(Elem, Entries, Dot)}.
 
+-spec update_entry(member(), orddict:orddict(), riak_dt_vclock:vclock()) ->
+                          orddict:orddict().
 update_entry(Elem, Entries, Dot) ->
     orddict:update(Elem, fun(Clock) ->
                                  riak_dt_vclock:merge([Clock, Dot]) end,
                    Dot,
                    Entries).
 
-remove_elem({ok, _Vclock}, Elem, {Clock, Dict}) ->
+-spec remove_elem({ok, riak_dt_vclock:vclock()} | error,
+                  member(), {riak_dt_vclock:vclock(), orddict:orddict()}) ->
+                         {ok, riak_dt_vclock:vclock(), orddict:orddict()} |
+                         precondition_error().
+remove_elem({ok, _VClock}, Elem, {Clock, Dict}) ->
     {ok, {Clock, orddict:erase(Elem, Dict)}};
 remove_elem(_, Elem, _ORSet) ->
     {error, {precondition, {not_present, Elem}}}.
@@ -242,15 +273,87 @@ precondition_context(ORSet) ->
 -define(TAG, 75).
 -define(V1_VERS, 1).
 
--spec to_binary(orswot()) -> binary().
-to_binary(ORSet) ->
-    %% @TODO something smarter
-    <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(ORSet))/binary>>.
+%% @doc returns a binary representation of the provided
+%% `orswot()'. Measurements show that for all but the empty set this
+%% function is more effecient than using
+%% `erlang:term_to_binary/1'. The resulting binary is tagged and
+%% versioned for ease of future upgrade. Calling `from_binary/1' with
+%% the result of this function will return the original set.
+%%
+%% @see `from_binary/1'
+-spec to_binary(orswot()) -> binary_orswot().
+to_binary({Clock, Entries}) ->
+    Actors0 = riak_dt_vclock:all_nodes(Clock),
+    Actors = lists:zip(Actors0, lists:seq(1, length(Actors0))),
+    BinClock = riak_dt_vclock:to_binary(Clock),
+    ClockLen = byte_size(BinClock),
+    %% since each minimal clock can be at _most_ the size of the
+    %% vclock for the set, this saves us reserving 4 bytes for clock
+    %% len for each entry if we only needs 1 (for example)
+    ClockLenFieldLen = bit_size(binary:encode_unsigned(ClockLen)),
+    BinEntries = entries_to_binary(Entries, ClockLenFieldLen, Actors, <<>>),
+    <<?TAG:8/integer, ?V1_VERS:8/integer, ClockLenFieldLen:8/integer,
+      ClockLen:ClockLenFieldLen/integer,
+      BinClock:ClockLen/binary,
+      BinEntries/binary>>.
 
--spec from_binary(binary()) -> orswot().
-from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
-    %% @TODO something smarter
+%% @private inverse of `binary_to_entries/4'.
+-spec entries_to_binary(orddict:orddict(), pos_integer(),
+                        [{actor(), pos_integer()}], binary()) ->
+                                binary().
+entries_to_binary([], _,  _, EntriesBin) ->
+    EntriesBin;
+entries_to_binary([{Elem, MinmalClock} | Rest], ClockLenFieldLen, Actors, Acc) ->
+    ElemBin = elem_to_binary(Elem),
+    ElemLength = byte_size(ElemBin),
+    Clock = riak_dt_vclock:replace_actors(Actors, MinmalClock),
+    ClockBin = riak_dt_vclock:to_binary(Clock),
+    ClockLen = byte_size(ClockBin),
+    Bin = <<ElemLength:32/integer, ElemBin:ElemLength/binary, ClockLen:ClockLenFieldLen/integer, ClockBin:ClockLen/binary>>,
+    entries_to_binary(Rest, ClockLenFieldLen, Actors, <<Acc/binary, Bin/binary>>).
+
+%% @private inverse of `binary_to_elem/1'.
+-spec elem_to_binary(member()) -> binary().
+elem_to_binary(Elem) when is_binary(Elem) ->
+    <<1, Elem/binary>>;
+elem_to_binary(Elem) ->
+    <<0, (term_to_binary(Elem))/binary>>.
+
+%% @doc When the argument is a `binary_orswot()' produced by
+%% `to_binary/1' will return the original `orswot()'.
+%%
+%% @see `to_binary/1'
+-spec from_binary(binary_orswot()) -> orswot().
+from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, ClockLenFieldLen:8/integer,
+              ClockLen:ClockLenFieldLen/integer,
+              BinClock:ClockLen/binary, BinEntries/binary>>) ->
+    Clock = riak_dt_vclock:from_binary(BinClock),
+    Actors0 = riak_dt_vclock:all_nodes(Clock),
+    Actors = lists:zip(lists:seq(1, length(Actors0)), Actors0),
+    Entries = binary_to_entries(BinEntries, ClockLenFieldLen, Actors, orddict:new()),
+    {Clock, Entries}.
+
+%% @private inverse of `entries_to_binary/4'.
+-spec binary_to_entries(binary(), pos_integer(), [{pos_integer(), actor()}],
+                        orddict:orddict()) -> orddict:orddict().
+binary_to_entries(<<>>, _, _, Entries) ->
+ Entries;
+binary_to_entries(<<ElemLength:32/integer, ElemBin:ElemLength/binary, Rest0/binary>>,
+                  ClockLenFieldLen, Actors, Entries0) ->
+    Elem = binary_to_elem(ElemBin),
+    <<ClockLen:ClockLenFieldLen/integer, ClockBin:ClockLen/binary, Rest/binary>> = Rest0,
+    Clock0 = riak_dt_vclock:from_binary(ClockBin),
+    Clock = riak_dt_vclock:replace_actors(Actors, Clock0),
+    Entries = orddict:store(Elem, Clock, Entries0),
+    binary_to_entries(Rest, ClockLenFieldLen, Actors, Entries).
+
+%% @private inverse of `elem_to_binary/1'.
+-spec binary_to_elem(binary()) -> member().
+binary_to_elem(<<1, Bin/binary>>) ->
+    Bin;
+binary_to_elem(<<0, Bin/binary>>) ->
     binary_to_term(Bin).
+
 
 %% ===================================================================
 %% EUnit tests
@@ -258,27 +361,45 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
 -ifdef(TEST).
 
 -ifdef(EQC).
+
+bin_roundtrip_test_() ->
+    crdt_statem_eqc:run_binary_rt(?MODULE, ?NUMTESTS).
+
 eqc_value_test_() ->
-    crdt_statem_eqc:run(?MODULE, 1000).
+    crdt_statem_eqc:run(?MODULE, ?NUMTESTS).
+
+size(Set) ->
+    value(size, Set).
 
 generate() ->
-    ?LET(Members, list(int()),
-         lists:foldl(fun(M, Set) ->
-                            riak_dt_orswot:update({add, M}, choose(1, 50), Set) end,
-                    riak_dt_orswot:new(),
-                    Members)).
+    ?LET({Ops, Actors}, {non_empty(list(gen_op(fun() -> bitstring(20*8) end))), non_empty(list(bitstring(16*8)))},
+         lists:foldl(fun(Op, Set) ->
+                             Actor = case length(Actors) of
+                                         1 -> hd(Actors);
+                                         _ -> lists:nth(crypto:rand_uniform(1, length(Actors)), Actors)
+                                     end,
+                             case riak_dt_orswot:update(Op, Actor, Set) of
+                                 {ok, S} -> S;
+                                 _ -> Set
+                             end
+                     end,
+                     riak_dt_orswot:new(),
+                     Ops)).
 
 %% EQC generator
 gen_op() ->
-    oneof([gen_updates(), gen_update()]).
+    gen_op(fun() -> int() end).
 
-gen_updates() ->
-     {update, non_empty(list(gen_update()))}.
+gen_op(Gen) ->
+    oneof([gen_updates(Gen), gen_update(Gen)]).
 
-gen_update() ->
-    oneof([{add, int()}, {remove, int()},
-           {add_all, non_empty(list(int()))},
-           {remove_all, non_empty(list(int()))}]).
+gen_updates(Gen) ->
+     {update, non_empty(list(gen_update(Gen)))}.
+
+gen_update(Gen) ->
+    oneof([{add, Gen()}, {remove, Gen()},
+           {add_all, non_empty(list(Gen()))},
+           {remove_all, non_empty(list(Gen()))}]).
 
 init_state() ->
     {0, dict:new()}.
