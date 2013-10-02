@@ -32,15 +32,17 @@
 -module(riak_dt_vclock).
 
 -export([fresh/0,descends/2,merge/1,get_counter/2, subtract_dots/2,
-	increment/2,all_nodes/1,equal/2, replace_actors/2, replace_actors/3]).
+	increment/2,all_nodes/1, equal/2, replace_actors/2, replace_actors/3,
+         to_binary/1, from_binary/1]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--export_type([vclock/0, vclock_node/0]).
+-export_type([vclock/0, vclock_node/0, binary_vclock/0]).
 
--opaque vclock() :: [vc_entry()].
+-type vclock() :: [vc_entry()].
+-type binary_vclock() :: binary().
 % The timestamp is present but not used, in case a client wishes to inspect it.
 -type vc_entry() :: {vclock_node(), counter()}.
 
@@ -140,15 +142,31 @@ increment(Node, VClock) ->
 % @doc Return the list of all nodes that have ever incremented VClock.
 -spec all_nodes(VClock :: vclock()) -> [vclock_node()].
 all_nodes(VClock) ->
-    [X || {X, _} <- VClock].
+    [X || {X, _} <- sort(VClock)].
 
 % @doc Compares two VClocks for equality.
 -spec equal(VClockA :: vclock(), VClockB :: vclock()) -> boolean().
 equal(VA,VB) ->
     lists:sort(VA) =:= lists:sort(VB).
 
+%% @doc sorts the vclock by actor
+-spec sort(vclock()) -> vclock().
+sort(Clock) ->
+    lists:sort(Clock).
+
+%% @doc an effecient format for disk / wire.
+%5 @see `from_binary/1`
+-spec to_binary(vclock()) -> binary_vclock().
+to_binary(Clock) ->
+    term_to_binary(sort(Clock)).
+
+%% @doc takes the output of `to_binary/1` and returns a vclock
+-spec from_binary(binary_vclock()) -> vclock().
+from_binary(Bin) ->
+    sort(binary_to_term(Bin)).
+
 %% @doc replace actors in the vclock with those in the provided
-%% 2 tuple list, assumes the first element in the
+%% 2 tuple list, the first element in the
 %% actor map is present in the clock, and the second will
 %% replace it.
 -spec replace_actors([{vclock_node(), vclock_node()}], vclock()) -> vclock().
