@@ -94,8 +94,8 @@
 -type mod_map() :: [{crdt_mod(), pos_integer()}].
 
 %% Used by to/from binary to only store each actor id once
--type actor_map() :: [{riak_dt_vclock:actor(), pos_integer()}
-                      | {pos_integer(), riak_dt_vclock:actor()}].
+-type actor_map() :: [{riak_dt:actor(), pos_integer()}
+                      | {pos_integer(), riak_dt:actor()}].
 
 %% @doc Create a new, empty Map.
 -spec new() -> map().
