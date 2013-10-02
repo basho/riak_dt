@@ -60,7 +60,8 @@
 -type crdt_mod() :: riak_dt_pncounter | riak_dt_lwwreg |
                     riak_dt_od_flag |
                     riak_dt_map | riak_dt_orswot.
--type valuelist() :: [{field(), {minimal_clock(), crdt()}}].
+-type valuelist() :: [{field(), entry()}].
+-type entry() :: {minimal_clock(), crdt()}.
 
 %% a minimal clock is just the dots for the element, each dot being an
 %% actor and event counter for when the element was added.
@@ -88,6 +89,13 @@
 -type values() :: [value()].
 -type value() :: {field(), riak_dt_map:values() | integer() | [term()] | boolean() | term()}.
 -type precondition_error() :: {error, {precondition, {not_present, field()}}}.
+
+%% Used by to/from binary to only store mod names once
+-type mod_map() :: [{crdt_mod(), pos_integer()}].
+
+%% Used by to/from binary to only store each actor id once
+-type actor_map() :: [{riak_dt_vclock:actor(), pos_integer()}
+                      | {pos_integer(), riak_dt_vclock:actor()}].
 
 %% @doc Create a new, empty Map.
 -spec new() -> map().
@@ -121,9 +129,14 @@ value(keyset, {_Clock, Values}) ->
 value({contains, Field}, {_Clock, Values}) ->
     lists:member(Field, keys(Values)).
 
+%% @private
+-spec get_crdt({ok, entry()} | error, crdt_mod()) -> crdt() | error.
 get_crdt(Entry, Mod) ->
     get_crdt(Entry, Mod, false).
 
+%% @private
+-spec get_crdt({ok, entry()} | error, crdt_mod(), boolean()) ->
+                      crdt() | error.
 get_crdt({ok, {_Dot, Value}}, _Mod, _) ->
     Value;
 get_crdt(error, _Mod, false) ->
@@ -131,6 +144,7 @@ get_crdt(error, _Mod, false) ->
 get_crdt(error, Mod, true) ->
     Mod:new().
 
+-spec keys(orddict:orddict()) -> [field()] | [].
 keys(Values) ->
     orddict:fetch_keys(Values).
 
@@ -158,7 +172,10 @@ keys(Values) ->
 update({update, Ops}, Actor, {Clock, Values}) ->
     apply_ops(Ops, Actor, Clock, Values).
 
-%% @Private
+%% @private
+-spec apply_ops([map_field_update() | map_field_op()], riak_dt:actor(),
+                riak_dt_vclock:vclock(), orddict:orddict()) ->
+                       {ok, map()} | precondition_error().
 apply_ops([], _Actor, Clock, Values) ->
     {ok, {Clock, Values}};
 apply_ops([{update, {_Name, Mod}=Field, Op} | Rest], Actor, Clock, Values) ->
@@ -207,6 +224,9 @@ merge({LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
 
 %% @doc check if each element in `Entries' should be in the merged
 %% set.
+-spec merge_disjoint_fields(set(), valuelist(),
+                            riak_dt_vclock:vclock(), valuelist()) ->
+                                   valuelist().
 merge_disjoint_fields(Fields, Entries, SetClock, Accumulator) ->
     sets:fold(fun(Field, Acc) ->
                       {Dots, Value} = orddict:fetch(Field, Entries),
@@ -225,6 +245,7 @@ merge_disjoint_fields(Fields, Entries, SetClock, Accumulator) ->
 
 %% @doc merges the minimal clocks and values for the common entries in
 %% both sets.
+-spec merge_common_fields(set(), valuelist(), valuelist()) -> valuelist().
 merge_common_fields(CommonFields, Entries1, Entries2) ->
     sets:fold(fun({_Name, Mod}=Field, Acc) ->
                       {Dots1, V1} = orddict:fetch(Field, Entries1),
@@ -246,11 +267,13 @@ equal({Clock1, Values1}, {Clock2, Values2}) ->
 
 %% @Private Note, only called when we know that 2 sets of fields are
 %% equal. Both dicts therefore have the same set of keys.
+-spec pairwise_equals(valuelist(), valuelist()) -> boolean().
 pairwise_equals(Values1, Values2) ->
     short_circuit_equals(orddict:to_list(Values1), Values2).
 
 %% @Private
 %% Compare each value. Return false as soon as any pair are not equal.
+-spec short_circuit_equals(valuelist(), valuelist()) -> boolean().
 short_circuit_equals([], _Values2) ->
     true;
 short_circuit_equals([{{_Name, Mod}=Field, {Dot1,Val1}} | Rest], Values2) ->
@@ -273,6 +296,15 @@ precondition_context(Map) ->
 -define(TAG, 77).
 -define(V1_VERS, 1).
 
+%% @doc returns a binary representation of the provided
+%% `map()'. Measurements show that for all but the empty map this
+%% function is more effecient than using
+%% `erlang:term_to_binary/1'. The resulting binary is tagged and
+%% versioned for ease of future upgrade. Calling `from_binary/1' with
+%% the result of this function will return the original map.
+%%
+%% @see `from_binary/1'
+-spec to_binary(map()) -> binary_map().
 to_binary(Map) ->
     {ModMap, <<?TAG:8/integer, ?V1_VERS:8/integer, MapBin/binary>>} =  to_binary(Map, orddict:new()),
     ModMapBin = mod_map_to_binary(ModMap),
@@ -282,6 +314,10 @@ to_binary(Map) ->
       ModMapBin:ModMapBinLen/binary,
       MapBin/binary>>.
 
+%% @doc When the argument is a `binary_map()' produced by
+%% `to_binary/1' will return the original `map()'.
+%%
+%% @see `to_binary/1'
 -spec from_binary(binary_map()) -> map().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer,
               ModMapBinLen:32/integer, ModMapBin:ModMapBinLen/binary,
@@ -289,8 +325,11 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer,
     ModMap = mod_map_from_binary(ModMapBin),
     from_binary(MapBin, ModMap).
 
+%% @private internal `to_binary/2' for submaps. Threads the `ModMap'
+%% through all submaps so that we don't duplicate information.
+-spec to_binary(map(), mod_map()) -> {mod_map(), binary_map()}.
 to_binary({Clock, Fields}, ModMap0) ->
-    Actors0 = riak_dt_vclock:actors(Clock),
+    Actors0 = riak_dt_vclock:all_nodes(Clock),
     Actors = lists:zip(Actors0, lists:seq(1, length(Actors0))),
     BinClock = riak_dt_vclock:to_binary(Clock),
     ClockLen = byte_size(BinClock),
@@ -305,14 +344,21 @@ to_binary({Clock, Fields}, ModMap0) ->
       BinClock:ClockLen/binary,
       BinFields/binary>>}.
 
+%% @private internal from binary that threads the `ModMap' for use by
+%% all submaps.
+-spec from_binary(binary(), mod_map()) -> map().
 from_binary(<<ClockLenFieldLen:8/integer, ClockLen:ClockLenFieldLen/integer,
               BinClock:ClockLen/binary, BinFields/binary>>, ModMap) ->
     Clock = riak_dt_vclock:from_binary(BinClock),
-    Actors0 = riak_dt_vclock:actors(Clock),
+    Actors0 = riak_dt_vclock:all_nodes(Clock),
     Actors = lists:zip(lists:seq(1, length(Actors0)), Actors0),
     Fields = binary_to_fields(BinFields, ClockLenFieldLen, Actors, ModMap, orddict:new()),
     {Clock, Fields}.
 
+%% @private inverse of 'binary_to_fields/5'
+-spec fields_to_binary(valuelist(), pos_integer(), actor_map(),
+                       mod_map(), binary()) ->
+                              {mod_map(), binary()}.
 fields_to_binary([], _, _, ModMap, BinFields) ->
     {ModMap, BinFields};
 fields_to_binary([{Field, {Clock0, CRDT}} | Rest], ClockLenFieldLen, Actors, ModMap0, Acc) ->
@@ -325,6 +371,8 @@ fields_to_binary([{Field, {Clock0, CRDT}} | Rest], ClockLenFieldLen, Actors, Mod
             ClockLen:ClockLenFieldLen/integer, ClockBin:ClockLen/binary>>,
     fields_to_binary(Rest, ClockLenFieldLen, Actors, ModMap, <<Acc/binary, Bin/binary>>).
 
+%% @private inverse of 'binary_to_crdt/2'
+-spec crdt_to_binary(field(), crdt(), mod_map()) -> {mod_map(), binary()}.
 crdt_to_binary({Name, Mod}, CRDT, ModMap0) ->
     NameBin = name_to_bin(Name),
     NameBinLen = byte_size(NameBin),
@@ -338,19 +386,28 @@ crdt_to_binary({Name, Mod}, CRDT, ModMap0) ->
             ValueBin:ValueBinLen/binary>>,
     {ModMap2, Bin}.
 
+%% @private inverse of `mod_map_from_binary/1'
+-spec mod_map_to_binary(mod_map()) -> binary().
 mod_map_to_binary(ModMap) ->
     term_to_binary(ModMap).
 
+%% @private inverse of `binary_to_name/1'
+-spec name_to_bin(term()) -> binary().
 name_to_bin(Name) when is_binary(Name) ->
     <<1, Name/binary>>;
 name_to_bin(Name) ->
     <<0, (term_to_binary(Name))/binary>>.
 
+%% @private inverse of `binary_to_value/3'
+-spec value_to_binary(crdt_mod(), crdt(), mod_map()) ->
+                             {mod_map(), binary()}.
 value_to_binary(?MODULE, Value, ModMap) ->
     to_binary(Value, ModMap);
 value_to_binary(Mod, Value, ModMap) ->
     {ModMap, Mod:to_binary(Value)}.
 
+%% @private get or generate an int -> mod mapping
+-spec mod_mapping(crdt_mod(), mod_map()) -> {pos_integer(), mod_map()}.
 mod_mapping(Mod, ModMap0) ->
     case orddict:find(Mod, ModMap0) of
         error ->
@@ -360,6 +417,10 @@ mod_mapping(Mod, ModMap0) ->
             {Mapping, ModMap0}
     end.
 
+%% @private inverse of `fields_to_binary/5'
+-spec binary_to_fields(binary(), pos_integer(),
+                       actor_map(), mod_map(), valuelist()) ->
+                              valuelist().
 binary_to_fields(<<>>, _, _, _, Fields) ->
     Fields;
 binary_to_fields(<<CRDTBinLen:32/integer, CRDTBin:CRDTBinLen/binary, Rest0/binary>>,
@@ -371,6 +432,9 @@ binary_to_fields(<<CRDTBinLen:32/integer, CRDTBin:CRDTBinLen/binary, Rest0/binar
     Fields = orddict:store(Field, {Clock, CRDT}, Acc),
     binary_to_fields(Rest, ClockLenFieldLen, Actors, ModMap, Fields).
 
+%% @private invers of `crdt_to_binary/3'
+-spec binary_to_crdt(binary(), mod_map()) ->
+                            {field(), crdt()}.
 binary_to_crdt(<<ModMapping:8/integer,
             NameBinLen:32/integer,
             NameBin:NameBinLen/binary,
@@ -381,20 +445,29 @@ binary_to_crdt(<<ModMapping:8/integer,
     Value = binary_to_value(ValueBin, Mod, ModMap),
     {{Name, Mod}, Value}.
 
+%% @private inverse of `mod_mapping/2', get the mod for and int
+%% mapping.
+-spec mod_from_mapping(pos_integer(), mod_map()) -> crdt_mod().
 mod_from_mapping(ModMapping, ModMap) ->
     {Mod, ModMapping} = lists:keyfind(ModMapping, 2, ModMap),
     Mod.
 
+%% @private inverse of `name_to_bin/1'
+-spec binary_to_name(binary()) -> term().
 binary_to_name(<<1, Bin/binary>>) ->
     Bin;
 binary_to_name(<<0, Bin/binary>>) ->
     binary_to_term(Bin).
 
+%% @private inverse of `binary_to_value/4'
+-spec binary_to_value(binary(), crdt_mod(), mod_map()) -> crdt().
 binary_to_value(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>, ?MODULE, ModMap) ->
     from_binary(Bin, ModMap);
 binary_to_value(Bin, Mod, _) ->
     Mod:from_binary(Bin).
 
+%% @private inverse of `mod_map_to_binary/1'
+-spec mod_map_from_binary(binary()) -> mod_map().
 mod_map_from_binary(ModMapBin) ->
     binary_to_term(ModMapBin).
 
