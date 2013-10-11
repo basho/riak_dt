@@ -1,6 +1,7 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_dt_oe_flag: a flag that can be enabled and disabled as many times as you want, disabling wins, starts enabled.
+%% riak_dt_oe_flag: a flag that can be enabled and disabled as many
+%%   times as you want, disabling wins, starts enabled.
 %%
 %% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -28,20 +29,118 @@
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
--export([gen_op/0, init_state/0, update_expected/3, eqc_state_value/1]).
+-export([gen_op/0, init_state/0, update_expected/3, eqc_state_value/1, generate/0, size/1]).
+-define(NUMTESTS, 1000).
 -endif.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
-% EQC generator
+-export_type([oe_flag/0, oe_flag_op/0]).
+
+-opaque oe_flag() :: {riak_dt_vclock:vclock(), on | off}.
+-type oe_flag_op() :: enable | disable.
+
+-spec new() -> oe_flag().
+new() ->
+    {riak_dt_vclock:fresh(), on}.
+
+-spec value(oe_flag()) -> on | off.
+value({_,F}) -> F.
+
+-spec value(term(), oe_flag()) -> on | off.
+value(_, Flag) ->
+    value(Flag).
+
+-spec update(oe_flag_op(), riak_dt:actor(), oe_flag()) -> {ok, oe_flag()}.
+update(disable, Actor, {Clock,_}) ->
+    NewClock = riak_dt_vclock:increment(Actor, Clock),
+    {ok, {NewClock, off}};
+update(enable, _Actor, {Clock,_}) ->
+    {ok, {Clock, on}}.
+
+-spec merge(oe_flag(), oe_flag()) -> oe_flag().
+merge({C1, F}, {C2,F}) ->
+    %% When they are the same result (on or off), just merge the
+    %% vclock.
+    {riak_dt_vclock:merge([C1, C2]), F};
+merge({C1, _}=ODF1, {C2, _}=ODF2) ->
+    %% When the flag disagrees:
+    case {riak_dt_vclock:equal(C1, C2),
+          riak_dt_vclock:descends(C1, C2),
+          riak_dt_vclock:descends(C2, C1)} of
+    %% 1) If the clocks are equal, the result is 'on' (observed
+    %% enable).
+        {true, _, _} ->
+            {riak_dt_vclock:merge([C1, C2]), on};
+    %% 2) If they are sibling/divergent clocks, the result is 'off'.
+        {_, false, false} ->
+            {riak_dt_vclock:merge([C1, C2]), off};
+    %% 3) If one clock dominates the other, its value should be
+    %% chosen.
+        {_, true, false} ->
+            ODF1;
+        {_, false, true} ->
+            ODF2
+    end.
+
+-spec equal(oe_flag(), oe_flag()) -> boolean().
+equal({C1,F},{C2,F}) ->
+    riak_dt_vclock:equal(C1,C2);
+equal(_,_) -> false.
+
+-define(TAG, 74).
+-define(VSN1, 1).
+
+-spec from_binary(binary()) -> oe_flag().
+from_binary(<<?TAG:8, ?VSN1:8, BFlag:8, VClock/binary>>) ->
+    Flag = case BFlag of
+               1 -> on;
+               0 -> off
+           end,
+    {riak_dt_vclock:from_binary(VClock), Flag}.
+
+-spec to_binary(oe_flag()) -> binary().
+to_binary({Clock, Flag}) ->
+    BFlag = case Flag of
+                on -> 1;
+                off -> 0
+            end,
+    VCBin = riak_dt_vclock:to_binary(Clock),
+    <<?TAG:8, ?VSN1:8, BFlag:8, VCBin/binary>>.
+
+
+%% ===================================================================
+%% EUnit tests
+%% ===================================================================
+-ifdef(TEST).
+
 -ifdef(EQC).
+eqc_value_test_() ->
+    crdt_statem_eqc:run(?MODULE, 1000).
+
+bin_roundtrip_test_() ->
+    crdt_statem_eqc:run_binary_rt(?MODULE, ?NUMTESTS).
+
+% EQC generator
 gen_op() ->
     oneof([disable,enable]).
 
+size({Clock,_}) ->
+    length(Clock).
+
 init_state() ->
     orddict:new().
+
+generate() ->
+    ?LET(Ops, non_empty(list({gen_op(), binary(16)})),
+         lists:foldl(fun({Op, Actor}, Flag) ->
+                             {ok, F} = ?MODULE:update(Op, Actor, Flag),
+                             F
+                     end,
+                     ?MODULE:new(),
+                     Ops)).
 
 update_expected(ID, create, Dict) ->
     orddict:store(ID, on, Dict);
@@ -64,66 +163,6 @@ eqc_state_value(Dict) ->
     orddict:fold(fun(_K,V,Acc) ->
             flag_and(V,Acc)
         end, on, Dict).
--endif.
-
-% {Enables,Disables}
-new() ->
-    {ordsets:new(),ordsets:new()}.
-
-value({Disables,Enables}=_Flag) ->
-    Winners = ordsets:subtract(Disables,Enables),
-    case ordsets:size(Winners) of
-        0 -> on;
-        _ -> off
-    end.
-
-value(_, Flag) ->
-    value(Flag).
-
-update(disable, Actor, {Disables,Enables}=_Flag) ->
-    Token = unique_token(Actor),
-    Disables1 = ordsets:add_element(Token,Disables),
-    {ok, {Disables1, Enables}};
-update(enable, _Actor, {Disables,Enables}=_Flag) ->
-    {ok, {Disables,ordsets:union(Disables,Enables)}}.
-
-merge({DA,EA}=_FA, {DB,EB}=_FB) ->
-    Disables = ordsets:union(DA,DB),
-    Enables = ordsets:union(EA,EB),
-    {Disables, Enables}.
-
-equal(FlagA,FlagB) ->
-    FlagA == FlagB.
-
--define(TAG, 74).
--define(VSN1, 1).
-
-from_binary(<<?TAG:8, ?VSN1:8, ESize:32, DSize:32,
-              EBin:ESize/binary, DBin:DSize/binary>>) ->
-    Enables = ordsets:from_list([ E || <<E:32>> <= EBin ]),
-    Disables = ordsets:from_list([ D || <<D:32>> <= DBin ]),
-    {Enables, Disables}.
-
-to_binary({Enables, Disables}) ->
-    ESize = ordsets:size(Enables) * 4,
-    DSize = ordsets:size(Disables) * 4,
-    EBin = << <<T:32>> || T <- ordsets:to_list(Enables) >>,
-    DBin = << <<T:32>> || T <- ordsets:to_list(Disables) >>,
-    <<?TAG:8, ?VSN1:8, ESize:32, DSize:32, EBin/binary, DBin/binary>>.
-
-%% priv
-unique_token(Actor) ->
-    erlang:phash2({Actor, erlang:now()}).
-
-
-%% ===================================================================
-%% EUnit tests
-%% ===================================================================
--ifdef(TEST).
-
--ifdef(EQC).
-eqc_value_test_() ->
-    crdt_statem_eqc:run(?MODULE, 1000).
 -endif.
 
 new_test() ->
