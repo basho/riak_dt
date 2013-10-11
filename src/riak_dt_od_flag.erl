@@ -42,7 +42,6 @@
 -opaque od_flag() :: {riak_dt_vclock:vclock(), on | off}.
 -type od_flag_op() :: enable | disable.
 
-% {Enables,Disables}
 -spec new() -> od_flag().
 new() ->
     {riak_dt_vclock:fresh(), off}.
