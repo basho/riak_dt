@@ -39,30 +39,30 @@
 
 -export_type([oe_flag/0, oe_flag_op/0]).
 
--opaque oe_flag() :: {riak_dt_vclock:vclock(), on | off}.
+-opaque oe_flag() :: {riak_dt_vclock:vclock(), boolean()}.
 -type oe_flag_op() :: enable | disable.
 
 -spec new() -> oe_flag().
 new() ->
-    {riak_dt_vclock:fresh(), on}.
+    {riak_dt_vclock:fresh(), true}.
 
--spec value(oe_flag()) -> on | off.
+-spec value(oe_flag()) -> boolean().
 value({_,F}) -> F.
 
--spec value(term(), oe_flag()) -> on | off.
+-spec value(term(), oe_flag()) -> boolean().
 value(_, Flag) ->
     value(Flag).
 
 -spec update(oe_flag_op(), riak_dt:actor(), oe_flag()) -> {ok, oe_flag()}.
 update(disable, Actor, {Clock,_}) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
-    {ok, {NewClock, off}};
+    {ok, {NewClock, false}};
 update(enable, _Actor, {Clock,_}) ->
-    {ok, {Clock, on}}.
+    {ok, {Clock, true}}.
 
 -spec merge(oe_flag(), oe_flag()) -> oe_flag().
 merge({C1, F}, {C2,F}) ->
-    %% When they are the same result (on or off), just merge the
+    %% When they are the same result (true or false), just merge the
     %% vclock.
     {riak_dt_vclock:merge([C1, C2]), F};
 merge({C1, _}=ODF1, {C2, _}=ODF2) ->
@@ -70,13 +70,13 @@ merge({C1, _}=ODF1, {C2, _}=ODF2) ->
     case {riak_dt_vclock:equal(C1, C2),
           riak_dt_vclock:descends(C1, C2),
           riak_dt_vclock:descends(C2, C1)} of
-    %% 1) If the clocks are equal, the result is 'on' (observed
+    %% 1) If the clocks are equal, the result is 'true' (observed
     %% enable).
         {true, _, _} ->
-            {riak_dt_vclock:merge([C1, C2]), on};
-    %% 2) If they are sibling/divergent clocks, the result is 'off'.
+            {riak_dt_vclock:merge([C1, C2]), true};
+    %% 2) If they are sibling/divergent clocks, the result is 'false'.
         {_, false, false} ->
-            {riak_dt_vclock:merge([C1, C2]), off};
+            {riak_dt_vclock:merge([C1, C2]), false};
     %% 3) If one clock dominates the other, its value should be
     %% chosen.
         {_, true, false} ->
@@ -96,16 +96,16 @@ equal(_,_) -> false.
 -spec from_binary(binary()) -> oe_flag().
 from_binary(<<?TAG:8, ?VSN1:8, BFlag:8, VClock/binary>>) ->
     Flag = case BFlag of
-               1 -> on;
-               0 -> off
+               1 -> true;
+               0 -> false
            end,
     {riak_dt_vclock:from_binary(VClock), Flag}.
 
 -spec to_binary(oe_flag()) -> binary().
 to_binary({Clock, Flag}) ->
     BFlag = case Flag of
-                on -> 1;
-                off -> 0
+                true -> 1;
+                false -> 0
             end,
     VCBin = riak_dt_vclock:to_binary(Clock),
     <<?TAG:8, ?VSN1:8, BFlag:8, VCBin/binary>>.
@@ -143,61 +143,56 @@ generate() ->
                      Ops)).
 
 update_expected(ID, create, Dict) ->
-    orddict:store(ID, on, Dict);
+    orddict:store(ID, true, Dict);
 update_expected(ID, enable, Dict) ->
-    orddict:store(ID, on, Dict);
+    orddict:store(ID, true, Dict);
 update_expected(ID, disable, Dict) ->
-    orddict:store(ID, off, Dict);
+    orddict:store(ID, false, Dict);
 update_expected(ID, {merge, SourceID}, Dict) ->
     Mine = orddict:fetch(ID, Dict),
     Theirs = orddict:fetch(SourceID, Dict),
-    Merged = flag_and(Mine,Theirs),
+    Merged = Mine and Theirs,
     orddict:store(ID, Merged, Dict).
-
-flag_and(on, on) ->
-    on;
-flag_and(_, _) ->
-    off.
 
 eqc_state_value(Dict) ->
     orddict:fold(fun(_K,V,Acc) ->
-            flag_and(V,Acc)
-        end, on, Dict).
+            V and Acc
+        end, true, Dict).
 -endif.
 
 new_test() ->
-    ?assertEqual(on, value(new())).
+    ?assertEqual(true, value(new())).
 
 update_enable_test() ->
     F0 = new(),
     {ok, F1} = update(disable, 1, F0),
-    ?assertEqual(off, value(F1)).
+    ?assertEqual(false, value(F1)).
 
 update_enable_multi_test() ->
     F0 = new(),
     {ok, F1} = update(disable, 1, F0),
     {ok, F2} = update(enable, 1, F1),
     {ok, F3} = update(disable, 1, F2),
-    ?assertEqual(off, value(F3)).
+    ?assertEqual(false, value(F3)).
 
 merge_offs_test() ->
     F0 = new(),
-    ?assertEqual(on, value(merge(F0, F0))).
+    ?assertEqual(true, value(merge(F0, F0))).
 
 merge_simple_test() ->
     F0 = new(),
     {ok, F1} = update(disable, 1, F0),
-    ?assertEqual(off, value(merge(F1, F0))),
-    ?assertEqual(off, value(merge(F0, F1))),
-    ?assertEqual(off, value(merge(F1, F1))).
+    ?assertEqual(false, value(merge(F1, F0))),
+    ?assertEqual(false, value(merge(F0, F1))),
+    ?assertEqual(false, value(merge(F1, F1))).
 
 merge_concurrent_test() ->
     F0 = new(),
     {ok, F1} = update(disable, 1, F0),
     {ok, F2} = update(enable, 1, F1),
     {ok, F3} = update(disable, 1, F1),
-    ?assertEqual(off, value(merge(F1,F3))),
-    ?assertEqual(on, value(merge(F1,F2))),
-    ?assertEqual(off, value(merge(F2,F3))).
+    ?assertEqual(false, value(merge(F1,F3))),
+    ?assertEqual(true, value(merge(F1,F2))),
+    ?assertEqual(false, value(merge(F2,F3))).
 
 -endif.
