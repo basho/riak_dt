@@ -54,7 +54,7 @@
 %% @doc Create a new, empty `lwwreg()'
 -spec new() -> lwwreg().
 new() ->
-    {undefined, 0}.
+    {<<>>, 0}.
 
 %% @doc The single total value of a `gcounter()'.
 -spec value(lwwreg()) -> term().
@@ -169,7 +169,7 @@ generate() ->
          end).
 
 init_state() ->
-    {undefined, 0}.
+    {<<>>, 0}.
 
 gen_op() ->
     ?LET(TS, largeint(), {assign, binary(), abs(TS)}).
@@ -189,14 +189,14 @@ eqc_state_value({Val, _TS}) ->
 -endif.
 
 new_test() ->
-    ?assertEqual({undefined, 0}, new()).
+    ?assertEqual({<<>>, 0}, new()).
 
 value_test() ->
     Val1 = "the rain in spain falls mainly on the plane",
     LWWREG1 = {Val1, 19090},
     LWWREG2 = new(),
     ?assertEqual(Val1, value(LWWREG1)),
-    ?assertEqual(undefined, value(LWWREG2)).
+    ?assertEqual(<<>>, value(LWWREG2)).
 
 update_assign_test() ->
     LWW0 = new(),
@@ -215,7 +215,7 @@ update_assign_ts_test() ->
 merge_test() ->
     LWW1 = {old_value, 3},
     LWW2 = {new_value, 4},
-    ?assertEqual({undefined, 0}, merge(new(), new())),
+    ?assertEqual({<<>>, 0}, merge(new(), new())),
     ?assertEqual({new_value, 4}, merge(LWW1, LWW2)),
     ?assertEqual({new_value, 4}, merge(LWW2, LWW1)).
 
