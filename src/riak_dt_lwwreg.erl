@@ -70,7 +70,7 @@ value(timestamp, {_V, TS}) ->
 %% @doc Assign a `Value' to the `lwwreg()'
 %% associating the update with time `TS'
 -spec update(lwwreg_op(), term(), lwwreg()) ->
-                    lwwreg().
+                    {ok, lwwreg()}.
 update({assign, Value, TS}, _Actor, {_OldVal, OldTS}) when is_integer(TS), TS > 0, TS >= OldTS ->
     {ok, {Value, TS}};
 update({assign, _Value, _TS}, _Actor, OldLWWReg) ->
