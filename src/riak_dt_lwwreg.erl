@@ -47,7 +47,7 @@
 
 -opaque lwwreg() :: {term(), non_neg_integer()}.
 
--type lwwreg_op() :: {assign, term(), non_neg_integer()}.
+-type lwwreg_op() :: {assign, term(), non_neg_integer()}  | {assign, term()}.
 
 -type lww_q() :: timestamp.
 
