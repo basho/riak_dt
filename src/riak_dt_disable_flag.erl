@@ -29,7 +29,7 @@
 
 -behaviour(riak_dt).
 
--export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1]).
+-export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1, stats/1]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -38,23 +38,6 @@
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
--endif.
-
-%% EQC generator
--ifdef(EQC).
-init_state() ->
-    on.
-
-gen_op() ->
-    disable.
-
-update_expected(_ID, disable, _Prev) ->
-    off;
-update_expected(_ID, _Op, Prev) ->
-    Prev.
-
-eqc_state_value(S) ->
-    S.
 -endif.
 
 -define(TAG, 80).
@@ -82,6 +65,8 @@ from_binary(<<?TAG:7, 1:1>>) -> on.
 
 to_binary(off) -> <<?TAG:7, 0:1>>;
 to_binary(on) -> <<?TAG:7, 1:1>>.
+
+stats(_) -> [].
 
 %% priv
 flag_and(on, on) ->
@@ -135,4 +120,22 @@ merge_on_both_test() ->
     {ok, F1} = update(disable, 1, F0),
     ?assertEqual(off, merge(F1, F1)).
 
+-endif.
+
+
+%% EQC generator
+-ifdef(EQC).
+init_state() ->
+    on.
+
+gen_op() ->
+    disable.
+
+update_expected(_ID, disable, _Prev) ->
+    off;
+update_expected(_ID, _Op, Prev) ->
+    Prev.
+
+eqc_state_value(S) ->
+    S.
 -endif.

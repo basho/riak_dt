@@ -26,7 +26,7 @@
 
 %% API
 -export([new/0, value/1, update/3, merge/2, equal/2,
-         to_binary/1, from_binary/1, value/2, precondition_context/1]).
+         to_binary/1, from_binary/1, value/2, precondition_context/1, stats/1]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -114,6 +114,18 @@ precondition_context(ORDict) ->
                 Tokens1 -> orddict:store(Elem, Tokens1, ORDict1)
             end
         end, orddict:new(), ORDict).
+
+-spec stats(orset()) -> [{atom(), number()}].
+stats(ORSet) ->
+    {Tags, Tombs} = orddict:fold(fun(_K, {A, R}, {As, Rs}) ->
+                                         {length(A) + As, length(R) + Rs}
+                                 end, {0,0}, ORSet),
+    [
+     {element_count, orddict:size(ORSet)},
+     {adds_count, Tags},
+     {removes_count, Tombs},
+     {waste_pct, Tombs / Tags * 100}
+    ].
 
 -define(TAG, 76).
 -define(V1_VERS, 1).
