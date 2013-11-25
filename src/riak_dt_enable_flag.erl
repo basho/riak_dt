@@ -42,30 +42,43 @@
 
 -define(TAG, 79).
 
+-export_type([enable_flag/0]).
+-opaque enable_flag() :: on | off.
+-type enable_flag_op() :: enable.
+
+-spec new() -> enable_flag().
 new() ->
     off.
 
+-spec value(enable_flag()) -> on | off.
 value(Flag) ->
     Flag.
 
+-spec value(term(), enable_flag()) -> on | off.
 value(_, Flag) ->
     Flag.
 
+-spec update(enable_flag_op(), riak_dt:actor(), enable_flag()) -> {ok, enable_flag()}.
 update(enable, _Actor, _Flag) ->
     {ok, on}.
 
+-spec merge(enable_flag(), enable_flag()) -> enable_flag().
 merge(FA, FB) ->
     flag_or(FA, FB).
 
+-spec equal(enable_flag(), enable_flag()) -> boolean().
 equal(FA,FB) ->
     FA =:= FB.
 
+-spec from_binary(binary()) -> enable_flag().
 from_binary(<<?TAG:7, 0:1>>) -> off;
 from_binary(<<?TAG:7, 1:1>>) -> on.
 
+-spec to_binary(enable_flag()) -> binary().
 to_binary(off) -> <<?TAG:7, 0:1>>;
 to_binary(on) -> <<?TAG:7, 1:1>>.
 
+-spec stats(enable_flag()) -> [{atom(), number()}].
 stats(_) -> [].
 
 %% priv

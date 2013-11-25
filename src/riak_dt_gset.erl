@@ -98,10 +98,12 @@ to_binary(GSet) ->
     %% @TODO something smarter
     <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(GSet))/binary>>.
 
+-spec from_binary(binary()) -> gset().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
     %% @TODO something smarter
     binary_to_term(Bin).
 
+-spec stats(gset()) -> [{atom(), number()}].
 stats(GSet) ->
     [{element_count, length(GSet)},
      {max_element_size,
