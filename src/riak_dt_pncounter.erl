@@ -33,9 +33,10 @@
 %% @end
 
 -module(riak_dt_pncounter).
+-behaviour(riak_dt).
 
 -export([new/0, new/2, value/1, value/2,
-         update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
+         update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1]).
 -export([to_binary/2, from_binary/2, current_version/1, change_versions/3]).
 
 %% EQC API
@@ -134,6 +135,10 @@ merge([{Act,IncA,DecA}=ACntA|RestA],PNCntB, Acc) ->
 -spec equal(pncounter(), pncounter()) -> boolean().
 equal(PNCntA, PNCntB) ->
     lists:sort(PNCntA) =:= lists:sort(PNCntB).
+
+-spec stats(pncounter()) -> [{atom(), number()}].
+stats(PNCounter) ->
+    [{actor_count, length(PNCounter)}].
 
 -define(TAG, 71).
 -define(V1_VERS, 1).

@@ -34,7 +34,7 @@
 
 %% API
 -export([new/0, value/1, update/3, merge/2, equal/2,
-         to_binary/1, from_binary/1, value/2]).
+         to_binary/1, from_binary/1, value/2, stats/1]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -98,9 +98,20 @@ to_binary(GSet) ->
     %% @TODO something smarter
     <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(GSet))/binary>>.
 
+-spec from_binary(binary()) -> gset().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
     %% @TODO something smarter
     binary_to_term(Bin).
+
+-spec stats(gset()) -> [{atom(), number()}].
+stats(GSet) ->
+    [{element_count, length(GSet)},
+     {max_element_size,
+      ordsets:fold(
+        fun(E, S) ->
+                max(erlang:external_size(E), S)
+        end, 0, GSet)}
+    ].
 
 %% ===================================================================
 %% EUnit tests

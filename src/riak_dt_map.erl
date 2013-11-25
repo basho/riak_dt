@@ -44,7 +44,7 @@
 
 %% API
 -export([new/0, value/1, value/2, update/3, merge/2,
-         equal/2, to_binary/1, from_binary/1, precondition_context/1]).
+         equal/2, to_binary/1, from_binary/1, precondition_context/1, stats/1]).
 
 %% EQC API
 -ifdef(EQC).
@@ -292,6 +292,18 @@ short_circuit_equals([{{_Name, Mod}=Field, {Dot1,Val1}} | Rest], Values2) ->
 -spec precondition_context(map()) -> map().
 precondition_context(Map) ->
     Map.
+
+-spec stats(map()) -> [{atom(), integer()}].
+stats({Clock, Fields}) ->
+    [
+     {actor_count, length(Clock)},
+     {field_count, orddict:size(Fields)},
+     {max_dot_length,
+      orddict:fold(fun(_K, {Dots, _}, Acc) ->
+                           max(length(Dots), Acc)
+                   end, 0, Fields)}
+    ].
+
 
 -define(TAG, 77).
 -define(V1_VERS, 1).

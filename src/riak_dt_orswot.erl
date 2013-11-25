@@ -78,7 +78,7 @@
 -export([new/0, value/1, value/2]).
 -export([update/3, merge/2, equal/2]).
 -export([to_binary/1, from_binary/1]).
--export([precondition_context/1]).
+-export([precondition_context/1, stats/1]).
 
 %% EQC API
 -ifdef(EQC).
@@ -269,6 +269,17 @@ remove_elem(_, Elem, _ORSet) ->
 -spec precondition_context(orswot()) -> orswot().
 precondition_context(ORSet) ->
     ORSet.
+
+-spec stats(orswot()) -> [{atom(), number()}].
+stats({Clock, Dict}) ->
+    [
+     {actor_count, length(Clock)},
+     {element_count, orddict:size(Dict)},
+     {max_dot_length,
+      orddict:fold(fun(_K, Dots, Acc) ->
+                           max(length(Dots), Acc)
+                   end, 0, Dict)}
+     ].
 
 -define(TAG, 75).
 -define(V1_VERS, 1).

@@ -29,9 +29,10 @@
 %% @end
 
 -module(riak_dt_lwwreg).
+-behaviour(riak_dt).
 
 -export([new/0, value/1, value/2, update/3, merge/2,
-         equal/2, to_binary/1, from_binary/1]).
+         equal/2, to_binary/1, from_binary/1, stats/1]).
 
 %% EQC API
 -ifdef(EQC).
@@ -111,6 +112,10 @@ equal({Val, TS}, {Val, TS}) ->
     true;
 equal(_, _) ->
     false.
+
+-spec stats(lwwreg()) -> [{atom(), number()}].
+stats({Value, _}) -> 
+    [{value_size, erlang:external_size(Value)}].
 
 -define(TAG, 72).
 -define(V1_VERS, 1).

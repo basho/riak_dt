@@ -35,8 +35,8 @@
 %% @end
 
 -module(riak_dt_gcounter).
-
--export([new/0, new/2, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
+-behaviour(riak_dt).
+-export([new/0, new/2, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1]).
 
 %% EQC API
 -ifdef(EQC).
@@ -102,6 +102,10 @@ equal(VA,VB) ->
 -spec increment_by(pos_integer(), term(), gcounter()) -> gcounter().
 increment_by(Amount, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
     orddict:update_counter(Actor, Amount, GCnt).
+
+-spec stats(gcounter()) -> [{atom(), number()}].
+stats(GCnt) ->
+    [{actor_counter, length(GCnt)}].
 
 -define(TAG, 70).
 -define(V1_VERS, 1).
