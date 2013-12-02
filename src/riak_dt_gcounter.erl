@@ -36,7 +36,7 @@
 
 -module(riak_dt_gcounter).
 -behaviour(riak_dt).
--export([new/0, new/2, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1]).
+-export([new/0, new/2, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1, map/3]).
 
 %% EQC API
 -ifdef(EQC).
@@ -120,6 +120,24 @@ to_binary(GCnt) ->
 -spec from_binary(binary()) -> gcounter().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, EntriesBin/binary>>) ->
     binary_to_term(EntriesBin).
+
+%% @doc Map this G-Counter into another CRDT.
+map({riak_dt_enable_flag, PredicateFun}, Actor, GCnt) ->
+    case PredicateFun(value(GCnt)) of
+        true ->
+            Flag0 = riak_dt_enable_flag:new(),
+            riak_dt_enable_flag:update(enable, Actor, Flag0);
+        false ->
+            riak_dt_enable_flag:new()
+    end;
+map({riak_dt_disable_flag, PredicateFun}, Actor, GCnt) ->
+    case PredicateFun(value(GCnt)) of
+        true ->
+            Flag0 = riak_dt_disable_flag:new(),
+            riak_dt_disable_flag:update(disable, Actor, Flag0);
+        false ->
+            riak_dt_disable_flag:new()
+    end.
 
 %% ===================================================================
 %% EUnit tests
