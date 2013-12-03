@@ -36,7 +36,7 @@
 
 -module(riak_dt_gcounter).
 -behaviour(riak_dt).
--export([new/0, new/2, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1]).
+-export([new/0, new/2, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -105,7 +105,12 @@ increment_by(Amount, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
 
 -spec stats(gcounter()) -> [{atom(), number()}].
 stats(GCnt) ->
-    [{actor_counter, length(GCnt)}].
+    [{actor_count, stat(actor_count, GCnt)}].
+
+-spec stat(atom(), gcounter()) -> number() | undefined.
+stat(actor_count, GCnt) ->
+    length(GCnt);
+stat(_,_) -> undefined.
 
 -define(TAG, 70).
 -define(V1_VERS, 1).

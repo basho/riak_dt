@@ -25,7 +25,7 @@
 
 -behaviour(riak_dt).
 
--export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1, stats/1]).
+-export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1, stats/1, stat/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -111,8 +111,14 @@ to_binary({Clock, Flag}) ->
     <<?TAG:8, ?VSN1:8, BFlag:8, VCBin/binary>>.
 
 -spec stats(oe_flag()) -> [{atom(), integer()}].
-stats({C, _}) ->
-    [{actor_count, length(C)}].
+stats(OEF) ->
+    [{actor_count, stat(actor_count, OEF)}].
+
+-spec stat(atom(), oe_flag()) -> number() | undefined.
+stat(actor_count, {C, _}) ->
+    length(C);
+stat(_, _) -> undefined.
+
 
 %% ===================================================================
 %% EUnit tests

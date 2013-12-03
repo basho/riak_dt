@@ -44,7 +44,7 @@
 
 %% API
 -export([new/0, value/1, value/2, update/3, merge/2,
-         equal/2, to_binary/1, from_binary/1, precondition_context/1, stats/1]).
+         equal/2, to_binary/1, from_binary/1, precondition_context/1, stats/1, stat/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -294,16 +294,19 @@ precondition_context(Map) ->
     Map.
 
 -spec stats(map()) -> [{atom(), integer()}].
-stats({Clock, Fields}) ->
-    [
-     {actor_count, length(Clock)},
-     {field_count, orddict:size(Fields)},
-     {max_dot_length,
-      orddict:fold(fun(_K, {Dots, _}, Acc) ->
-                           max(length(Dots), Acc)
-                   end, 0, Fields)}
-    ].
+stats(Map) ->
+    [ {S, stat(S, Map)} || S <- [actor_count, field_count, max_dot_length]].
 
+-spec stat(atom(), map()) -> number() | undefined.
+stat(actor_count, {Clock, _}) ->
+    length(Clock);
+stat(field_count, {_, Fields}) ->
+    length(Fields);
+stat(max_dot_length, {_, Fields}) ->
+    orddict:fold(fun(_K, {Dots, _}, Acc) ->
+                         max(length(Dots), Acc)
+                 end, 0, Fields);
+stat(_,_) -> undefined.
 
 -define(TAG, 77).
 -define(V1_VERS, 1).
