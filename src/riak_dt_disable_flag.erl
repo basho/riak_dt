@@ -136,6 +136,12 @@ merge_on_both_test() ->
     {ok, F1} = update(disable, 1, F0),
     ?assertEqual(off, merge(F1, F1)).
 
+stat_test() ->
+    F0 = new(),
+    {ok, F1} = update(disable, 1, F0),
+    ?assertEqual([], stats(F1)),
+    ?assertEqual(undefined, stat(actor_count, F1)),
+    ?assertEqual(undefined, stat(max_dot_length, F1)).
 -endif.
 
 

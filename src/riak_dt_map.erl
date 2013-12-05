@@ -649,4 +649,21 @@ query_test() ->
     ?assertEqual(33, value({get, {c, riak_dt_pncounter}}, Map3)),
     ?assertEqual({lww_val, 77}, value({get_crdt, {l, riak_dt_lwwreg}}, Map3)).
 
+
+stat_test() ->
+    Map = new(),
+    {ok, Map1} = update({update, [{add, {c, riak_dt_pncounter}},
+                                  {add, {s, riak_dt_orswot}},
+                                  {add, {m, riak_dt_map}},
+                                  {add, {l, riak_dt_lwwreg}},
+                                  {add, {l2, riak_dt_lwwreg}}]}, a1, Map),
+    {ok, Map2} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"foo">>, 1}}]}, a2, Map1),
+    {ok, Map3} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"bar">>, 2}}]}, a3, Map1),
+    Map4 = merge(Map2, Map3),
+    ?assertEqual([{actor_count, 0}, {field_count, 0}, {max_dot_length, 0}], stats(Map)),
+    ?assertEqual(3, stat(actor_count, Map4)),
+    ?assertEqual(5, stat(field_count, Map4)),
+    ?assertEqual(2, stat(max_dot_length, Map4)),
+    ?assertEqual(undefined, stat(waste_pct, Map4)).
+
 -endif.

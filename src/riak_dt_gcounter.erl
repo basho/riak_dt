@@ -260,4 +260,13 @@ lots_of_actors_test() ->
     Decoded = from_binary(Bin),
     ?assert(equal(GC, Decoded)).
 
+stat_test() ->
+    GC0 = new(),
+    {ok, GC1} = update(increment, 1, GC0),
+    {ok, GC2} = update(increment, 2, GC1),
+    {ok, GC3} = update(increment, 3, GC2),
+    ?assertEqual([{actor_count, 3}], stats(GC3)),
+    ?assertEqual(3, stat(actor_count, GC3)),
+    ?assertEqual(undefined, stat(field_count, GC3)).
+
 -endif.

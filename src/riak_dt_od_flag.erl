@@ -209,4 +209,14 @@ binary_roundtrip_test() ->
     {ok, F2} = update(disable, 1, F1),
     {ok, F3} = update(enable, 2, F2),
     ?assert(equal(from_binary(to_binary(F3)), F3)).
+
+stat_test() ->
+    F0 = new(),
+    {ok, F1} = update(enable, 1, F0),
+    {ok, F2} = update(enable, 2, F1),
+    {ok, F3} = update(enable, 3, F2),
+    {ok, F4} = update(disable, 4, F3), %% Observed-disable doesn't add an actor
+    ?assertEqual([{actor_count, 3}], stats(F4)),
+    ?assertEqual(3, stat(actor_count, F4)),
+    ?assertEqual(undefined, stat(max_dot_length, F4)).
 -endif.

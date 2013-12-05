@@ -375,6 +375,19 @@ binary_to_elem(<<0, Bin/binary>>) ->
 %% ===================================================================
 -ifdef(TEST).
 
+stat_test() ->
+    Set = new(),
+    {ok, Set1} = update({add, <<"foo">>}, 1, Set),
+    {ok, Set2} = update({add, <<"foo">>}, 2, Set1),
+    {ok, Set3} = update({add, <<"bar">>}, 3, Set2),
+    {ok, Set4} = update({remove, <<"foo">>}, 1, Set3),
+    ?assertEqual([{actor_count, 0}, {element_count, 0}, {max_dot_length, 0}],
+                 stats(Set)),
+    ?assertEqual(3, stat(actor_count, Set4)),
+    ?assertEqual(1, stat(element_count, Set4)),
+    ?assertEqual(1, stat(max_dot_length, Set4)),
+    ?assertEqual(undefined, stat(waste_pct, Set4)).
+
 -ifdef(EQC).
 
 bin_roundtrip_test_() ->

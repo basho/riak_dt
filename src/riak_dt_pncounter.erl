@@ -397,4 +397,13 @@ query_test() ->
     ?assertEqual(100, value(positive, PN4)),
     ?assertEqual(25, value(negative, PN4)).
 
+stat_test() ->
+    PN = new(),
+    {ok, PN1} = update({increment, 50}, a1, PN),
+    {ok, PN2} = update({increment, 50}, a2, PN1),
+    {ok, PN3} = update({decrement, 15}, a3, PN2),
+    {ok, PN4} = update({decrement, 10}, a4, PN3),
+    ?assertEqual([{actor_count, 0}], stats(PN)),
+    ?assertEqual(4, stat(actor_count, PN4)),
+    ?assertEqual(undefined, stat(max_dot_length, PN4)).
 -endif.

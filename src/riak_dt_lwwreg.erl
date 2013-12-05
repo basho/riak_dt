@@ -254,4 +254,11 @@ query_test() ->
     {ok, LWW1} = update({assign, value, 100}, a1, LWW),
     ?assertEqual(100, value(timestamp, LWW1)).
 
+stat_test() ->
+    LWW = new(),
+    {ok, LWW1} = update({assign, <<"abcd">>}, 1, LWW),
+    ?assertEqual([{value_size, 11}], stats(LWW)),
+    ?assertEqual([{value_size, 15}], stats(LWW1)),
+    ?assertEqual(15, stat(value_size, LWW1)),
+    ?assertEqual(undefined, stat(actor_count, LWW1)).
 -endif.

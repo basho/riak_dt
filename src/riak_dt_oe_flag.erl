@@ -204,4 +204,13 @@ merge_concurrent_test() ->
     ?assertEqual(true, value(merge(F1,F2))),
     ?assertEqual(false, value(merge(F2,F3))).
 
+stat_test() ->
+    F0 = new(),
+    {ok, F1} = update(disable, 1, F0),
+    {ok, F2} = update(disable, 2, F1),
+    {ok, F3} = update(disable, 3, F2),
+    {ok, F4} = update(enable, 4, F3), %% Observed-enable doesn't add an actor
+    ?assertEqual([{actor_count, 3}], stats(F4)),
+    ?assertEqual(3, stat(actor_count, F4)),
+    ?assertEqual(undefined, stat(element_count, F4)).
 -endif.
