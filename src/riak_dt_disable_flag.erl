@@ -29,7 +29,7 @@
 
 -behaviour(riak_dt).
 
--export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1, stats/1]).
+-export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1, stats/1, stat/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -80,6 +80,9 @@ to_binary(on) -> <<?TAG:7, 1:1>>.
 
 -spec stats(disable_flag()) -> [{atom(), number()}].
 stats(_) -> [].
+
+-spec stat(atom(), disable_flag()) -> number() | undefined.
+stat(_, _) -> undefined.
 
 %% priv
 flag_and(on, on) ->
@@ -133,6 +136,12 @@ merge_on_both_test() ->
     {ok, F1} = update(disable, 1, F0),
     ?assertEqual(off, merge(F1, F1)).
 
+stat_test() ->
+    F0 = new(),
+    {ok, F1} = update(disable, 1, F0),
+    ?assertEqual([], stats(F1)),
+    ?assertEqual(undefined, stat(actor_count, F1)),
+    ?assertEqual(undefined, stat(max_dot_length, F1)).
 -endif.
 
 

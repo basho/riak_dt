@@ -36,7 +36,7 @@
 -behaviour(riak_dt).
 
 -export([new/0, new/2, value/1, value/2,
-         update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1]).
+         update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
 -export([to_binary/2, from_binary/2, current_version/1, change_versions/3]).
 
 %% EQC API
@@ -138,7 +138,13 @@ equal(PNCntA, PNCntB) ->
 
 -spec stats(pncounter()) -> [{atom(), number()}].
 stats(PNCounter) ->
-    [{actor_count, length(PNCounter)}].
+    [{actor_count, stat(actor_count, PNCounter)}].
+
+-spec stat(atom(), pncounter()) -> number() | undefined.
+stat(actor_count, PNCounter) ->
+    length(PNCounter);
+stat(_, _) -> undefined.
+
 
 -define(TAG, 71).
 -define(V1_VERS, 1).
@@ -391,4 +397,13 @@ query_test() ->
     ?assertEqual(100, value(positive, PN4)),
     ?assertEqual(25, value(negative, PN4)).
 
+stat_test() ->
+    PN = new(),
+    {ok, PN1} = update({increment, 50}, a1, PN),
+    {ok, PN2} = update({increment, 50}, a2, PN1),
+    {ok, PN3} = update({decrement, 15}, a3, PN2),
+    {ok, PN4} = update({decrement, 10}, a4, PN3),
+    ?assertEqual([{actor_count, 0}], stats(PN)),
+    ?assertEqual(4, stat(actor_count, PN4)),
+    ?assertEqual(undefined, stat(max_dot_length, PN4)).
 -endif.

@@ -36,7 +36,7 @@
 
 -module(riak_dt_gcounter).
 -behaviour(riak_dt).
--export([new/0, new/2, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1]).
+-export([new/0, new/2, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -105,7 +105,12 @@ increment_by(Amount, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
 
 -spec stats(gcounter()) -> [{atom(), number()}].
 stats(GCnt) ->
-    [{actor_counter, length(GCnt)}].
+    [{actor_count, stat(actor_count, GCnt)}].
+
+-spec stat(atom(), gcounter()) -> number() | undefined.
+stat(actor_count, GCnt) ->
+    length(GCnt);
+stat(_,_) -> undefined.
 
 -define(TAG, 70).
 -define(V1_VERS, 1).
@@ -254,5 +259,14 @@ lots_of_actors_test() ->
     Bin = to_binary(GC),
     Decoded = from_binary(Bin),
     ?assert(equal(GC, Decoded)).
+
+stat_test() ->
+    GC0 = new(),
+    {ok, GC1} = update(increment, 1, GC0),
+    {ok, GC2} = update(increment, 2, GC1),
+    {ok, GC3} = update(increment, 3, GC2),
+    ?assertEqual([{actor_count, 3}], stats(GC3)),
+    ?assertEqual(3, stat(actor_count, GC3)),
+    ?assertEqual(undefined, stat(field_count, GC3)).
 
 -endif.

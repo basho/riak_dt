@@ -25,7 +25,7 @@
 
 -behaviour(riak_dt).
 
--export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1, stats/1]).
+-export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1, stats/1, stat/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -111,8 +111,14 @@ to_binary({Clock, Flag}) ->
     <<?TAG:8, ?VSN1:8, BFlag:8, VCBin/binary>>.
 
 -spec stats(oe_flag()) -> [{atom(), integer()}].
-stats({C, _}) ->
-    [{actor_count, length(C)}].
+stats(OEF) ->
+    [{actor_count, stat(actor_count, OEF)}].
+
+-spec stat(atom(), oe_flag()) -> number() | undefined.
+stat(actor_count, {C, _}) ->
+    length(C);
+stat(_, _) -> undefined.
+
 
 %% ===================================================================
 %% EUnit tests
@@ -198,4 +204,13 @@ merge_concurrent_test() ->
     ?assertEqual(true, value(merge(F1,F2))),
     ?assertEqual(false, value(merge(F2,F3))).
 
+stat_test() ->
+    F0 = new(),
+    {ok, F1} = update(disable, 1, F0),
+    {ok, F2} = update(disable, 2, F1),
+    {ok, F3} = update(disable, 3, F2),
+    {ok, F4} = update(enable, 4, F3), %% Observed-enable doesn't add an actor
+    ?assertEqual([{actor_count, 3}], stats(F4)),
+    ?assertEqual(3, stat(actor_count, F4)),
+    ?assertEqual(undefined, stat(element_count, F4)).
 -endif.

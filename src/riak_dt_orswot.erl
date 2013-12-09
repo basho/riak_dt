@@ -78,7 +78,7 @@
 -export([new/0, value/1, value/2]).
 -export([update/3, merge/2, equal/2]).
 -export([to_binary/1, from_binary/1]).
--export([precondition_context/1, stats/1]).
+-export([precondition_context/1, stats/1, stat/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -271,15 +271,19 @@ precondition_context(ORSet) ->
     ORSet.
 
 -spec stats(orswot()) -> [{atom(), number()}].
-stats({Clock, Dict}) ->
-    [
-     {actor_count, length(Clock)},
-     {element_count, orddict:size(Dict)},
-     {max_dot_length,
-      orddict:fold(fun(_K, Dots, Acc) ->
-                           max(length(Dots), Acc)
-                   end, 0, Dict)}
-     ].
+stats(ORSWOT) ->
+    [ {S, stat(S, ORSWOT)} || S <- [actor_count, element_count, max_dot_length]].
+
+-spec stat(atom(), orswot()) -> number() | undefined.
+stat(actor_count, {Clock, _Dict}) ->
+    length(Clock);
+stat(element_count, {_Clock, Dict}) ->
+    orddict:size(Dict);
+stat(max_dot_length, {_Clock, Dict}) ->
+    orddict:fold(fun(_K, Dots, Acc) ->
+                         max(length(Dots), Acc)
+                 end, 0, Dict);
+stat(_,_) -> undefined.
 
 -define(TAG, 75).
 -define(V1_VERS, 1).
@@ -370,6 +374,19 @@ binary_to_elem(<<0, Bin/binary>>) ->
 %% EUnit tests
 %% ===================================================================
 -ifdef(TEST).
+
+stat_test() ->
+    Set = new(),
+    {ok, Set1} = update({add, <<"foo">>}, 1, Set),
+    {ok, Set2} = update({add, <<"foo">>}, 2, Set1),
+    {ok, Set3} = update({add, <<"bar">>}, 3, Set2),
+    {ok, Set4} = update({remove, <<"foo">>}, 1, Set3),
+    ?assertEqual([{actor_count, 0}, {element_count, 0}, {max_dot_length, 0}],
+                 stats(Set)),
+    ?assertEqual(3, stat(actor_count, Set4)),
+    ?assertEqual(1, stat(element_count, Set4)),
+    ?assertEqual(1, stat(max_dot_length, Set4)),
+    ?assertEqual(undefined, stat(waste_pct, Set4)).
 
 -ifdef(EQC).
 

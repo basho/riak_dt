@@ -34,7 +34,7 @@
 
 %% API
 -export([new/0, value/1, update/3, merge/2, equal/2,
-         to_binary/1, from_binary/1, value/2, stats/1]).
+         to_binary/1, from_binary/1, value/2, stats/1, stat/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -105,18 +105,32 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
 
 -spec stats(gset()) -> [{atom(), number()}].
 stats(GSet) ->
-    [{element_count, length(GSet)},
-     {max_element_size,
-      ordsets:fold(
-        fun(E, S) ->
-                max(erlang:external_size(E), S)
-        end, 0, GSet)}
-    ].
+    [ {S, stat(S, GSet)} || S <- [element_count, max_element_size]].
+
+-spec stat(atom(), gset()) -> number() | undefined.
+stat(element_count, GSet) ->
+    length(GSet);
+stat(max_element_size, GSet) ->
+    ordsets:fold(
+      fun(E, S) ->
+              max(erlang:external_size(E), S)
+      end, 0, GSet);
+stat(_, _) -> undefined.
+
 
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
 -ifdef(TEST).
+
+stat_test() ->
+    S0 = new(),
+    {ok, S1} = update({add_all, [<<"a">>, <<"b1">>, <<"c23">>, <<"d234">>]}, 1, S0),
+    ?assertEqual([{element_count, 0}, {max_element_size, 0}], stats(S0)),
+    ?assertEqual([{element_count, 4}, {max_element_size, 15}], stats(S1)),
+    ?assertEqual(4, stat(element_count, S1)),
+    ?assertEqual(15, stat(max_element_size, S1)),
+    ?assertEqual(undefined, stat(actor_count, S1)).
 
 -ifdef(EQC).
 eqc_value_test_() ->

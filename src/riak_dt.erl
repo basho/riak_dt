@@ -39,6 +39,7 @@
 -callback to_binary(crdt()) -> binary().
 -callback from_binary(binary()) -> crdt().
 -callback stats(crdt()) -> [{atom(), number()}].
+-callback stat(atom(), crdt()) -> number() | undefined.
 
 -ifdef(EQC).
 % Extra callbacks for any crdt_statem_eqc tests
