@@ -28,6 +28,8 @@
 -export([new/0, value/1, update/3, merge/2, equal/2,
          to_binary/1, from_binary/1, value/2, precondition_context/1, stats/1]).
 
+-include("riak_dt_backend_impl.hrl").
+
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -endif.
@@ -42,7 +44,7 @@
 -endif.
 
 -export_type([orset/0, binary_orset/0, orset_op/0]).
--opaque orset() :: orddict:orddict().
+-opaque orset() :: dt_erl_dict_type().
 
 -type binary_orset() :: binary(). %% A binary that from_binary/1 will operate on.
 
@@ -59,11 +61,11 @@ new() ->
 
 -spec value(orset()) -> [member()].
 value(ORDict0) ->
-    ORDict1 = orddict:filter(fun(_Elem, Tokens) ->
-            ValidTokens = [Token || {Token, false} <- orddict:to_list(Tokens)],
+    ORDict1 = ?DT_ERL_DICT:filter(fun(_Elem, Tokens) ->
+            ValidTokens = [Token || {Token, false} <- ?DT_ERL_DICT:to_list(Tokens)],
             length(ValidTokens) > 0
         end, ORDict0),
-    orddict:fetch_keys(ORDict1).
+    ?DT_ERL_DICT:fetch_keys(ORDict1).
 
 -spec value(any(), orset()) -> [member()].
 value(_,ORSet) ->
@@ -89,15 +91,15 @@ update({update, Ops}, Actor, ORDict) ->
 
 -spec merge(orset(), orset()) -> orset().
 merge(ORDictA, ORDictB) ->
-    orddict:merge(fun(_Elem,TokensA,TokensB) ->
-            orddict:merge(fun(_Token,BoolA,BoolB) ->
+    ?DT_ERL_DICT:merge(fun(_Elem,TokensA,TokensB) ->
+            ?DT_ERL_DICT:merge(fun(_Token,BoolA,BoolB) ->
                     BoolA or BoolB
                 end, TokensA, TokensB)
         end, ORDictA, ORDictB).
 
 -spec equal(orset(), orset()) -> boolean().
 equal(ORDictA, ORDictB) ->
-    ORDictA == ORDictB. % Everything inside is ordered, so this should work
+    ?DT_ERL_DICT_EQUAL(ORDictA, ORDictB).
 
 %% @doc the precondition context is a fragment of the CRDT that
 %% operations with pre-conditions can be applied too.  In the case of
@@ -108,20 +110,20 @@ equal(ORDictA, ORDictB) ->
 %% state to the client.
 -spec precondition_context(orset()) -> orset().
 precondition_context(ORDict) ->
-    orddict:fold(fun(Elem, Tokens, ORDict1) ->
+    ?DT_ERL_DICT:fold(fun(Elem, Tokens, ORDict1) ->
             case minimum_tokens(Tokens) of
                 []      -> ORDict1;
-                Tokens1 -> orddict:store(Elem, Tokens1, ORDict1)
+                Tokens1 -> ?DT_ERL_DICT:store(Elem, Tokens1, ORDict1)
             end
-        end, orddict:new(), ORDict).
+        end, ?DT_ERL_DICT:new(), ORDict).
 
 -spec stats(orset()) -> [{atom(), number()}].
 stats(ORSet) ->
-    {Tags, Tombs} = orddict:fold(fun(_K, {A, R}, {As, Rs}) ->
+    {Tags, Tombs} = ?DT_ERL_DICT:fold(fun(_K, {A, R}, {As, Rs}) ->
                                          {length(A) + As, length(R) + Rs}
                                  end, {0,0}, ORSet),
     [
-     {element_count, orddict:size(ORSet)},
+     {element_count, ?DT_ERL_DICT:size(ORSet)},
      {adds_count, Tags},
      {removes_count, Tombs},
      {waste_pct, Tombs / Tags * 100}
@@ -141,19 +143,19 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
 
 %% Private
 add_elem(Elem,Token,ORDict) ->
-    case orddict:find(Elem, ORDict) of
-        {ok, Tokens} -> Tokens1 = orddict:store(Token, false, Tokens),
-                        {ok, orddict:store(Elem, Tokens1, ORDict)};
-        error        -> Tokens = orddict:store(Token, false, orddict:new()),
-                        {ok, orddict:store(Elem, Tokens, ORDict)}
+    case ?DT_ERL_DICT:find(Elem, ORDict) of
+        {ok, Tokens} -> Tokens1 = ?DT_ERL_DICT:store(Token, false, Tokens),
+                        {ok, ?DT_ERL_DICT:store(Elem, Tokens1, ORDict)};
+        error        -> Tokens = ?DT_ERL_DICT:store(Token, false, ?DT_ERL_DICT:new()),
+                        {ok, ?DT_ERL_DICT:store(Elem, Tokens, ORDict)}
     end.
 
 remove_elem(Elem, ORDict) ->
-    case orddict:find(Elem, ORDict) of
-        {ok, Tokens} -> Tokens1 = orddict:fold(fun(Token, _, Tokens0) ->
-                                orddict:store(Token, true, Tokens0)
-                            end, orddict:new(), Tokens),
-                        {ok, orddict:store(Elem, Tokens1, ORDict)};
+    case ?DT_ERL_DICT:find(Elem, ORDict) of
+        {ok, Tokens} -> Tokens1 = ?DT_ERL_DICT:fold(fun(Token, _, Tokens0) ->
+                                ?DT_ERL_DICT:store(Token, true, Tokens0)
+                            end, ?DT_ERL_DICT:new(), Tokens),
+                        {ok, ?DT_ERL_DICT:store(Elem, Tokens1, ORDict)};
         error        -> {error, {precondition, {not_present, Elem}}}
     end.
 
@@ -179,7 +181,7 @@ unique(_Actor) ->
     crypto:strong_rand_bytes(20).
 
 minimum_tokens(Tokens) ->
-    orddict:filter(fun(_Token, Removed) ->
+    ?DT_ERL_DICT:filter(fun(_Token, Removed) ->
             not Removed
         end, Tokens).
 

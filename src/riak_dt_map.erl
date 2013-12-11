@@ -34,6 +34,8 @@
 
 -behaviour(riak_dt).
 
+-include("riak_dt_backend_impl.hrl").
+
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -endif.
@@ -100,12 +102,12 @@
 %% @doc Create a new, empty Map.
 -spec new() -> map().
 new() ->
-    {riak_dt_vclock:fresh(), orddict:new()}.
+    {riak_dt_vclock:fresh(), ?DT_ERL_DICT:new()}.
 
 %% @doc get the current set of values for this Map
 -spec value(map()) -> values().
 value({_Clock, Values}) ->
-    orddict:fold(fun({_Name, Mod}=Key, {_Dots, Value}, Acc) ->
+    ?DT_ERL_DICT:fold(fun({_Name, Mod}=Key, {_Dots, Value}, Acc) ->
                        [{Key, Mod:value(Value)} | Acc] end,
                  [],
                  Values).
@@ -123,7 +125,7 @@ value({get, {_Name, Mod}=Field}, Map) ->
         CRDT -> Mod:value(CRDT)
     end;
 value({get_crdt, {_Name, Mod}=Field}, {_Clock, Values}) ->
-    get_crdt(orddict:find(Field, Values), Mod);
+    get_crdt(?DT_ERL_DICT:find(Field, Values), Mod);
 value(keyset, {_Clock, Values}) ->
     keys(Values);
 value({contains, Field}, {_Clock, Values}) ->
@@ -146,7 +148,7 @@ get_crdt(error, Mod, true) ->
 
 -spec keys(orddict:orddict()) -> [field()] | [].
 keys(Values) ->
-    orddict:fetch_keys(Values).
+    ?DT_ERL_DICT:fetch_keys(Values).
 
 %% @Doc update the `map()' or a field in the `map()' by executing
 %% the `map_op()'. `Ops' is a list of one or more of the following
@@ -179,27 +181,27 @@ update({update, Ops}, Actor, {Clock, Values}) ->
 apply_ops([], _Actor, Clock, Values) ->
     {ok, {Clock, Values}};
 apply_ops([{update, {_Name, Mod}=Field, Op} | Rest], Actor, Clock, Values) ->
-    InitialValue = get_crdt(orddict:find(Field, Values), Mod, true),
+    InitialValue = get_crdt(?DT_ERL_DICT:find(Field, Values), Mod, true),
     case Mod:update(Op, Actor, InitialValue) of
         {ok, NewValue} ->
             NewClock = riak_dt_vclock:increment(Actor, Clock),
             NewDot = {Actor, riak_dt_vclock:get_counter(Actor, NewClock)},
-            NewValues = orddict:store(Field, {[NewDot], NewValue}, Values),
+            NewValues = ?DT_ERL_DICT:store(Field, {[NewDot], NewValue}, Values),
             apply_ops(Rest, Actor, NewClock, NewValues);
         Error ->
             Error
     end;
 apply_ops([{remove, Field} | Rest], Actor, Clock, Values) ->
-    case orddict:is_key(Field, Values) of
+    case ?DT_ERL_DICT:is_key(Field, Values) of
         true->
-            apply_ops(Rest, Actor, Clock, orddict:erase(Field, Values));
+            apply_ops(Rest, Actor, Clock, ?DT_ERL_DICT:erase(Field, Values));
         false -> {error, {precondition, {not_present, Field}}}
     end;
 apply_ops([{add, {_Name, Mod}=Field} | Rest], Actor, Clock, Values) ->
-    InitialValue = get_crdt(orddict:find(Field, Values), Mod, true),
+    InitialValue = get_crdt(?DT_ERL_DICT:find(Field, Values), Mod, true),
     NewClock = riak_dt_vclock:increment(Actor, Clock),
     Dot = {Actor, riak_dt_vclock:get_counter(Actor, NewClock)},
-    NewValues = orddict:store(Field, {[Dot], InitialValue}, Values),
+    NewValues = ?DT_ERL_DICT:store(Field, {[Dot], InitialValue}, Values),
     apply_ops(Rest, Actor, NewClock, NewValues).
 
 %% @Doc merge two `map()'s.  and then a pairwise merge on all values
@@ -210,11 +212,11 @@ merge({LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
     %% If an element is in both dicts, merge it. If it occurs in one,
     %% then see if its dots are dominated by the others whole set
     %% clock. If so, then drop it, if not, keep it.
-    LHSFields = sets:from_list(orddict:fetch_keys(LHSEntries)),
-    RHSFields = sets:from_list(orddict:fetch_keys(RHSEntries)),
-    CommonFields = sets:intersection(LHSFields, RHSFields),
-    LHSUnique = sets:subtract(LHSFields, CommonFields),
-    RHSUnique = sets:subtract(RHSFields, CommonFields),
+    LHSFields = ?DT_ERL_SETS:from_list(?DT_ERL_DICT:fetch_keys(LHSEntries)),
+    RHSFields = ?DT_ERL_SETS:from_list(?DT_ERL_DICT:fetch_keys(RHSEntries)),
+    CommonFields = ?DT_ERL_SETS:intersection(LHSFields, RHSFields),
+    LHSUnique = ?DT_ERL_SETS:subtract(LHSFields, CommonFields),
+    RHSUnique = ?DT_ERL_SETS:subtract(RHSFields, CommonFields),
 
     Entries00 = merge_common_fields(CommonFields, LHSEntries, RHSEntries),
     Entries0 = merge_disjoint_fields(LHSUnique, LHSEntries, RHSClock, Entries00),
@@ -229,13 +231,13 @@ merge({LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
                                    valuelist().
 merge_disjoint_fields(Fields, Entries, SetClock, Accumulator) ->
     sets:fold(fun(Field, Acc) ->
-                      {Dots, Value} = orddict:fetch(Field, Entries),
+                      {Dots, Value} = ?DT_ERL_DICT:fetch(Field, Entries),
                       case riak_dt_vclock:descends(SetClock, Dots) of
                           false ->
                               %% Optimise the set of stored dots to
                               %% include only those unseen
                               NewDots = riak_dt_vclock:subtract_dots(Dots, SetClock),
-                              orddict:store(Field, {NewDots, Value}, Acc);
+                              ?DT_ERL_SETS:store(Field, {NewDots, Value}, Acc);
                           true ->
                               Acc
                       end
@@ -248,12 +250,12 @@ merge_disjoint_fields(Fields, Entries, SetClock, Accumulator) ->
 -spec merge_common_fields(set(), valuelist(), valuelist()) -> valuelist().
 merge_common_fields(CommonFields, Entries1, Entries2) ->
     sets:fold(fun({_Name, Mod}=Field, Acc) ->
-                      {Dots1, V1} = orddict:fetch(Field, Entries1),
-                      {Dots2, V2} = orddict:fetch(Field, Entries2),
+                      {Dots1, V1} = ?DT_ERL_DICT:fetch(Field, Entries1),
+                      {Dots2, V2} = ?DT_ERL_DICT:fetch(Field, Entries2),
                       Dots = riak_dt_vclock:merge([Dots1, Dots2]),
                       V = Mod:merge(V1, V2),
-                      orddict:store(Field, {Dots, V}, Acc) end,
-              orddict:new(),
+                      ?DT_ERL_DICT:store(Field, {Dots, V}, Acc) end,
+              ?DT_ERL_DICT:new(),
               CommonFields).
 
 %% @Doc compare two `map()'s for equality of structure Both schemas
@@ -269,7 +271,7 @@ equal({Clock1, Values1}, {Clock2, Values2}) ->
 %% equal. Both dicts therefore have the same set of keys.
 -spec pairwise_equals(valuelist(), valuelist()) -> boolean().
 pairwise_equals(Values1, Values2) ->
-    short_circuit_equals(orddict:to_list(Values1), Values2).
+    short_circuit_equals(?DT_ERL_DICT:to_list(Values1), Values2).
 
 %% @Private
 %% Compare each value. Return false as soon as any pair are not equal.
@@ -277,7 +279,7 @@ pairwise_equals(Values1, Values2) ->
 short_circuit_equals([], _Values2) ->
     true;
 short_circuit_equals([{{_Name, Mod}=Field, {Dot1,Val1}} | Rest], Values2) ->
-    {Dot2, Val2} = orddict:fetch(Field, Values2),
+    {Dot2, Val2} = ?DT_ERL_DICT:fetch(Field, Values2),
     case {riak_dt_vclock:equal(Dot1, Dot2), Mod:equal(Val1, Val2)} of
         {true, true} ->
             short_circuit_equals(Rest, Values2);
@@ -297,9 +299,9 @@ precondition_context(Map) ->
 stats({Clock, Fields}) ->
     [
      {actor_count, length(Clock)},
-     {field_count, orddict:size(Fields)},
+     {field_count, ?DT_ERL_DICT:size(Fields)},
      {max_dot_length,
-      orddict:fold(fun(_K, {Dots, _}, Acc) ->
+      ?DT_ERL_DICT:fold(fun(_K, {Dots, _}, Acc) ->
                            max(length(Dots), Acc)
                    end, 0, Fields)}
     ].
@@ -318,7 +320,7 @@ stats({Clock, Fields}) ->
 %% @see `from_binary/1'
 -spec to_binary(map()) -> binary_map().
 to_binary(Map) ->
-    {ModMap, <<?TAG:8/integer, ?V1_VERS:8/integer, MapBin/binary>>} =  to_binary(Map, orddict:new()),
+    {ModMap, <<?TAG:8/integer, ?V1_VERS:8/integer, MapBin/binary>>} =  to_binary(Map, ?DT_ERL_DICT:new()),
     ModMapBin = mod_map_to_binary(ModMap),
     ModMapBinLen = byte_size(ModMapBin),
     <<?TAG:8/integer, ?V1_VERS:8/integer,
@@ -364,7 +366,7 @@ from_binary(<<ClockLenFieldLen:8/integer, ClockLen:ClockLenFieldLen/integer,
     Clock = riak_dt_vclock:from_binary(BinClock),
     Actors0 = riak_dt_vclock:all_nodes(Clock),
     Actors = lists:zip(lists:seq(1, length(Actors0)), Actors0),
-    Fields = binary_to_fields(BinFields, ClockLenFieldLen, Actors, ModMap, orddict:new()),
+    Fields = binary_to_fields(BinFields, ClockLenFieldLen, Actors, ModMap, ?DT_ERL_DICT:new()),
     {Clock, Fields}.
 
 %% @private inverse of 'binary_to_fields/5'
@@ -421,10 +423,10 @@ value_to_binary(Mod, Value, ModMap) ->
 %% @private get or generate an int -> mod mapping
 -spec mod_mapping(crdt_mod(), mod_map()) -> {pos_integer(), mod_map()}.
 mod_mapping(Mod, ModMap0) ->
-    case orddict:find(Mod, ModMap0) of
+    case ?DT_ERL_DICT:find(Mod, ModMap0) of
         error ->
-            NewMapping = orddict:size(ModMap0) + 1,
-            {NewMapping, orddict:store(Mod, NewMapping, ModMap0)};
+            NewMapping = ?DT_ERL_DICT:size(ModMap0) + 1,
+            {NewMapping, ?DT_ERL_DICT:store(Mod, NewMapping, ModMap0)};
         {ok, Mapping} ->
             {Mapping, ModMap0}
     end.
@@ -441,7 +443,7 @@ binary_to_fields(<<CRDTBinLen:32/integer, CRDTBin:CRDTBinLen/binary, Rest0/binar
     {Field, CRDT} = binary_to_crdt(CRDTBin, ModMap),
     Clock0 = riak_dt_vclock:from_binary(ClockBin),
     Clock = riak_dt_vclock:replace_actors(Actors, Clock0),
-    Fields = orddict:store(Field, {Clock, CRDT}, Acc),
+    Fields = ?DT_ERL_DICT:store(Field, {Clock, CRDT}, Acc),
     binary_to_fields(Rest, ClockLenFieldLen, Actors, ModMap, Fields).
 
 %% @private invers of `crdt_to_binary/3'

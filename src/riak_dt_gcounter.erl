@@ -38,6 +38,8 @@
 -behaviour(riak_dt).
 -export([new/0, new/2, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1]).
 
+-include("riak_dt_backend_impl.hrl").
+
 %% EQC API
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -50,14 +52,14 @@
 
 -export_type([gcounter/0, gcounter_op/0]).
 
--opaque gcounter() :: orddict:orddict().
+-opaque gcounter() :: dt_erl_dict_type().
 
 -type gcounter_op() :: increment | {increment, pos_integer()}.
 
 %% @doc Create a new, empty `gcounter()'
 -spec new() -> gcounter().
 new() ->
-    orddict:new().
+    ?DT_ERL_DICT:new().
 
 %% @doc Create a `gcounter()' with an initial update
 -spec new(term(), pos_integer()) -> gcounter().
@@ -68,7 +70,7 @@ new(Id, Count) when is_integer(Count), Count > 0 ->
 %% @doc The single total value of a `gcounter()'.
 -spec value(gcounter()) -> non_neg_integer().
 value(GCnt) ->
-    lists:sum([ Cnt || {_Act, Cnt} <- GCnt]).
+    lists:sum([ Cnt || {_Act, Cnt} <- ?DT_ERL_DICT:to_list(GCnt)]).
 
 %% @doc `value/2' is just `value/1' for a `gcounter()'
 -spec value(any(), gcounter()) -> non_neg_integer().
@@ -88,7 +90,7 @@ update({increment, Amount}, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
 %% function described in the literature.
 -spec merge(gcounter(), gcounter()) -> gcounter().
 merge(GCnt1, GCnt2) ->
-    orddict:merge(fun(_, V1, V2) -> max(V1,V2) end,
+    ?DT_ERL_DICT:merge(fun(_, V1, V2) -> max(V1,V2) end,
                   GCnt1, GCnt2).
 
 %% @doc Are two `gcounter()'s structurally equal? This is not `value/1' equality.
@@ -96,12 +98,12 @@ merge(GCnt1, GCnt2) ->
 %% that both counters contain the same actors and those actors have the same count.
 -spec equal(gcounter(), gcounter()) -> boolean().
 equal(VA,VB) ->
-    lists:sort(orddict:to_list(VA)) =:= lists:sort(orddict:to_list(VB)).
+    ?DT_ERL_DICT_EQUAL(VA, VB).
 
 %% @private peform the increment.
 -spec increment_by(pos_integer(), term(), gcounter()) -> gcounter().
 increment_by(Amount, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
-    orddict:update_counter(Actor, Amount, GCnt).
+    ?DT_ERL_DICT:update_counter(Actor, Amount, GCnt).
 
 -spec stats(gcounter()) -> [{atom(), number()}].
 stats(GCnt) ->

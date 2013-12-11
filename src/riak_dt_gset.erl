@@ -36,6 +36,8 @@
 -export([new/0, value/1, update/3, merge/2, equal/2,
          to_binary/1, from_binary/1, value/2, stats/1]).
 
+-include("riak_dt_backend_impl.hrl").
+
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -endif.
@@ -58,16 +60,16 @@
 
 -type actor() :: riak_dt:actor().
 
--type members() :: ordsets:ordset(member()).
+-type members() :: dt_erl_sets_type(member()).
 -type member() :: term().
 
 -spec new() -> gset().
 new() ->
-    ordsets:new().
+    ?DT_ERL_SETS:new().
 
 -spec value(gset()) -> [member()].
 value(GSet) ->
-    ordsets:to_list(GSet).
+    ?DT_ERL_SETS:to_list(GSet).
 
 %% @Doc note: not implemented yet, same as `value/1'
 -spec value(any(), gset()) -> [member()].
@@ -77,18 +79,18 @@ value(_, GSet) ->
 
 -spec update(gset_op(), actor(), gset()) -> {ok, gset()}.
 update({add, Elem}, _Actor, GSet) ->
-    {ok, ordsets:add_element(Elem, GSet)};
+    {ok, ?DT_ERL_SETS:add_element(Elem, GSet)};
 update({add_all, Elems}, _Actor, GSet) ->
-    {ok, ordsets:union(GSet, ordsets:from_list(Elems))}.
+    {ok, ?DT_ERL_SETS:union(GSet, ?DT_ERL_SETS:from_list(Elems))}.
 
 
 -spec merge(gset(), gset()) -> gset().
 merge(GSet1, GSet2) ->
-    ordsets:union(GSet1, GSet2).
+    ?DT_ERL_SETS:union(GSet1, GSet2).
 
 -spec equal(gset(), gset()) -> boolean().
 equal(GSet1, GSet2) ->
-    GSet1 == GSet2.
+    ?DT_ERL_SETS_EQUAL(GSet1, GSet2).
 
 -define(TAG, 82).
 -define(V1_VERS, 1).
@@ -107,7 +109,7 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
 stats(GSet) ->
     [{element_count, length(GSet)},
      {max_element_size,
-      ordsets:fold(
+      ?DT_ERL_SETS:fold(
         fun(E, S) ->
                 max(erlang:external_size(E), S)
         end, 0, GSet)}
