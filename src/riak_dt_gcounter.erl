@@ -60,7 +60,7 @@ new() ->
     orddict:new().
 
 %% @doc Create a `gcounter()' with an initial update
--spec new(term(), pos_integer()) -> gcounter().
+-spec new(riak_dt:actor(), pos_integer()) -> gcounter().
 new(Id, Count) when is_integer(Count), Count > 0 ->
     {ok, Cnt} = update({increment, Count}, Id, new()),
     Cnt.
