@@ -170,22 +170,43 @@ remove_all([Elem | Rest], Actor, ORSet) ->
     end.
 
 -spec merge(orswot(), orswot()) -> orswot().
-merge({LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
-    Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
-    %% If an element is in both dicts, merge it. If it occurs in one,
-    %% then see if its dots are dominated by the others whole set
-    %% clock. If so, then drop it, if not, keep it.
-    LHSKeys = sets:from_list(orddict:fetch_keys(LHSEntries)),
-    RHSKeys = sets:from_list(orddict:fetch_keys(RHSEntries)),
-    CommonKeys = sets:intersection(LHSKeys, RHSKeys),
-    LHSUnique = sets:subtract(LHSKeys, CommonKeys),
-    RHSUnique = sets:subtract(RHSKeys, CommonKeys),
+merge({Clock, Entries}, {Clock, Entries}) ->
+    {Clock, Entries};
+merge({LHSClock, LHSEntries}=LHS, {RHSClock, RHSEntries}=RHS) ->
+    case either_dominates(LHSClock, RHSClock) of
+        LHSClock -> LHS ;
+        RHSClock -> RHS;
+        concurrent ->
+            Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
+            %% If an element is in both dicts, merge it. If it occurs in one,
+            %% then see if its dots are dominated by the others whole set
+            %% clock. If so, then drop it, if not, keep it.
+            LHSKeys = sets:from_list(orddict:fetch_keys(LHSEntries)),
+            RHSKeys = sets:from_list(orddict:fetch_keys(RHSEntries)),
+            CommonKeys = sets:intersection(LHSKeys, RHSKeys),
+            LHSUnique = sets:subtract(LHSKeys, CommonKeys),
+            RHSUnique = sets:subtract(RHSKeys, CommonKeys),
 
-    Entries00 = merge_common_keys(CommonKeys, LHSEntries, RHSEntries),
-    Entries0 = merge_disjoint_keys(LHSUnique, LHSEntries, RHSClock, Entries00),
-    Entries = merge_disjoint_keys(RHSUnique, RHSEntries, LHSClock, Entries0),
+            Entries00 = merge_common_keys(CommonKeys, LHSEntries, RHSEntries),
+            Entries0 = merge_disjoint_keys(LHSUnique, LHSEntries, RHSClock, Entries00),
+            Entries = merge_disjoint_keys(RHSUnique, RHSEntries, LHSClock, Entries0),
 
-    {Clock, Entries}.
+            {Clock, Entries}
+    end.
+
+%% @private check if either clock dominates the other
+-spec either_dominates(riak_dt_vclock:vclock(), riak_dt_vclock:vclock()) ->
+                              riak_dt_vclock:vclock() | concurrent.
+either_dominates(LHSClock, RHSClock) ->
+    case {riak_dt_vclock:descends(LHSClock, RHSClock),
+          riak_dt_vclock:descends(RHSClock, LHSClock)} of
+        {true, _} ->
+            LHSClock;
+        {_, true} ->
+            RHSClock;
+        {false, false} ->
+            concurrent
+    end.
 
 %% @doc check if each element in `Entries' should be in the merged
 %% set.
