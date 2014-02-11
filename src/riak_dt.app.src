@@ -8,5 +8,5 @@
                   kernel,
                   stdlib
                  ]},
-  {env, []}
+  {env, [{binary_compression, 1}]}
  ]}.

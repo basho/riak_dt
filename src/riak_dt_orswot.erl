@@ -310,16 +310,21 @@ stat(_,_) -> undefined.
 -define(V1_VERS, 1).
 
 %% @doc returns a binary representation of the provided
-%% `orswot()'. Measurements show that for all but the empty set this
-%% function is more effecient than using
-%% `erlang:term_to_binary/1'. The resulting binary is tagged and
-%% versioned for ease of future upgrade. Calling `from_binary/1' with
-%% the result of this function will return the original set.
+%% `orswot()'. The resulting binary is tagged and versioned for ease
+%% of future upgrade. Calling `from_binary/1' with the result of this
+%% function will return the original set. Use the application env var
+%% `binary_compression' to turn t2b compression on (`true') and off
+%% (`false')
 %%
 %% @see `from_binary/1'
 -spec to_binary(orswot()) -> binary_orswot().
 to_binary(S) ->
-     <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(S))/binary>>.
+    Opts = case application:get_env(riak_dt, binary_compression, true) of
+               true -> [{compressed, 1}];
+               N when N >= 0, N =< 9 -> [{compressed, N}];
+               _ -> []
+           end,
+     <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(S, Opts))/binary>>.
 
 %% @doc When the argument is a `binary_orswot()' produced by
 %% `to_binary/1' will return the original `orswot()'.
