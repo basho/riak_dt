@@ -131,30 +131,73 @@ value({contains, Elem}, ORset) ->
 %% @doc take a list of Set operations and apply them to the set.
 %% NOTE: either _all_ are applied, or _none_ are.
 update({update, Ops}, Actor, ORSet) ->
-    apply_ops(lists:sort(Ops), Actor, ORSet);
+    apply_ops(lists:sort(Ops), Actor, ORSet, true);
 update({add, Elem}, Actor, ORSet) ->
-    {ok, add_elem(Actor, ORSet, Elem)};
+    {ok, add_element(Elem, Actor, ORSet, true)};
 update({remove, Elem}, _Actor, ORSet) ->
     {_Clock, Entries} = ORSet,
     remove_elem(orddict:find(Elem, Entries), Elem, ORSet);
 update({add_all, Elems}, Actor, ORSet) ->
-    ORSet2 = lists:foldl(fun(E, S) ->
-                                 add_elem(Actor, S, E) end,
-                         ORSet,
-                         Elems),
-    {ok, ORSet2};
-
+    {ok, add_all(Elems, Actor, ORSet, true)};
 %% @doc note: this is atomic, either _all_ `Elems` are removed, or
 %% none are.
 update({remove_all, Elems}, Actor, ORSet) ->
-    remove_all(Elems, Actor, ORSet).
+    remove_all(Elems, Actor, ORSet);
+%% When nested in a Map, provide the clock for the Set
+update({ReplaceClock, {update, Ops}}, Actor, {Clock, Entries}) ->
+    case apply_ops(Ops, Actor, {ReplaceClock, Entries}, false) of
+        {ok, {_, NewEntries}} ->
+            {ok, {Clock, NewEntries}};
+        Error ->
+            Error
+    end;
+update({ReplaceClock, {add, Elem}}, Actor, {Clock, Entries}) ->
+    {_, NewEntries} =  add_element(Elem, Actor, {ReplaceClock, Entries}, false),
+    {ok, {Clock, NewEntries}};
+update({ReplaceClock, {add_all, Elems}}, Actor, {Clock, Entries}) ->
+    {_, NewEntries} =  add_all(Elems, Actor, {ReplaceClock, Entries}, false),
+    {ok, {Clock, NewEntries}};
+update({_ReplaceClock, Op}, Actor, ORSet) ->
+    %% Removes don't use the clock
+    update(Op, Actor, ORSet).
 
-apply_ops([], _Actor, ORSet) ->
+update({update, Ops}, Actor, ORSet, IncClock) ->
+    apply_ops(lists:sort(Ops), Actor, ORSet, IncClock);
+update({add, Elem}, Actor, ORSet, IncClock) ->
+    {ok, add_element(Elem, Actor, ORSet, IncClock)};
+update({add_all, Elems}, Actor, ORSet, IncClock) ->
+    {ok, add_all(Elems, Actor, ORSet, IncClock)};
+update(Op, Actor, ORSet, _IncClock) ->
+    update(Op, Actor, ORSet).
+
+%% Add entry(s) increment vclock if requested.
+add_element(Element, Actor, {Clock, Entries}, false) ->
+    Dot = [{Actor, riak_dt_vclock:get_counter(Actor, Clock)}],
+    {Clock, update_entry(Element, Entries, Dot)};
+add_element(Element, Actor, {Clock, Entries}, true) ->
+    Clock2 = riak_dt_vclock:increment(Actor, Clock),
+    Dot = [{Actor, riak_dt_vclock:get_counter(Actor, Clock2)}],
+    {Clock2, update_entry(Element, Entries, Dot)}.
+
+add_all(Elems, Actor, {Clock, Entries}, true) ->
+    Clock2 = riak_dt_vclock:increment(Actor, Clock),
+    add_all(Elems, Actor, {Clock2, Entries}, false);
+add_all(Elems, Actor, {Clock, Entries}, false) ->
+    Dot = [{Actor, riak_dt_vclock:get_counter(Actor, Clock)}],
+    Entries2 = lists:foldl(fun(E, Acc) ->
+                                   update_entry(E, Acc, Dot) end,
+                           Entries,
+                           Elems),
+    {Clock, Entries2}.
+
+apply_ops([], _Actor, ORSet, _IncClock) ->
     {ok, ORSet};
-apply_ops([Op | Rest], Actor, ORSet) ->
-    case update(Op, Actor, ORSet) of
-        {ok, ORSet2} ->
-            apply_ops(Rest, Actor, ORSet2);
+apply_ops([Op | Rest], Actor, {Clock, _Entries}=ORSet, IncClock) ->
+    case update(Op, Actor, ORSet, IncClock) of
+        {ok, {Clock, Entries2}} ->
+            apply_ops(Rest, Actor, {Clock, Entries2}, IncClock);
+        {ok, {NewClock, Entries2}} ->
+            apply_ops(Rest, Actor, {NewClock, Entries2}, false);
         Error ->
             Error
     end.
@@ -192,7 +235,14 @@ merge({LHSClock, LHSEntries}=LHS, {RHSClock, RHSEntries}=RHS) ->
             Entries = merge_disjoint_keys(RHSUnique, RHSEntries, LHSClock, Entries0),
 
             {Clock, Entries}
-    end.
+    end;
+%% Replace clock merges
+merge({LHSReplaceClock, {LHSClock, LHSEntries}}, {RHSReplaceClock, {RHSClock, RHSEntries}}) ->
+    %% TODO, how to interact with highr up level's clock
+    {_Clock, Entries} = merge({LHSReplaceClock, LHSEntries}, {RHSReplaceClock, RHSEntries}),
+    {riak_dt_vclock:merge([LHSClock, RHSClock]), Entries}.
+
+
 
 %% @private check if either clock dominates the other
 -spec either_dominates(riak_dt_vclock:vclock(), riak_dt_vclock:vclock()) ->
@@ -256,13 +306,6 @@ clocks_equal([{Elem, Clock1} | Rest], Entries2) ->
         false ->
             false
     end.
-
-%% Private
--spec add_elem(actor(), orswot(), member()) -> orswot().
-add_elem(Actor, {Clock, Entries}, Elem) ->
-    NewClock = riak_dt_vclock:increment(Actor, Clock),
-    Dot = [{Actor, riak_dt_vclock:get_counter(Actor, NewClock)}],
-    {NewClock, update_entry(Elem, Entries, Dot)}.
 
 -spec update_entry(member(), orddict:orddict(), riak_dt_vclock:vclock()) ->
                           orddict:orddict().
