@@ -58,7 +58,7 @@
 %% Victor Fonte, Ricardo Gonçalves http://arxiv.org/abs/1011.5808
 %%
 %% @end
--module(riak_dt_orswot).
+-module(riak_dt_orswot_cp).
 
 -behaviour(riak_dt).
 
@@ -120,7 +120,7 @@
 
 -spec new() -> orswot().
 new() ->
-    {riak_dt_vclock:fresh(), orddict:new()}.
+    {riak_dt_vclock:fresh(), orddict:new(), []}.
 
 -spec value(orswot()) -> [member()].
 value({_Clock, Entries, _Catchup}) ->
@@ -146,15 +146,15 @@ update({update, Ops}, Actor, ORSet) ->
 update({add, Elem}, Actor, {Clock0, Entries, CatchUp}) ->
     Clock = riak_dt_vclock:increment(Actor, Clock0),
     Dot = [{Actor, riak_dt_vclock:get_counter(Actor, Clock)}],
-    {ok, {Clock0, update_entry(Elem, Entries, Dot), CatchUp}};
-update({add_all, Elems}, Actor, {Clock, Entries0, CatchUp}) ->
-    Clock = riak_dt_vclock:increment(Actor, Clock),
+    {ok, {Clock, update_entry(Elem, Entries, Dot), CatchUp}};
+update({add_all, Elems}, Actor, {Clock0, Entries0, CatchUp}) ->
+    Clock = riak_dt_vclock:increment(Actor, Clock0),
     Dot = [{Actor, riak_dt_vclock:get_counter(Actor, Clock)}],
     Entries = lists:foldl(fun(E, Acc) ->
                                   update_entry(E, Acc, Dot) end,
                           Entries0,
                           Elems),
-    {ok, {Clock, Entries}, CatchUp};
+    {ok, {Clock, Entries, CatchUp}};
 update({remove, Elem}, _Actor, ORSet) ->
     {_Clock, Entries, _CatchUp} = ORSet,
     remove_elem(orddict:find(Elem, Entries), Elem, ORSet);
@@ -162,7 +162,7 @@ update({remove, Elem}, _Actor, ORSet) ->
 %% none are.
 update({remove_all, Elems}, Actor, ORSet) ->
     remove_all(Elems, Actor, ORSet);
-
+%% Context operations (only removes matter)
 update({CtxClock, {remove, Elem}=Op}, _Actor, {SetClock, Entries0, CatchUp0}) ->
     {Entries, CatchUp} = case {riak_dt_vclock:descends(SetClock, CtxClock), orddict:find(Elem)} of
                              {true, {ok, ElemClock}} ->
@@ -179,7 +179,8 @@ update({CtxClock, {remove, Elem}=Op}, _Actor, {SetClock, Entries0, CatchUp0}) ->
                                          {orddict:store(Elem, NewDots, Entries0), CatchUp0}
                                  end;
                              {true, error}->
-                                 %% Already removed
+                                 %% Already removed? Can't throw
+                                 %% precon error here.
                                  {Entries0, CatchUp0};
                              {false, {ok, ElemClock}} ->
                                  %% The element is in the set, and the value being removed
@@ -207,10 +208,15 @@ update({CtxClock, {remove_all, Elems}}, Actor, ORSet0) ->
     lists:foldl(fun(Elem, {ok, ORSet}) ->
                         update({CtxClock, {remove, Elem}}, Actor, ORSet) end,
                 {ok, ORSet0},
-                Elems).
-
-
-
+                Elems);
+update({CtxClock, {update, Ops}}, Actor, ORSet) ->
+    lists:foldl(fun(Op, Acc) ->
+                        {ok, Acc} = update({CtxClock, Op}, Actor, Acc),
+                        Acc end,
+                ORSet,
+                Ops);
+update({_CtxClock, Op}, Actor, ORSet) ->
+    update(Op, Actor, ORSet).
 
 
 %% Private
@@ -257,10 +263,10 @@ remove_all([Elem | Rest], Actor, ORSet) ->
 -spec merge(orswot(), orswot()) -> orswot().
 merge({Clock, Entries, CatchUp}, {Clock, Entries, CatchUp}) ->
     {Clock, Entries, CatchUp};
-merge({LHSClock, LHSEntries, CatchUp}=LHS, {RHSClock, RHSEntries, CatchUp}=RHS) ->
+merge({LHSClock, LHSEntries, LHSCatchUp}=LHS, {RHSClock, RHSEntries, RHSCatchUp}=RHS) ->
     case either_dominates(LHSClock, RHSClock) of
-        LHSClock -> LHS ;
-        RHSClock -> RHS;
+        LHSClock -> catchup(LHS, RHSCatchUp);
+        RHSClock -> catchup(RHS, LHSCatchUp);
         concurrent ->
             Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
             %% If an element is in both dicts, merge it. If it occurs in one,
@@ -275,9 +281,26 @@ merge({LHSClock, LHSEntries, CatchUp}=LHS, {RHSClock, RHSEntries, CatchUp}=RHS) 
             Entries00 = merge_common_keys(CommonKeys, LHSEntries, RHSEntries),
             Entries0 = merge_disjoint_keys(LHSUnique, LHSEntries, RHSClock, Entries00),
             Entries = merge_disjoint_keys(RHSUnique, RHSEntries, LHSClock, Entries0),
-
-            {Clock, Entries, CatchUp}
+            CatchUp = lists:umerge(LHSCatchUp, RHSCatchUp),
+            catchup({Clock, Entries, []}, CatchUp)
     end.
+
+%% Attempt to execute the CatchUpOps on the ORSWOT, May result in
+%% dropped Entries, may result in un-executable ops being added to the
+%% ORSWOT's CatchUp List
+catchup(ORSWOT, CatchUpOps) ->
+        lists:foldl(fun({CtxClock, Op}, {Clock, Entries, CatchUp}) ->
+                            case riak_dt_vclock:descends(Clock, CtxClock) of
+                                true ->
+                                    %% This catchup op can now be excuted
+                                    {ok, ORSWOT2} = update(Op, undefined, {Clock, Entries, CatchUp}),
+                                    ORSWOT2;
+                                false ->
+                                    {Clock, Entries, [{CtxClock, Op} | CatchUp]}
+                            end
+                    end,
+                    ORSWOT,
+                    CatchUpOps).
 
 %% @private check if either clock dominates the other
 -spec either_dominates(riak_dt_vclock:vclock(), riak_dt_vclock:vclock()) ->
@@ -325,10 +348,10 @@ merge_common_keys(CommonKeys, Entries1, Entries2) ->
               CommonKeys).
 
 -spec equal(orswot(), orswot()) -> boolean().
-equal({Clock1, Entries1}, {Clock2, Entries2}) ->
+equal({Clock1, Entries1, CatchUp1}, {Clock2, Entries2, CatchUp2}) ->
     riak_dt_vclock:equal(Clock1, Clock2) andalso
         orddict:fetch_keys(Entries1) == orddict:fetch_keys(Entries2) andalso
-        clocks_equal(Entries1, Entries2).
+        clocks_equal(Entries1, Entries2) andalso lists:sort(CatchUp1) == lists:sort(CatchUp2).
 
 -spec clocks_equal(orddict:orddict(), orddict:orddict()) -> boolean().
 clocks_equal([], _) ->
@@ -342,15 +365,11 @@ clocks_equal([{Elem, Clock1} | Rest], Entries2) ->
             false
     end.
 
-%% @doc the precondition context is a fragment of the CRDT
-%% that operations with pre-conditions can be applied too.
-%% In the case of OR-Sets this is the set of adds observed.
-%% The system can then apply a remove to this context and merge it with a replica.
-%% Especially useful for hybrid op/state systems where the context of an operation is
-%% needed at a replica without sending the entire state to the client.
--spec precondition_context(orswot()) -> orswot().
-precondition_context(ORSet) ->
-    ORSet.
+%% @doc Just the clock is needed as a precondition context, as removes
+%% are buffered
+-spec precondition_context(orswot()) -> riak_dt_vclock:vclock().
+precondition_context({Clock, _E, _C}) ->
+    Clock.
 
 -spec stats(orswot()) -> [{atom(), number()}].
 stats(ORSWOT) ->
@@ -367,7 +386,7 @@ stat(max_dot_length, {_Clock, Dict}) ->
                  end, 0, Dict);
 stat(_,_) -> undefined.
 
--define(TAG, 75).
+-define(TAG, 99).
 -define(V1_VERS, 1).
 
 %% @doc returns a binary representation of the provided
@@ -431,7 +450,7 @@ generate() ->
                                  _ -> Set
                              end
                      end,
-                     riak_dt_orswot:new(),
+                     riak_dt_orswot_cp:new(),
                      Ops)).
 
 %% EQC generator
