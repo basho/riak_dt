@@ -67,7 +67,7 @@ value(_, V) ->
 -spec update(minreg_op(), term(), minreg()) ->
                     {ok, minreg()}.
 update({assign, Value}, _Actor, OldVal) when is_integer(Value) ->
-    {ok, min_with_large_undefined(Value, OldVal)}.
+    {ok, merge(OldVal, Value)}.
 
 %% @doc Merge two `minreg()'s to a single `minreg()'. This is the Least Upper Bound
 %% function described in the literature.
