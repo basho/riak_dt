@@ -2,7 +2,7 @@
 %%
 %% riak_dt_maxreg: A Register that stores the largest integer assigned into it
 %%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2014 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -83,9 +83,8 @@ max_with_small_undefined(X, undefined) ->
 max_with_small_undefined(X, Y) ->
     max(X, Y).
 
-%% @doc Are two `maxreg()'s structurally equal? This is not `value/1' equality.
-%% Two registers might represent the value `armchair', and not be `equal/2'. Equality here is
-%% that both registers contain the same value and timestamp.
+%% @doc Are two `maxreg()'s structurally equal? Equality here is
+%% that both registers contain the same value.
 -spec equal(maxreg(), maxreg()) -> boolean().
 equal(Val1, Val2) ->
     Val1 =:= Val2.
@@ -94,6 +93,7 @@ equal(Val1, Val2) ->
 -define(V1_VERS, 1).
 
 % TODO: is 32 bits of integer enough? Do we require more bits?
+% TODO: do we want to be using t2b/b2t here?
 
 %% @doc Encode an effecient binary representation of an `maxreg()'
 -spec to_binary(maxreg()) -> binary().
