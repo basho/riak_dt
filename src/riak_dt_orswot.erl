@@ -170,22 +170,43 @@ remove_all([Elem | Rest], Actor, ORSet) ->
     end.
 
 -spec merge(orswot(), orswot()) -> orswot().
-merge({LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
-    Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
-    %% If an element is in both dicts, merge it. If it occurs in one,
-    %% then see if its dots are dominated by the others whole set
-    %% clock. If so, then drop it, if not, keep it.
-    LHSKeys = sets:from_list(orddict:fetch_keys(LHSEntries)),
-    RHSKeys = sets:from_list(orddict:fetch_keys(RHSEntries)),
-    CommonKeys = sets:intersection(LHSKeys, RHSKeys),
-    LHSUnique = sets:subtract(LHSKeys, CommonKeys),
-    RHSUnique = sets:subtract(RHSKeys, CommonKeys),
+merge({Clock, Entries}, {Clock, Entries}) ->
+    {Clock, Entries};
+merge({LHSClock, LHSEntries}=LHS, {RHSClock, RHSEntries}=RHS) ->
+    case either_dominates(LHSClock, RHSClock) of
+        LHSClock -> LHS ;
+        RHSClock -> RHS;
+        concurrent ->
+            Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
+            %% If an element is in both dicts, merge it. If it occurs in one,
+            %% then see if its dots are dominated by the others whole set
+            %% clock. If so, then drop it, if not, keep it.
+            LHSKeys = sets:from_list(orddict:fetch_keys(LHSEntries)),
+            RHSKeys = sets:from_list(orddict:fetch_keys(RHSEntries)),
+            CommonKeys = sets:intersection(LHSKeys, RHSKeys),
+            LHSUnique = sets:subtract(LHSKeys, CommonKeys),
+            RHSUnique = sets:subtract(RHSKeys, CommonKeys),
 
-    Entries00 = merge_common_keys(CommonKeys, LHSEntries, RHSEntries),
-    Entries0 = merge_disjoint_keys(LHSUnique, LHSEntries, RHSClock, Entries00),
-    Entries = merge_disjoint_keys(RHSUnique, RHSEntries, LHSClock, Entries0),
+            Entries00 = merge_common_keys(CommonKeys, LHSEntries, RHSEntries),
+            Entries0 = merge_disjoint_keys(LHSUnique, LHSEntries, RHSClock, Entries00),
+            Entries = merge_disjoint_keys(RHSUnique, RHSEntries, LHSClock, Entries0),
 
-    {Clock, Entries}.
+            {Clock, Entries}
+    end.
+
+%% @private check if either clock dominates the other
+-spec either_dominates(riak_dt_vclock:vclock(), riak_dt_vclock:vclock()) ->
+                              riak_dt_vclock:vclock() | concurrent.
+either_dominates(LHSClock, RHSClock) ->
+    case {riak_dt_vclock:descends(LHSClock, RHSClock),
+          riak_dt_vclock:descends(RHSClock, LHSClock)} of
+        {true, _} ->
+            LHSClock;
+        {_, true} ->
+            RHSClock;
+        {false, false} ->
+            concurrent
+    end.
 
 %% @doc check if each element in `Entries' should be in the merged
 %% set.
@@ -289,86 +310,29 @@ stat(_,_) -> undefined.
 -define(V1_VERS, 1).
 
 %% @doc returns a binary representation of the provided
-%% `orswot()'. Measurements show that for all but the empty set this
-%% function is more effecient than using
-%% `erlang:term_to_binary/1'. The resulting binary is tagged and
-%% versioned for ease of future upgrade. Calling `from_binary/1' with
-%% the result of this function will return the original set.
+%% `orswot()'. The resulting binary is tagged and versioned for ease
+%% of future upgrade. Calling `from_binary/1' with the result of this
+%% function will return the original set. Use the application env var
+%% `binary_compression' to turn t2b compression on (`true') and off
+%% (`false')
 %%
 %% @see `from_binary/1'
 -spec to_binary(orswot()) -> binary_orswot().
-to_binary({Clock, Entries}) ->
-    Actors0 = riak_dt_vclock:all_nodes(Clock),
-    Actors = lists:zip(Actors0, lists:seq(1, length(Actors0))),
-    BinClock = riak_dt_vclock:to_binary(Clock),
-    ClockLen = byte_size(BinClock),
-    %% since each minimal clock can be at _most_ the size of the
-    %% vclock for the set, this saves us reserving 4 bytes for clock
-    %% len for each entry if we only needs 1 (for example)
-    ClockLenFieldLen = bit_size(binary:encode_unsigned(ClockLen)),
-    BinEntries = entries_to_binary(Entries, ClockLenFieldLen, Actors, <<>>),
-    <<?TAG:8/integer, ?V1_VERS:8/integer, ClockLenFieldLen:8/integer,
-      ClockLen:ClockLenFieldLen/integer,
-      BinClock:ClockLen/binary,
-      BinEntries/binary>>.
-
-%% @private inverse of `binary_to_entries/4'.
--spec entries_to_binary(orddict:orddict(), pos_integer(),
-                        [{actor(), pos_integer()}], binary()) ->
-                                binary().
-entries_to_binary([], _,  _, EntriesBin) ->
-    EntriesBin;
-entries_to_binary([{Elem, MinmalClock} | Rest], ClockLenFieldLen, Actors, Acc) ->
-    ElemBin = elem_to_binary(Elem),
-    ElemLength = byte_size(ElemBin),
-    Clock = riak_dt_vclock:replace_actors(Actors, MinmalClock),
-    ClockBin = riak_dt_vclock:to_binary(Clock),
-    ClockLen = byte_size(ClockBin),
-    Bin = <<ElemLength:32/integer, ElemBin:ElemLength/binary, ClockLen:ClockLenFieldLen/integer, ClockBin:ClockLen/binary>>,
-    entries_to_binary(Rest, ClockLenFieldLen, Actors, <<Acc/binary, Bin/binary>>).
-
-%% @private inverse of `binary_to_elem/1'.
--spec elem_to_binary(member()) -> binary().
-elem_to_binary(Elem) when is_binary(Elem) ->
-    <<1, Elem/binary>>;
-elem_to_binary(Elem) ->
-    <<0, (term_to_binary(Elem))/binary>>.
+to_binary(S) ->
+    Opts = case application:get_env(riak_dt, binary_compression, true) of
+               true -> [{compressed, 1}];
+               N when N >= 0, N =< 9 -> [{compressed, N}];
+               _ -> []
+           end,
+     <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(S, Opts))/binary>>.
 
 %% @doc When the argument is a `binary_orswot()' produced by
 %% `to_binary/1' will return the original `orswot()'.
 %%
 %% @see `to_binary/1'
 -spec from_binary(binary_orswot()) -> orswot().
-from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, ClockLenFieldLen:8/integer,
-              ClockLen:ClockLenFieldLen/integer,
-              BinClock:ClockLen/binary, BinEntries/binary>>) ->
-    Clock = riak_dt_vclock:from_binary(BinClock),
-    Actors0 = riak_dt_vclock:all_nodes(Clock),
-    Actors = lists:zip(lists:seq(1, length(Actors0)), Actors0),
-    Entries = binary_to_entries(BinEntries, ClockLenFieldLen, Actors, orddict:new()),
-    {Clock, Entries}.
-
-%% @private inverse of `entries_to_binary/4'.
--spec binary_to_entries(binary(), pos_integer(), [{pos_integer(), actor()}],
-                        orddict:orddict()) -> orddict:orddict().
-binary_to_entries(<<>>, _, _, Entries) ->
- Entries;
-binary_to_entries(<<ElemLength:32/integer, ElemBin:ElemLength/binary, Rest0/binary>>,
-                  ClockLenFieldLen, Actors, Entries0) ->
-    Elem = binary_to_elem(ElemBin),
-    <<ClockLen:ClockLenFieldLen/integer, ClockBin:ClockLen/binary, Rest/binary>> = Rest0,
-    Clock0 = riak_dt_vclock:from_binary(ClockBin),
-    Clock = riak_dt_vclock:replace_actors(Actors, Clock0),
-    Entries = orddict:store(Elem, Clock, Entries0),
-    binary_to_entries(Rest, ClockLenFieldLen, Actors, Entries).
-
-%% @private inverse of `elem_to_binary/1'.
--spec binary_to_elem(binary()) -> member().
-binary_to_elem(<<1, Bin/binary>>) ->
-    Bin;
-binary_to_elem(<<0, Bin/binary>>) ->
-    binary_to_term(Bin).
-
+from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
+    binary_to_term(B).
 
 %% ===================================================================
 %% EUnit tests
