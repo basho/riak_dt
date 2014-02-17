@@ -314,7 +314,7 @@ stat(_,_) -> undefined.
 %% @see `from_binary/1'
 -spec to_binary(map()) -> binary_map().
 to_binary(Map) ->
-    Opts = case application:get_env(riak_dt, binary_compression, true) of
+    Opts = case application:get_env(riak_dt, binary_compression, 1) of
                true -> [compressed];
                N when N >= 0, N =< 9 -> [{compressed, N}];
                _ -> []
