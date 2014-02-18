@@ -33,7 +33,7 @@
 
 -export([fresh/0,descends/2,merge/1,get_counter/2, subtract_dots/2,
 	increment/2,all_nodes/1, equal/2, replace_actors/2, replace_actors/3,
-         to_binary/1, from_binary/1]).
+         to_binary/1, from_binary/1, dominates/2]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -68,6 +68,10 @@ descends(Va, Vb) ->
         {_, CtrA} ->
             (CtrA >= CtrB) andalso descends(Va,RestB)
     end.
+
+-spec dominates(vclock(), vclock()) -> boolean().
+dominates(A, B) ->
+    descends(A, B) andalso not descends(B, A).
 
 %% @doc subtract the VClock from the DotList.
 %% what this means is that any {actor(), count()} pair in
