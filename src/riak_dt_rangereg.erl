@@ -213,8 +213,8 @@ eqc_state_value(Val) ->
     [
       {max, maxVal(Val)},
       {min, minVal(Val)},
-      {first, element(1, firstVal(Val))},
-      {last, element(1, lastVal(Val))}
+      {first, pair_val(firstVal(Val))},
+      {last, pair_val(lastVal(Val))}
     ].
 -endif.
 -endif.
