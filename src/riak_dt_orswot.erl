@@ -134,9 +134,10 @@ update({update, Ops}, Actor, ORSet) ->
     apply_ops(lists:sort(Ops), Actor, ORSet);
 update({add, Elem}, Actor, ORSet) ->
     {ok, add_elem(Actor, ORSet, Elem)};
-update({remove, Elem}, _Actor, ORSet) ->
-    {_Clock, Entries} = ORSet,
-    remove_elem(orddict:find(Elem, Entries), Elem, ORSet);
+update({remove, Elem}, Actor, ORSet) ->
+    {Clock, Entries} = ORSet,
+    NewClock = riak_dt_vclock:increment(Actor, Clock),
+    remove_elem(orddict:find(Elem, Entries), Elem, {NewClock, Entries});
 update({add_all, Elems}, Actor, ORSet) ->
     ORSet2 = lists:foldl(fun(E, S) ->
                                  add_elem(Actor, S, E) end,
