@@ -71,16 +71,36 @@ value(#rangereg{max=Max, min=Min, first=First, last=Last}) ->
       {last, pair_val(Last)}
     ].
 
+%% @private
 pair_val(undefined) ->
   undefined;
 pair_val({Val, _Ts}) ->
   Val.
 
 %% @doc query this `rangereg()'.
-%% TODO: max, min, first, last, first_ts, last_ts
 -spec value(term(), rangereg()) -> term().
+value(max, #rangereg{max=Max}) ->
+  Max;
+value(min, #rangereg{min=Min}) ->
+  Min;
+value(first, #rangereg{first=First}) ->
+  pair_val(First);
+value(first_ts, #rangereg{first=First}) ->
+  pair_ts(First);
+value(last, #rangereg{last=Last}) ->
+  pair_val(Last);
+value(last_ts, #rangereg{last=Last}) ->
+  pair_ts(Last);
+value(timerange, #rangereg{first=First,last=Last}) ->
+  {range, pair_ts(First), pair_ts(Last)};
 value(_, V) ->
     value(V).
+
+%% @private
+pair_ts(undefined) ->
+  undefined;
+pair_ts({_Val, Ts}) ->
+  Ts.
 
 %% @doc Assign a `Value' to the `rangereg()'
 -spec update(rangereg_op(), term(), rangereg()) ->
