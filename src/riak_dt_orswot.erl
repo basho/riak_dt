@@ -306,7 +306,8 @@ stat(max_dot_length, {_Clock, Dict}) ->
                  end, 0, Dict);
 stat(_,_) -> undefined.
 
--define(TAG, 75).
+-include("riak_dt_tags.hrl").
+-define(TAG, ?DT_ORSWOT_TAG).
 -define(V1_VERS, 1).
 
 %% @doc returns a binary representation of the provided

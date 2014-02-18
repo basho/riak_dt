@@ -40,7 +40,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--define(TAG, 80).
+-include("riak_dt_tags.hrl").
+-define(TAG, ?DT_DISABLE_FLAG_TAG).
 
 -export_type([disable_flag/0]).
 -opaque disable_flag() :: on | off.

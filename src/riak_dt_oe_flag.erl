@@ -90,7 +90,8 @@ equal({C1,F},{C2,F}) ->
     riak_dt_vclock:equal(C1,C2);
 equal(_,_) -> false.
 
--define(TAG, 74).
+-include("riak_dt_tags.hrl").
+-define(TAG, ?DT_OE_FLAG_TAG).
 -define(VSN1, 1).
 
 -spec from_binary(binary()) -> oe_flag().

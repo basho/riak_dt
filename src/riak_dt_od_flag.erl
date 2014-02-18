@@ -99,8 +99,8 @@ stat(actor_count, {C, _}) ->
     length(C);
 stat(_, _) -> undefined.
 
-
--define(TAG, 73).
+-include("riak_dt_tags.hrl").
+-define(TAG, ?DT_OD_FLAG_TAG).
 -define(VSN1, 1).
 
 -spec from_binary(binary()) -> od_flag().

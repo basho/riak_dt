@@ -301,7 +301,8 @@ stat(max_dot_length, {_, Fields}) ->
                  end, 0, Fields);
 stat(_,_) -> undefined.
 
--define(TAG, 77).
+-include("riak_dt_tags.hrl").
+-define(TAG, ?DT_MAP_TAG).
 -define(V1_VERS, 1).
 
 %% @doc returns a binary representation of the provided `map()'. The

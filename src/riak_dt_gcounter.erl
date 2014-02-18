@@ -112,7 +112,8 @@ stat(actor_count, GCnt) ->
     length(GCnt);
 stat(_,_) -> undefined.
 
--define(TAG, 70).
+-include("riak_dt_tags.hrl").
+-define(TAG, ?DT_GCOUNTER_TAG).
 -define(V1_VERS, 1).
 
 %% @doc Encode an effecient binary representation of a `gcounter()'

@@ -146,7 +146,8 @@ stat(actor_count, PNCounter) ->
 stat(_, _) -> undefined.
 
 
--define(TAG, 71).
+-include("riak_dt_tags.hrl").
+-define(TAG, ?DT_PNCOUNTER_TAG).
 -define(V1_VERS, 1).
 -define(V2_VERS, 2).
 
