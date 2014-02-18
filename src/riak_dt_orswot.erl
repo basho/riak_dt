@@ -352,6 +352,15 @@ stat_test() ->
     ?assertEqual(1, stat(max_dot_length, Set4)),
     ?assertEqual(undefined, stat(waste_pct, Set4)).
 
+disjoint_merge_test() ->
+    {ok, A1} = update({add, <<"foo">>}, 1, new()),
+    {ok, A2} = update({add, <<"bar">>}, 1, A1),
+    {ok, B1} = update({add, <<"baz">>}, 2, new()),
+    C = merge(A2, B1),
+    {ok, A3} = update({remove, <<"bar">>}, 1, A2),
+    D = merge(A3, C),
+    ?assertEqual([<<"baz">>,<<"foo">>], value(D)).
+
 -ifdef(EQC).
 
 bin_roundtrip_test_() ->
