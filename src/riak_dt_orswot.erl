@@ -83,7 +83,7 @@
 %% EQC API
 -ifdef(EQC).
 -export([gen_op/0, update_expected/3, eqc_state_value/1]).
--export([init_state/0, generate/0, size/1]).
+-export([init_state/0, generate/0, size/1, model_merge/3]).
 
 -endif.
 
@@ -174,6 +174,8 @@ merge({Clock, Entries}, {Clock, Entries}) ->
     {Clock, Entries};
 merge({LHSClock, LHSEntries}=_LHS, {RHSClock, RHSEntries}=_RHS) ->
     Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
+
+
     %% If an element is in both dicts, merge it. If it occurs in one,
     %% then see if its dots are dominated by the others whole set
     %% clock. If so, then drop it, if not, keep it.
@@ -183,13 +185,11 @@ merge({LHSClock, LHSEntries}=_LHS, {RHSClock, RHSEntries}=_RHS) ->
     LHSUnique = sets:subtract(LHSKeys, CommonKeys),
     RHSUnique = sets:subtract(RHSKeys, CommonKeys),
 
-    Entries00 = merge_common_keys(CommonKeys, LHSEntries, RHSEntries),
+    Entries00 = merge_common_keys(CommonKeys, LHSEntries, RHSEntries, LHSClock, RHSClock),
     Entries0 = merge_disjoint_keys(LHSUnique, LHSEntries, RHSClock, Entries00),
     Entries = merge_disjoint_keys(RHSUnique, RHSEntries, LHSClock, Entries0),
 
     {Clock, Entries}.
-
-
 
 
 %% @doc check if each element in `Entries' should be in the merged
@@ -213,15 +213,31 @@ merge_disjoint_keys(Keys, Entries, SetClock, Accumulator) ->
               Keys).
 
 %% @doc merges the minimal clocks for the common entries in both sets.
--spec merge_common_keys(set(), orddict:orddict(), orddict:orddict()) -> orddict:orddict().
-merge_common_keys(CommonKeys, Entries1, Entries2) ->
+%%-spec merge_common_keys(set(), orddict:orddict(), orddict:orddict()) -> orddict:orddict().
+merge_common_keys(CommonKeys, Entries1, Entries2, Clock1, Clock2) ->
+
+    %% @BUG There is a bug here. If both sides have the same values,
+    %% some dots may still need to be shed.  If LHS dots for 'X' that
+    %% RHS does _not_ have, and RHS's clock dominates those dots, then
+    %% we need to drop those dots.  We only keep dots BOTH side agree
+    %% on, or dots that are not dominated. Keep only common dots, and
+    %% dots that are not dominated by the other sides clock
+
     sets:fold(fun(Key, Acc) ->
                       V1 = orddict:fetch(Key, Entries1),
                       V2 = orddict:fetch(Key, Entries2),
-                      V = riak_dt_vclock:merge([V1, V2]),
+                      %% V = riak_dt_vclock:merge([V1, V2]), NO!
+                      CommonDots = sets:intersection(sets:from_list(V1), sets:from_list(V2)),
+                      LHSUnique = sets:to_list(sets:subtract(sets:from_list(V1), CommonDots)),
+                      RHSUnique = sets:to_list(sets:subtract(sets:from_list(V2), CommonDots)),
+                      LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, Clock2),
+                      RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, Clock1),
+                      V = riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]),
                       orddict:store(Key, V, Acc) end,
               orddict:new(),
               CommonKeys).
+
+
 
 -spec equal(orswot(), orswot()) -> boolean().
 equal({Clock1, Entries1}, {Clock2, Entries2}) ->
@@ -337,13 +353,12 @@ stat_test() ->
     ?assertEqual(undefined, stat(waste_pct, Set4)).
 
 disjoint_merge_test() ->
-    {ok, A1} = update({add, <<"foo">>}, 1, new()),
-    {ok, A2} = update({add, <<"bar">>}, 1, A1),
+    {ok, A1} = update({add, <<"bar">>}, 1, new()),
     {ok, B1} = update({add, <<"baz">>}, 2, new()),
-    C = merge(A2, B1),
-    {ok, A3} = update({remove, <<"bar">>}, 1, A2),
-    D = merge(A3, C),
-    ?assertEqual([<<"baz">>,<<"foo">>], value(D)).
+    C = merge(A1, B1),
+    {ok, A2} = update({remove, <<"bar">>}, 1, A1),
+    D = merge(A2, C),
+    ?assertEqual([<<"baz">>], value(D)).
 
 -ifdef(EQC).
 
@@ -376,15 +391,16 @@ gen_op() ->
     gen_op(fun() -> int() end).
 
 gen_op(Gen) ->
-    oneof([gen_updates(Gen), gen_update(Gen)]).
+    gen_update(Gen).
+%%    oneof([gen_updates(Gen), gen_update(Gen)]).
 
-gen_updates(Gen) ->
-     {update, non_empty(list(gen_update(Gen)))}.
+%% gen_updates(Gen) ->
+%%      {update, non_empty(list(gen_update(Gen)))}.
 
 gen_update(Gen) ->
-    oneof([{add, Gen()}, {remove, Gen()},
-           {add_all, non_empty(list(Gen()))},
-           {remove_all, non_empty(list(Gen()))}]).
+    oneof([{add, Gen()}, {remove, Gen()}]).%% ,
+           %% {add_all, non_empty(list(Gen()))},
+           %% {remove_all, non_empty(list(Gen()))}]).
 
 init_state() ->
     {0, dict:new()}.
@@ -440,6 +456,14 @@ update_expected(ID, {remove_all, Elems}, {_Cnt, Dict}=State) ->
             State
     end.
 
+model_merge(ID1, ID2, {_, Dict}) ->
+    {FA, FR} = dict:fetch(ID1, Dict),
+    {TA, TR} = dict:fetch(ID2, Dict),
+    MA = sets:union(FA, TA),
+    MR = sets:union(FR, TR),
+    Remaining = sets:subtract(MA, MR),
+    Values = [ Elem || {Elem, _X} <- sets:to_list(Remaining)],
+    lists:usort(Values).
 
 eqc_state_value({_Cnt, Dict}) ->
     {A, R} = dict:fold(fun(_K, {Add, Rem}, {AAcc, RAcc}) ->

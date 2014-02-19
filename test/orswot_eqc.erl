@@ -123,7 +123,6 @@ add_next(S=#state{vnode_data=VNodeData, adds=Adds}, Res, [Value, Coord, _]) ->
     %% Newest at the front.
     S#state{vnode_data=[Res | VNodeData], adds=[{Coord, Value} | Adds]}.
 
-
 add_post(_S, _Args, Res) ->
     post_all(Res, add).
 
@@ -166,8 +165,8 @@ remove_post(_S, _Args, Res) ->
 
 %% ------ Grouped operator: replicate
 %% Merge two replicas values
-replicate_pre(S) ->
-    vnodes_ready(S).
+replicate_pre(S=#state{vnode_data=VNodeData}) ->
+    vnodes_ready(S) andalso VNodeData /= [].
 
 replicate_args(#state{vnodes=VNodes, vnode_data=VNodeData}) ->
     [

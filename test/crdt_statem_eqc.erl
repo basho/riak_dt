@@ -46,12 +46,26 @@ run_binary_rt(Module, Count) ->
 initial_state() ->
     #state{}.
 
+
+
+%% create_pre(#state{vnodes=VNodes}) ->
+%%     length(VNodes) == 0.
+
+%% create_args(#state{mod=Mod}) ->
+%%     [?LET(N, choose(4,20), vector(N, Mod:new()))].
+
+%% create(_) ->
+%%     %% Just use command args on next state
+%%     ok.
+
+%% create_next(S, _V, [VNodes]
+
 %% Command generator, S is the state
-command(#state{vnodes=VNodes, mod=Mod}) ->
-    oneof([{call, ?MODULE, create, [Mod]}] ++
-           [{call, ?MODULE, update, [Mod, Mod:gen_op(), elements(VNodes)]} || length(VNodes) > 0] ++ %% If a vnode exists
-           [{call, ?MODULE, merge, [Mod, elements(VNodes), elements(VNodes)]} || length(VNodes) > 0] ++
-           [{call, ?MODULE, crdt_equals, [Mod, elements(VNodes), elements(VNodes)]} || length(VNodes) > 0]
+command(#state{vnodes=VNodes, mod=Mod, mod_state=Model}) ->
+    oneof([{call, ?MODULE, create, [Mod]} || length(VNodes) < 2] ++
+           [{call, ?MODULE, update, [Mod, Mod:gen_op(), elements(VNodes)]} || length(VNodes) > 1] ++ %% If a vnode exists
+           [{call, ?MODULE, merge, [Mod, elements(VNodes), elements(VNodes), Model]} || length(VNodes) > 1] ++
+           [{call, ?MODULE, crdt_equals, [Mod, elements(VNodes), elements(VNodes)]} || length(VNodes) > 2]
 ).
 
 %% Next state transformation, S is the current state
@@ -61,7 +75,7 @@ next_state(#state{vnodes=VNodes, mod=Mod, vnode_id=ID, mod_state=Expected0}=S,V,
 next_state(#state{vnodes=VNodes0, mod_state=Expected, mod=Mod}=S,V,{call,?MODULE, update, [Mod, Op, {ID, _C}]}) ->
     VNodes = lists:keyreplace(ID, 1, VNodes0, {ID, V}),
     S#state{vnodes=VNodes, mod_state=Mod:update_expected(ID, Op, Expected)};
-next_state(#state{vnodes=VNodes0, mod_state=Expected0, mod=Mod}=S,V,{call,?MODULE, merge, [_Mod, {IDS, _C}=_Source, {ID, _C}=_Dest]}) ->
+next_state(#state{vnodes=VNodes0, mod_state=Expected0, mod=Mod}=S,V,{call,?MODULE, merge, [_Mod, {IDS, _C}=_Source, {ID, _C}=_Dest, _Model]}) ->
     VNodes = lists:keyreplace(ID, 1, VNodes0, {ID, V}),
     Expected = Mod:update_expected(ID, {merge, IDS}, Expected0),
     S#state{vnodes=VNodes, mod_state=Expected};
@@ -72,6 +86,9 @@ next_state(S, _V, _C) ->
 precondition(S, {call,?MODULE, update, [_Mod, _Op, Vnode]}) ->
      #state{vnodes=Vnodes} = S,
      is_member(Vnode, Vnodes);
+precondition(S, {call,?MODULE, merge, [_Mod, Vnode1, Vnode2, _]})  ->
+     #state{vnodes=Vnodes} = S,
+    Vnode1 /= Vnode2 andalso      is_member(Vnode1, Vnodes) and is_member(Vnode2, Vnodes);
 precondition(S, {call,?MODULE, Fun, [_Mod, Vnode1, Vnode2]}) when Fun /= create ->
      #state{vnodes=Vnodes} = S,
      is_member(Vnode1, Vnodes) and is_member(Vnode2, Vnodes);
@@ -83,6 +100,13 @@ is_member(Vnode, Vnodes) ->
 
 %% Postcondition, checked after command has been evaluated
 %% OBS: S is the state before next_state(S,_,<command>)
+postcondition(#state{mod=Mod}, {call,?MODULE, merge, [_, {IDS, _}, {IDD, _}, Model]}, Res) ->
+     ModelRes = Mod:model_merge(IDS, IDD, Model),
+    case Mod:value(Res) == ModelRes of
+        false -> io:format("~p /= ~p~n", [Mod:value(Res), ModelRes]),
+                 false;
+        true -> true
+    end;
 postcondition(_S,{call,?MODULE, crdt_equals, _},Res) ->
     Res == true;
 postcondition(_S,{call,_,_,_},_Res) ->
@@ -92,18 +116,19 @@ prop_converge(NumTests, Mod) ->
     eqc:quickcheck(eqc:numtests(NumTests, ?QC_OUT(prop_converge(Mod)))).
 
 prop_converge(Mod) ->
-    ?FORALL(Cmds,commands(?MODULE, #state{mod=Mod, mod_state=Mod:init_state()}),
+    ?FORALL(Cmds,  commands(?MODULE, #state{mod=Mod, mod_state=Mod:init_state()}),
             aggregate(command_names(Cmds),
             begin
                 {H,S,Res} = run_commands(?MODULE,Cmds),
                 Merged = merge_crdts(Mod, S#state.vnodes),
                 MergedVal = Mod:value(Merged),
                 ExpectedValue = Mod:eqc_state_value(S#state.mod_state),
+%%                io:format("cmds ~p Cmds~n", [Cmds]),
                 ?WHENFAIL(
                    %% History: ~p\nState: ~p\ H,S,
                    io:format("History: ~p\nState: ~p~n", [H, S]),
-                   conjunction([{res, equals(Res, ok)},
-                                {total, equals(sort(Mod, MergedVal), sort(Mod, ExpectedValue))}]))
+                   collect(length(Cmds), conjunction([{res, equals(Res, ok)},
+                                {total, equals(sort(Mod, MergedVal), sort(Mod, ExpectedValue))}])))
             end)).
 
 prop_bin_roundtrip(Count, Mod) ->
@@ -153,7 +178,7 @@ update(Mod, Op, {ID, C}) ->
             C
     end.
 
-merge(Mod, {_IDS, CS}, {_IDD, CD}) ->
+merge(Mod, {_IDS, CS}, {_IDD, CD}, _Model) ->
     Mod:merge(CS, CD).
 
 crdt_equals(Mod, {_IDS, CS}, {_IDD, CD}) ->
