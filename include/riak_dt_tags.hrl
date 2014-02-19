@@ -7,6 +7,7 @@
 %%% line in this file with a unique tag number (trying to keep the file
 %%% organised). Then in the riak_dt_<type>.erl file, have a line like so:
 %%%
+%%%   -include("riak_dt_tags.hrl").
 %%%   -define(TAG, ?DT_<type>_TAG).
 %%% 
 %%% Then use ?TAG in the to_/from_binary kerfuffle.
