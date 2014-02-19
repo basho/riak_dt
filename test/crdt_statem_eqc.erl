@@ -93,6 +93,7 @@ prop_converge(NumTests, Mod) ->
 
 prop_converge(Mod) ->
     ?FORALL(Cmds,commands(?MODULE, #state{mod=Mod, mod_state=Mod:init_state()}),
+            aggregate(command_names(Cmds),
             begin
                 {H,S,Res} = run_commands(?MODULE,Cmds),
                 Merged = merge_crdts(Mod, S#state.vnodes),
@@ -103,7 +104,7 @@ prop_converge(Mod) ->
                    io:format("History: ~p\nState: ~p~n", [H, S]),
                    conjunction([{res, equals(Res, ok)},
                                 {total, equals(sort(Mod, MergedVal), sort(Mod, ExpectedValue))}]))
-            end).
+            end)).
 
 prop_bin_roundtrip(Count, Mod) ->
     eqc:quickcheck(eqc:numtests(Count, ?QC_OUT(prop_bin_roundtrip(Mod)))).
