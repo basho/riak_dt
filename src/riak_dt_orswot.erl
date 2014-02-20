@@ -172,7 +172,7 @@ remove_all([Elem | Rest], Actor, ORSet) ->
 -spec merge(orswot(), orswot()) -> orswot().
 merge({Clock, Entries}, {Clock, Entries}) ->
     {Clock, Entries};
-merge({LHSClock, LHSEntries}=_LHS, {RHSClock, RHSEntries}=_RHS) ->
+merge({LHSClock, LHSEntries}=LHS, {RHSClock, RHSEntries}=RHS) ->
     Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
 
 
@@ -184,8 +184,8 @@ merge({LHSClock, LHSEntries}=_LHS, {RHSClock, RHSEntries}=_RHS) ->
     CommonKeys = sets:intersection(LHSKeys, RHSKeys),
     LHSUnique = sets:subtract(LHSKeys, CommonKeys),
     RHSUnique = sets:subtract(RHSKeys, CommonKeys),
+    Entries00 = merge_common_keys(CommonKeys, LHS, RHS),
 
-    Entries00 = merge_common_keys(CommonKeys, LHSEntries, RHSEntries, LHSClock, RHSClock),
     Entries0 = merge_disjoint_keys(LHSUnique, LHSEntries, RHSClock, Entries00),
     Entries = merge_disjoint_keys(RHSUnique, RHSEntries, LHSClock, Entries0),
 
@@ -213,25 +213,25 @@ merge_disjoint_keys(Keys, Entries, SetClock, Accumulator) ->
               Keys).
 
 %% @doc merges the minimal clocks for the common entries in both sets.
-%%-spec merge_common_keys(set(), orddict:orddict(), orddict:orddict()) -> orddict:orddict().
-merge_common_keys(CommonKeys, Entries1, Entries2, Clock1, Clock2) ->
+-spec merge_common_keys(set(), orswot(), orswot()) -> orddict:orddict().
+merge_common_keys(CommonKeys, {LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
 
-    %% @BUG There is a bug here. If both sides have the same values,
-    %% some dots may still need to be shed.  If LHS dots for 'X' that
-    %% RHS does _not_ have, and RHS's clock dominates those dots, then
-    %% we need to drop those dots.  We only keep dots BOTH side agree
-    %% on, or dots that are not dominated. Keep only common dots, and
-    %% dots that are not dominated by the other sides clock
+    %% If both sides have the same values, some dots may still need to
+    %% be shed.  If LHS has dots for 'X' that RHS does _not_ have, and
+    %% RHS's clock dominates those dots, then we need to drop those
+    %% dots.  We only keep dots BOTH side agree on, or dots that are
+    %% not dominated. Keep only common dots, and dots that are not
+    %% dominated by the other sides clock
 
     sets:fold(fun(Key, Acc) ->
-                      V1 = orddict:fetch(Key, Entries1),
-                      V2 = orddict:fetch(Key, Entries2),
-                      %% V = riak_dt_vclock:merge([V1, V2]), NO!
+                      V1 = orddict:fetch(Key, LHSEntries),
+                      V2 = orddict:fetch(Key, RHSEntries),
+
                       CommonDots = sets:intersection(sets:from_list(V1), sets:from_list(V2)),
                       LHSUnique = sets:to_list(sets:subtract(sets:from_list(V1), CommonDots)),
                       RHSUnique = sets:to_list(sets:subtract(sets:from_list(V2), CommonDots)),
-                      LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, Clock2),
-                      RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, Clock1),
+                      LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, RHSClock),
+                      RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, LHSClock),
                       V = riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]),
                       case V of
                           [] ->
