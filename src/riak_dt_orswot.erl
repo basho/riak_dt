@@ -174,8 +174,6 @@ merge({Clock, Entries}, {Clock, Entries}) ->
     {Clock, Entries};
 merge({LHSClock, LHSEntries}=LHS, {RHSClock, RHSEntries}=RHS) ->
     Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
-
-
     %% If an element is in both dicts, merge it. If it occurs in one,
     %% then see if its dots are dominated by the others whole set
     %% clock. If so, then drop it, if not, keep it.
@@ -190,7 +188,6 @@ merge({LHSClock, LHSEntries}=LHS, {RHSClock, RHSEntries}=RHS) ->
     Entries = merge_disjoint_keys(RHSUnique, RHSEntries, LHSClock, Entries0),
 
     {Clock, Entries}.
-
 
 %% @doc check if each element in `Entries' should be in the merged
 %% set.
@@ -233,6 +230,7 @@ merge_common_keys(CommonKeys, {LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
                       LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, RHSClock),
                       RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, LHSClock),
                       V = riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]),
+                      %% Perfectly possible that an item in both sets should be dropped
                       case V of
                           [] ->
                               orddict:erase(Key, Acc);
@@ -242,8 +240,6 @@ merge_common_keys(CommonKeys, {LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
               end,
               orddict:new(),
               CommonKeys).
-
-
 
 -spec equal(orswot(), orswot()) -> boolean().
 equal({Clock1, Entries1}, {Clock2, Entries2}) ->
@@ -358,6 +354,10 @@ stat_test() ->
     ?assertEqual(1, stat(max_dot_length, Set4)),
     ?assertEqual(undefined, stat(waste_pct, Set4)).
 
+%% Added by @asonge from github to catch a bug I added by trying to
+%% bypass merge if one side's clcok dominated the others. The
+%% optimisation was bogus, this test remains in case someone else
+%% tries that
 disjoint_merge_test() ->
     {ok, A1} = update({add, <<"bar">>}, 1, new()),
     {ok, B1} = update({add, <<"baz">>}, 2, new()),
@@ -365,6 +365,56 @@ disjoint_merge_test() ->
     {ok, A2} = update({remove, <<"bar">>}, 1, A1),
     D = merge(A2, C),
     ?assertEqual([<<"baz">>], value(D)).
+
+%% Bug found by EQC, not dropping dots in merge when an element is
+%% present in both Sets leads to removed items remaining after merge.
+present_but_removed_test() ->
+    %% Add Z to A
+    {ok, A} = update({add, 'Z'}, a, new()),
+    %% Replicate it to C so A has 'Z'->{e, 1}
+    C = A,
+    %% Remove Z from A
+    {ok, A2} = update({remove, 'Z'}, a, A),
+    %% Add Z to C, a new replica
+    {ok, B} = update({add, 'Z'}, b, new()),
+    %%  Replicate B to A, so now A has a Z, the one with a Dot of
+    %%  {b,1} and clock of [{a, 1}, {b, 1}]
+    A3 = merge(B, A2),
+    %% Remove the 'Z' from B replica
+    {ok, B2} = update({remove, 'Z'}, b, B),
+    %% Both C and A have a 'Z', but when they merge, there should be
+    %% no 'Z' as C's has been removed by A and A's has been removed by
+    %% C.
+    Merged = lists:foldl(fun(Set, Acc) ->
+                                 merge(Set, Acc) end,
+                         %% the order matters, the two replicas that
+                         %% have 'Z' need to merge first to provoke
+                         %% the bug. You end up with 'Z' with two
+                         %% dots, when really it should be removed.
+                         A3,
+                         [C, B2]),
+    ?assertEqual([], value(Merged)).
+
+%% A bug EQC found where dropping the dots in merge was not enough if
+%% you then store the value with an empty clock (derp).
+no_dots_left_test() ->
+    {ok, A} = update({add, 'Z'}, a, new()),
+    {ok, B} = update({add, 'Z'}, b, new()),
+    C = A, %% replicate A to empty C
+    {ok, A2} = riak_dt_orswot:update({remove, 'Z'}, a, A),
+    %% replicate B to A, now A has B's 'Z'
+    A3 = riak_dt_orswot:merge(A2, B),
+    %% Remove B's 'Z'
+    {ok, B2} = riak_dt_orswot:update({remove, 'Z'}, b, B),
+    %% Replicate C to B, now B has A's old 'Z'
+    B3 = riak_dt_orswot:merge(B2, C),
+    %% Merge everytyhing, without the fix You end up with 'Z' present,
+    %% with no dots
+    Merged = lists:foldl(fun(Set, Acc) ->
+                                 merge(Set, Acc) end,
+                         A3,
+                         [B3, C]),
+    ?assertEqual([], value(Merged)).
 
 -ifdef(EQC).
 
@@ -399,8 +449,8 @@ gen_op() ->
 gen_op(Gen) ->
     oneof([gen_updates(Gen), gen_update(Gen)]).
 
- gen_updates(Gen) ->
-      {update, non_empty(list(gen_update(Gen)))}.
+gen_updates(Gen) ->
+    {update, non_empty(list(gen_update(Gen)))}.
 
 gen_update(Gen) ->
     oneof([{add, Gen()}, {remove, Gen()},

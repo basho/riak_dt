@@ -143,6 +143,10 @@ remove_pre(#state{adds=Adds}, [Add, _]) ->
 
 remove({VNode, Value}, VNodeData) ->
     {ORSWOT, ORSet} = get(VNode, VNodeData),
+    %% even though we only remove what has been added, there is no
+    %% guarantee a merge from another replica hasn't led to the
+    %% element being absent already, so ignore precon errors (they
+    %% don't change state)
     ORSWOT2 = ignore_preconerror_remove(Value, VNodeData, ORSWOT, riak_dt_orswot),
     ORSet2 = ignore_preconerror_remove(Value, VNodeData, ORSet, riak_dt_orset),
     {VNode, ORSWOT2, ORSet2}.
