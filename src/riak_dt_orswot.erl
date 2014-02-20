@@ -233,7 +233,13 @@ merge_common_keys(CommonKeys, Entries1, Entries2, Clock1, Clock2) ->
                       LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, Clock2),
                       RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, Clock1),
                       V = riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]),
-                      orddict:store(Key, V, Acc) end,
+                      case V of
+                          [] ->
+                              orddict:erase(Key, Acc);
+                          _ ->
+                              orddict:store(Key, V, Acc)
+                      end
+              end,
               orddict:new(),
               CommonKeys).
 
