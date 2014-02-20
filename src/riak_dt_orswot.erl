@@ -397,16 +397,15 @@ gen_op() ->
     gen_op(fun() -> int() end).
 
 gen_op(Gen) ->
-    gen_update(Gen).
-%%    oneof([gen_updates(Gen), gen_update(Gen)]).
+    oneof([gen_updates(Gen), gen_update(Gen)]).
 
-%% gen_updates(Gen) ->
-%%      {update, non_empty(list(gen_update(Gen)))}.
+ gen_updates(Gen) ->
+      {update, non_empty(list(gen_update(Gen)))}.
 
 gen_update(Gen) ->
-    oneof([{add, Gen()}, {remove, Gen()}]).%% ,
-           %% {add_all, non_empty(list(Gen()))},
-           %% {remove_all, non_empty(list(Gen()))}]).
+    oneof([{add, Gen()}, {remove, Gen()},
+           {add_all, non_empty(list(Gen()))},
+           {remove_all, non_empty(list(Gen()))}]).
 
 init_state() ->
     {0, dict:new()}.
@@ -461,15 +460,6 @@ update_expected(ID, {remove_all, Elems}, {_Cnt, Dict}=State) ->
         false ->
             State
     end.
-
-model_merge(ID1, ID2, {_, Dict}) ->
-    {FA, FR} = dict:fetch(ID1, Dict),
-    {TA, TR} = dict:fetch(ID2, Dict),
-    MA = sets:union(FA, TA),
-    MR = sets:union(FR, TR),
-    Remaining = sets:subtract(MA, MR),
-    Values = [ Elem || {Elem, _X} <- sets:to_list(Remaining)],
-    lists:usort(Values).
 
 eqc_state_value({_Cnt, Dict}) ->
     {A, R} = dict:fold(fun(_K, {Add, Rem}, {AAcc, RAcc}) ->
