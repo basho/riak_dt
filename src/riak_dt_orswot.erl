@@ -83,7 +83,7 @@
 %% EQC API
 -ifdef(EQC).
 -export([gen_op/0, update_expected/3, eqc_state_value/1]).
--export([init_state/0, generate/0, size/1, model_merge/3]).
+-export([init_state/0, generate/0, size/1]).
 
 -endif.
 
