@@ -69,7 +69,7 @@ set_nr_pre(#state{n=N}) ->
      N == 0.
 
 set_nr_args(_S) ->
-    [choose(3, 10)].
+    [choose(2, 10)].
 
 set_nr(_) ->
     %% Command args used for next state only
