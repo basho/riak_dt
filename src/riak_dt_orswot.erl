@@ -303,7 +303,7 @@ stat(_,_) -> undefined.
 %% @see `from_binary/1'
 -spec to_binary(orswot()) -> binary_orswot().
 to_binary(S) ->
-    Opts = case application:get_env(riak_dt, binary_compression, true) of
+    Opts = case application:get_env(riak_dt, binary_compression, 1) of
                true -> [{compressed, 1}];
                N when N >= 0, N =< 9 -> [{compressed, N}];
                _ -> []
