@@ -34,6 +34,8 @@
 -export([new/0, value/1, value/2, update/3, merge/2,
          equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
 
+-export([prune/2]).
+
 %% EQC API
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -103,6 +105,9 @@ merge(LWWReg1, LWWReg2) when LWWReg1 >= LWWReg2 ->
     LWWReg1;
 merge(_LWWReg1, LWWReg2) ->
     LWWReg2.
+
+prune(_Clock, LWWReg) ->
+    LWWReg.
 
 %% @doc Are two `lwwreg()'s structurally equal? This is not `value/1' equality.
 %% Two registers might represent the value `armchair', and not be `equal/2'. Equality here is

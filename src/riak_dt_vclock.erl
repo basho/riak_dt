@@ -142,7 +142,6 @@ increment(Node, VClock) ->
                             end,
     [{Node,Ctr}|NewV].
 
-
 % @doc Return the list of all nodes that have ever incremented VClock.
 -spec all_nodes(VClock :: vclock()) -> [vclock_node()].
 all_nodes(VClock) ->

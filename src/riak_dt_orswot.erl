@@ -79,6 +79,8 @@
 -export([update/3, merge/2, equal/2]).
 -export([to_binary/1, from_binary/1]).
 -export([precondition_context/1, stats/1, stat/2]).
+%% exper
+-export([prune/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -240,6 +242,9 @@ merge_common_keys(CommonKeys, {LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
               end,
               orddict:new(),
               CommonKeys).
+
+prune(Clock, ORSWOT) ->
+    merge({Clock, []}, ORSWOT).
 
 -spec equal(orswot(), orswot()) -> boolean().
 equal({Clock1, Entries1}, {Clock2, Entries2}) ->

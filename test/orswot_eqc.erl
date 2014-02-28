@@ -96,8 +96,8 @@ make_ring_next(S=#state{replicas=Replicas}, _V, [_, NewReplicas0]) ->
     NewReplicas = lists:filter(fun(Id) -> not lists:member(Id, Replicas) end, NewReplicas0),
     S#state{replicas=Replicas ++ NewReplicas}.
 
-%% ------ Grouped operator: put
-%% Store a new value, a contextless put
+%% ------ Grouped operator: add
+%% Store a new value
 add_pre(S) ->
     replicas_ready(S).
 

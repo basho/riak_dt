@@ -38,6 +38,7 @@
 -export([new/0, new/2, value/1, value/2,
          update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
 -export([to_binary/2, from_binary/2, current_version/1, change_versions/3]).
+-export([prune/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -128,6 +129,19 @@ merge([{Act,IncA,DecA}=ACntA|RestA],PNCntB, Acc) ->
         false ->
             merge(RestA, PNCntB, [ACntA|Acc])
     end.
+
+prune(_Clock, Counter) ->
+    Counter.
+
+%% pruned_inc(Inc, Dec) when Inc - Dec >= 0 ->
+%%     Inc;
+%% pruned_inc(Inc, Dec) ->
+%%     abs(Inc - Dec).
+
+%% pruned_dec(Inc, Dec) when Inc - Dec > 0 ->
+%%     Inc - Dec;
+%% pruned_dec(_Inc, Dec) ->
+%%     Dec.
 
 %% @doc Are two `pncounter()'s structurally equal? This is not `value/1' equality.
 %% Two counters might represent the total `-42', and not be `equal/2'. Equality here is

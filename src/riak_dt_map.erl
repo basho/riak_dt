@@ -46,6 +46,9 @@
 -export([new/0, value/1, value/2, update/3, merge/2,
          equal/2, to_binary/1, from_binary/1, precondition_context/1, stats/1, stat/2]).
 
+%% Exper
+-export([prune/2]).
+
 %% EQC API
 -ifdef(EQC).
 -export([gen_op/0, update_expected/3, eqc_state_value/1,
@@ -198,37 +201,64 @@ apply_ops([{add, {_Name, Mod}=Field} | Rest], Actor, Clock, Values) ->
 %% @Doc merge two `map()'s.  and then a pairwise merge on all values
 %% in the value list.  This is the LUB function.
 -spec merge(map(), map()) -> map().
-merge({LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
+merge({LHSClock, LHSEntries}=LHS, {RHSClock, RHSEntries}=RHS) ->
     Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
+
     %% If an element is in both dicts, merge it. If it occurs in one,
     %% then see if its dots are dominated by the others whole set
     %% clock. If so, then drop it, if not, keep it.
+
     LHSFields = sets:from_list(orddict:fetch_keys(LHSEntries)),
     RHSFields = sets:from_list(orddict:fetch_keys(RHSEntries)),
     CommonFields = sets:intersection(LHSFields, RHSFields),
     LHSUnique = sets:subtract(LHSFields, CommonFields),
     RHSUnique = sets:subtract(RHSFields, CommonFields),
 
-    Entries00 = merge_common_fields(CommonFields, LHSEntries, RHSEntries),
+    Entries00 = merge_common_fields(CommonFields, LHS, RHS),
     Entries0 = merge_disjoint_fields(LHSUnique, LHSEntries, RHSClock, Entries00),
     Entries = merge_disjoint_fields(RHSUnique, RHSEntries, LHSClock, Entries0),
 
     {Clock, Entries}.
 
 %% @doc check if each element in `Entries' should be in the merged
-%% set.
+%% set. These fields are those that are on one side of the merge
+%% only. Compare the clock for the field to the clock for the
+%% other-side's Map. If the Map clocks descends the field clock, that
+%% means that the field has been removed from the otherside, and all
+%% this sides updates have been seen, so we drop it. If the clocks are
+%% concurrent, we remove the dots that have been seen, keeping only
+%% the un-seen dots, and keep the values. However, I think there
+%% should be something done here about the _value_. If the field was
+%% removed on the otherside, should all the updates from the otherside
+%% be removed? Or do we always preserve the seen state, or should we
+%% only preserve the new updates?
 -spec merge_disjoint_fields(set(), valuelist(),
                             riak_dt_vclock:vclock(), valuelist()) ->
                                    valuelist().
-merge_disjoint_fields(Fields, Entries, SetClock, Accumulator) ->
+merge_disjoint_fields(Fields, Entries, MapClock, Accumulator) ->
     sets:fold(fun(Field, Acc) ->
                       {Dots, Value} = orddict:fetch(Field, Entries),
-                      case riak_dt_vclock:descends(SetClock, Dots) of
+                      case riak_dt_vclock:descends(MapClock, Dots) of
                           false ->
                               %% Optimise the set of stored dots to
                               %% include only those unseen
-                              NewDots = riak_dt_vclock:subtract_dots(Dots, SetClock),
-                              orddict:store(Field, {NewDots, Value}, Acc);
+                              NewDots = riak_dt_vclock:subtract_dots(Dots, MapClock),
+
+                              %% @HRM? assemble the dropped dots into
+                              %% a clock and somehow prune from the
+                              %% subvalues? (like the reset of old)?
+                              %% DroppedDots = sets:to_list(sets:subtract(sets:from_list(Dots),
+                              %%                                           sets:from_list(NewDots))),
+                              %% %% %% io:format("XXX Should be dropping these dots XXX ~p~n", [sets:to_list(DroppedDots)]),
+                              %%  case DroppedDots of
+                              %%      [] ->
+                                       orddict:store(Field, {NewDots, Value}, Acc);
+                              %%     _ ->
+                              %%         {_Name, Type} = Field,
+                              %%          io:format("~nDisjoint prune~p~n", [DroppedDots]),
+                              %%          NewValue = Type:prune(MapClock, Value),
+                              %%          orddict:store(Field, {NewDots, NewValue}, Acc)
+                              %% end;
                           true ->
                               Acc
                       end
@@ -238,16 +268,51 @@ merge_disjoint_fields(Fields, Entries, SetClock, Accumulator) ->
 
 %% @doc merges the minimal clocks and values for the common entries in
 %% both sets.
--spec merge_common_fields(set(), valuelist(), valuelist()) -> valuelist().
-merge_common_fields(CommonFields, Entries1, Entries2) ->
+-spec merge_common_fields(set(), map(), map()) -> valuelist().
+merge_common_fields(CommonFields, {LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
     sets:fold(fun({_Name, Mod}=Field, Acc) ->
-                      {Dots1, V1} = orddict:fetch(Field, Entries1),
-                      {Dots2, V2} = orddict:fetch(Field, Entries2),
-                      Dots = riak_dt_vclock:merge([Dots1, Dots2]),
-                      V = Mod:merge(V1, V2),
-                      orddict:store(Field, {Dots, V}, Acc) end,
+                      {Dots1, V1} = orddict:fetch(Field, LHSEntries),
+                      {Dots2, V2} = orddict:fetch(Field, RHSEntries),
+                      %% Only merge the fields if they're concurrent,
+                      %% this stops removed and re-added fields being
+                      %% merged with non-updated, hstoric versions of
+                      %% themselves
+                      case {riak_dt_vclock:dominates(Dots1, Dots2), riak_dt_vclock:dominates(Dots2, Dots1)} of
+                          {true, false} ->
+                              orddict:store(Field, {Dots1, V1}, Acc);
+                          {false, true} ->
+                              orddict:store(Field, {Dots2, V2}, Acc);
+                          {false, false} ->
+                              CommonDots = sets:intersection(sets:from_list(Dots1), sets:from_list(Dots2)),
+                              LHSUnique = sets:to_list(sets:subtract(sets:from_list(Dots1), CommonDots)),
+                              RHSUnique = sets:to_list(sets:subtract(sets:from_list(Dots2), CommonDots)),
+                              LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, RHSClock),
+                              RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, LHSClock),
+
+                              NewDots = riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]),
+                              %% DroppedDots = sets:to_list(sets:subtract(
+                              %%                              sets:from_list(riak_dt_vclock:merge([Dots1, Dots2])),
+                              %%                              sets:from_list(NewDots))),
+                              case NewDots of
+                                  [] ->
+                                      orddict:erase(Field, Acc);
+                                  _ ->
+                                      V0 = Mod:merge(V1, V2),
+                                      %% V = case DroppedDots of
+                                      %%         [] -> V0;
+                                      %%         _ ->
+                                      %%             io:format("common prune of ~p~n", [DroppedDots]),
+                                      %%             Mod:prune(DroppedDots, V0)
+                                      %%     end,
+                                      orddict:store(Field, {NewDots, V0}, Acc)
+                              end
+                      end
+              end,
               orddict:new(),
               CommonFields).
+
+prune(Clock, Map) ->
+    merge({Clock, []}, Map).
 
 %% @Doc compare two `map()'s for equality of structure Both schemas
 %% and value list must be equal. Performs a pariwise equals for all
