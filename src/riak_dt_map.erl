@@ -336,6 +336,35 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
 %% ===================================================================
 -ifdef(TEST).
 
+%% present in both Sets leads to removed items remaining after merge.
+present_but_removed_test() ->
+    %% Add Z to A
+    {ok, A} = update({update, [{add, {'Z', riak_dt_lwwreg}}]}, a, new()),
+    %% Replicate it to C so A has 'Z'->{e, 1}
+    C = A,
+    %% Remove Z from A
+    {ok, A2} = update({update, [{remove, {'Z', riak_dt_lwwreg}}]}, a, A),
+    %% Add Z to B, a new replica
+    {ok, B} = update({update, [{add, {'Z', riak_dt_lwwreg}}]}, b, new()),
+    %%  Replicate B to A, so now A has a Z, the one with a Dot of
+    %%  {b,1} and clock of [{a, 1}, {b, 1}]
+    A3 = merge(B, A2),
+    %% Remove the 'Z' from B replica
+    {ok, B2} = update({update, [{remove, {'Z', riak_dt_lwwreg}}]}, b, B),
+    %% Both C and A have a 'Z', but when they merge, there should be
+    %% no 'Z' as C's has been removed by A and A's has been removed by
+    %% C.
+    Merged = lists:foldl(fun(Set, Acc) ->
+                                 merge(Set, Acc) end,
+                         %% the order matters, the two replicas that
+                         %% have 'Z' need to merge first to provoke
+                         %% the bug. You end up with 'Z' with two
+                         %% dots, when really it should be removed.
+                         A3,
+                         [C, B2]),
+    ?assertEqual([], value(Merged)).
+
+
 -ifdef(EQC).
 -define(NUMTESTS, 1000).
 
