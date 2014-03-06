@@ -119,11 +119,11 @@ add_args(#state{replicas=Replicas, replica_data=ReplicaData, counter=Cnt}) ->
 gen_field() ->
     {oneof(['X,', 'Y', 'Z']),
      oneof([
-           %%  riak_dt_pncounter,
-           %% riak_dt_orswot%% ,
-            %% riak_dt_lwwreg
-            %% ,
-            riak_dt_tsmap
+            riak_dt_pncounter,
+            riak_dt_orswot,
+            riak_dt_lwwreg,
+            riak_dt_tsmap,
+            riak_dt_od_flag
            ])}.
 
 gen_field_op({_Name, Type}) ->

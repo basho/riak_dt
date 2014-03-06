@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_dt_tsmap: Tombstoning Map
+%% riak_dt_map: OR-Set schema based multi CRDT container
 %%
 %% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -20,9 +20,34 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc A Struct CRDT for holding other CRDTs
+%% @doc a multi CRDT holder. A Struct/Document-ish thing. Uses the
+%% same tombstone-less, Observed Remove semantics as `riak_dt_orswot'.
+%% A Map is set of `Field's a `Field' is a two-tuple of:
+%% `{Name::binary(), CRDTModule::module()}' where the second element
+%% is the name of a crdt module that confirms to the `riak_dt'
+%% behaviour. CRDTs stored inside the Map will have their `update/3'
+%% function called, but the second argument will be a `riak_dt:dot()',
+%% so that they share the causal context of the map, even when fields
+%% are removed, and subsequently re-added.
 %%
+%% The contents of the Map are modelled as a set of `{field(),
+%% value(), dot()}' tuples, where `dot()' is the last event that
+%% occurred on the field. When merging fields of the same name, but
+%% different `dot' are _not_ merged. On updating a field, all the
+%% elements in the set for that field are merged, updated, and
+%% replaced with a new `dot' for the update event. This means that in
+%% a divergent Map with many concurrent updates, a merged map will
+%% have duplicate entries for any update fields until and update event
+%% occurs. There is a paper on this implementation forthcoming at
+%% PaPEC 2014, we will provide a reference when we have one.
 %%
+%% Attempting to remove a `field' that is not present in the map will
+%% lead to a precondition error. An operation on a field value that
+%% generates a precondition error will cause the Map operation to
+%% return a precondition error. See `update/3' for details on
+%% operations the Map accepts.
+%%
+%% @see riak_dt_orswot for more on the OR semantic
 %% @end
 
 -module(riak_dt_tsmap).
@@ -48,15 +73,17 @@
 -endif.
 
 -type map() :: {riak_dt_vclock:vclock(), entries()}.
--type entries() :: ordsets:ordsets(entry()).
--type entry() :: {Field :: field(), CRDT :: term(), Tag :: term(), Present :: boolean()}.
--type field() :: {binary(), module()}.
+-type entries() :: ordsets:ordset(entry()).
+-type entry() :: {Field :: field(), CRDT :: riak_dt:crdt(), Tag :: riak_dt:dot()}.
+-type field() :: {Name :: binary(), CRDTModule :: module()}.
+
 %% @doc Create a new, empty Map.
 -spec new() -> map().
 new() ->
     {riak_dt_vclock:fresh(), ordsets:new()}.
 
 %% @doc get the current set of values for this Map
+-spec value(map()) -> [{field(), term()}].
 value({_Clock, Values}) ->
     Remaining = [{Field, CRDT} || {Field, CRDT, _Tag} <- ordsets:to_list(Values)],
     Res = lists:foldl(fun({{_Name, Type}=Key, Value}, Acc) ->
@@ -336,6 +363,7 @@ eqc_value_test_() ->
 %% crdt_statem_eqc callbacks
 %% ===================================
 size(Map) ->
+    %% How big is a Map? Maybe number of fields and depth matter? But then the number of fields in sub maps too?
     byte_size(term_to_binary(Map)) div 10.
 
 generate() ->
@@ -353,7 +381,6 @@ generate() ->
                      riak_dt_map:new(),
                      Ops)).
 
-
 gen_op() ->
     ?LET(Ops, non_empty(list(gen_update())), {update, Ops}).
 
@@ -366,7 +393,8 @@ gen_field() ->
     {non_empty(binary()), oneof([riak_dt_pncounter,
                                  riak_dt_orswot,
                                  riak_dt_lwwreg,
-                                 riak_dt_tsmap])}.
+                                 riak_dt_tsmap,
+                                 riak_dt_od_flag])}.
 
 gen_field_op({_Name, Type}) ->
     Type:gen_op().

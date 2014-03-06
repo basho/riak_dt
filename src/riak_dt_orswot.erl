@@ -237,7 +237,8 @@ merge_disjoint_keys(Keys, Entries, SetClock, Accumulator) ->
               Keys).
 
 %% @doc merges the minimal clocks for the common entries in both sets.
--spec merge_common_keys(set(), orswot(), orswot()) -> orddict:orddict().
+-spec merge_common_keys(set(), {riak_dt_vclock:vclock(), entries()},
+                        {riak_dt_vclock:vclock(), entries()}) -> orddict:orddict().
 merge_common_keys(CommonKeys, {LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
 
     %% If both sides have the same values, some dots may still need to
@@ -458,7 +459,8 @@ size(Set) ->
     value(size, Set).
 
 generate() ->
-    ?LET({Ops, Actors}, {non_empty(list(gen_op(fun() -> bitstring(20*8) end))), non_empty(list(bitstring(16*8)))},
+    %% Only generate add ops
+    ?LET({Ops, Actors}, {non_empty(list({add, bitstring(20*8)})), non_empty(list(bitstring(16*8)))},
          lists:foldl(fun(Op, Set) ->
                              Actor = case length(Actors) of
                                          1 -> hd(Actors);

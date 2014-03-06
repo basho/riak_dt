@@ -22,7 +22,7 @@
 
 -module(riak_dt).
 
--export_type([actor/0, dot/0]).
+-export_type([actor/0, dot/0, crdt/0]).
 
 -type crdt() :: term().
 -type operation() :: term().
