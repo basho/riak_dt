@@ -20,7 +20,7 @@
 %%
 %% -------------------------------------------------------------------
 
--module(mapts_eqc).
+-module(map_eqc).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -122,7 +122,7 @@ gen_field() ->
             riak_dt_pncounter,
             riak_dt_orswot,
             riak_dt_lwwreg,
-            riak_dt_tsmap,
+            riak_dt_map,
             riak_dt_od_flag
            ])}.
 
@@ -132,7 +132,7 @@ gen_field_op({_Name, Type}) ->
 %% Add a Field to the Map
 add(Field, Actor, Cnt, ReplicaData) ->
     {Map, Model} = get(Actor, ReplicaData),
-    {ok, Map2} = riak_dt_tsmap:update({update, [{add, Field}]}, Actor, Map),
+    {ok, Map2} = riak_dt_map:update({update, [{add, Field}]}, Actor, Map),
     {ok, Model2} = model_add_field(Field, Cnt, Model),
     {Actor, Map2, Model2}.
 
@@ -170,7 +170,7 @@ remove({Replica, Field}, ReplicaData) ->
     {Replica, Map2, Model2}.
 
 ignore_preconerror_remove(Field, Actor, Map) ->
-    case riak_dt_tsmap:update({update, [{remove, Field}]}, Actor, Map) of
+    case riak_dt_map:update({update, [{remove, Field}]}, Actor, Map) of
         {ok, Map2} ->
             Map2;
         _ ->
@@ -207,7 +207,7 @@ replicate_pre(_S, [_VN1, _VN2, _]) ->
 replicate(From, To, ReplicaData) ->
     {FromMap, FromModel} = get(From, ReplicaData),
     {ToMap, ToModel} = get(To, ReplicaData),
-    Map = riak_dt_tsmap:merge(FromMap, ToMap),
+    Map = riak_dt_map:merge(FromMap, ToMap),
     Model = model_merge(FromModel, ToModel),
     {To, Map, Model}.
 
@@ -232,7 +232,7 @@ update_args(#state{replicas=Replicas, replica_data=ReplicaData, counter=Cnt}) ->
 
 update({Field, Op}, Replica, ReplicaData, Cnt) ->
     {Map0, Model0} = get(Replica, ReplicaData),
-    {ok, Map} = ignore_precon_error(riak_dt_tsmap:update({update, [{update, Field, Op}]}, Replica, Map0), Map0),
+    {ok, Map} = ignore_precon_error(riak_dt_map:update({update, [{update, Field, Op}]}, Replica, Map0), Map0),
     {ok, Model} = model_update_field(Field, Op, Replica, Cnt, Model0),
     {Replica, Map, Model}.
 
@@ -262,13 +262,13 @@ prop_merge() ->
                                                  {Map, Model} = lists:foldl(fun(Actor, {M, Mo}) ->
                                                                                     {M1, Mo1} = get(Actor, ReplicaData),
                                                                                     %% io:format("~nXXXX DUMP XXXX~nMap:::: ~p~nModel:::: ~p~n", [M1, Mo1]),
-                                                                                    {riak_dt_tsmap:merge(M, M1),
+                                                                                    {riak_dt_map:merge(M, M1),
                                                                                      model_merge(Mo, Mo1)} end,
-                                                                            {riak_dt_tsmap:new(), model_new()},
+                                                                            {riak_dt_map:new(), model_new()},
                                                                             Replicas),
                                                  %% {Clock, V} = Map,
                                                  %% io:format("~nXXXX FINAL XXXX~nMap:::: ~p~nSize:::~p~n", [Clock, length(V)]),
-                                                 {riak_dt_tsmap:value(Map), model_value(Model)}
+                                                 {riak_dt_map:value(Map), model_value(Model)}
                                          end,
                 aggregate(command_names(Cmds),
                           pretty_commands(?MODULE,Cmds, {H,S,Res},
@@ -285,7 +285,7 @@ replicas_ready(#state{replicas=Replicas, n=N}) ->
 
 post_all({_, Map, Model}, Cmd) ->
     %% What matters is that both types have the exact same results.
-    case lists:sort(riak_dt_tsmap:value(Map)) == lists:sort(model_value(Model)) of
+    case lists:sort(riak_dt_map:value(Map)) == lists:sort(model_value(Model)) of
         true ->
             true;
         _ ->
@@ -299,7 +299,7 @@ get(Replica, ReplicaData) ->
     case lists:keyfind(Replica, 1, ReplicaData) of
         {Replica, Map, Model} ->
             {Map, Model};
-        false -> {riak_dt_tsmap:new(), model_new()}
+        false -> {riak_dt_map:new(), model_new()}
     end.
 
 
