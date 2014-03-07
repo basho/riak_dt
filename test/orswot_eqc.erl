@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% orswot_statem: Try and catch that merge bug I introduced.
+%% orswot_eqc: Try and catch bugs crdt_statem could not.
 %%
 %% TODO DVV disabled? Get, interleave writes, Put
 %% Copyright (c) 2007-2012 Basho Technologies, Inc.  All Rights Reserved.
@@ -105,7 +105,7 @@ add_args(#state{replicas=Replicas, replica_data=ReplicaData}) ->
     [
      oneof(['X', 'Y', 'Z']), %% a new value
      elements(Replicas), % The replica
-     ReplicaData %% The existing vnode data
+     ReplicaData %% The existing replica data
     ].
 
 %% Add a value to the set
@@ -157,8 +157,6 @@ ignore_preconerror_remove(Value, Actor, Set, Mod) ->
     end.
 
 remove_next(S=#state{replica_data=ReplicaData, adds=Adds}, Res, [Add, _]) ->
-    %% The state data is prepend only, it grows and grows, but it's based on older state
-    %% Newest at the front.
     S#state{replica_data=[Res | ReplicaData], adds=lists:delete(Add, Adds)}.
 
 remove_post(_S, _Args, Res) ->

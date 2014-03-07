@@ -107,7 +107,7 @@
 %% a minimal clock is just the dots for the element, each dot being an
 %% actor and event counter for when the element was added.
 -type minimal_clock() :: [dot()].
--type dot() :: {actor(), Count::pos_integer()}.
+-type dot() :: riak_dt:dot().
 -type member() :: term().
 
 -type precondition_error() :: {error, {precondition ,{not_present, member()}}}.
@@ -126,27 +126,10 @@ value(size, ORset) ->
 value({contains, Elem}, ORset) ->
     lists:member(Elem, value(ORset)).
 
--spec update(orswot_op(), actor() | dot(), orswot()) -> {ok, orswot()} |
-                                                precondition_error().
 %% @doc take a list of Set operations and apply them to the set.
 %% NOTE: either _all_ are applied, or _none_ are.
-update({update, Ops}, Dot, ORSet) when is_tuple(Dot) ->
-    apply_ops(lists:sort(Ops), Dot, ORSet);
-update({add, Elem}, Dot, ORSet)  when is_tuple(Dot) ->
-    {ok, add_elem(Dot, ORSet, Elem)};
-update({remove, Elem}, Dot, ORSet)  when is_tuple(Dot) ->
-    {_Clock, Entries} = ORSet,
-    remove_elem(orddict:find(Elem, Entries), Elem, ORSet);
-update({add_all, Elems}, Dot, ORSet)  when is_tuple(Dot) ->
-    ORSet2 = lists:foldl(fun(E, S) ->
-                                 add_elem(Dot, S, E) end,
-                         ORSet,
-                         Elems),
-    {ok, ORSet2};
-update({remove_all, Elems}, Dot, ORSet) when is_tuple(Dot) ->
-    remove_all(Elems, Dot, ORSet);
-
-%% Not nested operations
+-spec update(orswot_op(), actor() | dot(), orswot()) -> {ok, orswot()} |
+                                                precondition_error().
 update({update, Ops}, Actor, ORSet) ->
     apply_ops(lists:sort(Ops), Actor, ORSet);
 update({add, Elem}, Actor, ORSet) ->
@@ -167,15 +150,8 @@ update({remove_all, Elems}, Actor, ORSet) ->
     remove_all(Elems, Actor, ORSet).
 
 
-apply_ops([], Dot, ORSet)  when is_tuple(Dot) ->
-    {ok, ORSet};
-apply_ops([Op | Rest], Dot, ORSet) when is_tuple(Dot) ->
-    case update(Op, Dot, ORSet) of
-        {ok, ORSet2} ->
-            apply_ops(Rest, Dot, ORSet2);
-        Error ->
-            Error
-    end;
+-spec apply_ops([orswot_op], actor() | dot(), orswot()) ->
+                       {ok, orswot()} | precondition_error().
 apply_ops([], _Actor, ORSet) ->
     {ok, ORSet};
 apply_ops([Op | Rest], Actor, ORSet) ->

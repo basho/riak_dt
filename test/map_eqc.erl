@@ -2,7 +2,6 @@
 %%
 %% map_eqc: Drive out the merge bugs the other statem couldn't
 %%
-%% TODO DVV disabled? Get, interleave writes, Put
 %% Copyright (c) 2007-2012 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
@@ -38,11 +37,8 @@
                replica_data=[] :: [{ActorId :: binary(),
                                   riak_dt_map:map(),
                                   map_model()}],
-               %% The data, duplicated values for replicas
-               %% Newest at the head of the list.
-               %% Prepend only data 'cos symbolic / dynamic state.
                n=0 :: pos_integer(), %% Generated number of replicas
-               counter=0 :: pos_integer(), %% a unique tag per add
+               counter=1 :: pos_integer(), %% a unique tag per add
                adds=[] :: [{ActorId :: binary(), atom()}] %% things that have been added
               }).
 
@@ -71,22 +67,24 @@ initial_state() ->
 
 %% ------ Grouped operator: set_nr
 %% Only set N if N has not been set (ie run once, as the first command)
-set_nr_pre(#state{n=N}) ->
+set_n_pre(#state{n=N}) ->
      N == 0.
 
-set_nr_args(_S) ->
+%% Choose how many replicas to have in the system
+set_n_args(_S) ->
     [choose(2, 10)].
 
-set_nr(_) ->
+set_n(_) ->
     %% Command args used for next state only
     ok.
 
-set_nr_next(S, _V, [N]) ->
+set_n_next(S, _V, [N]) ->
     S#state{n=N}.
 
 %% ------ Grouped operator: make_ring
-%% Generate a bunch of replicas,
-%% only runs until enough are generated
+%%
+%% Generate a bunch of replicas, only runs if N is set, and until
+%% "enough" are generated (N*2) is more than enough.
 make_ring_pre(#state{replicas=Replicas, n=N}) ->
     N > 0 andalso length(Replicas) < N * 2.
 
@@ -104,18 +102,23 @@ make_ring_next(S=#state{replicas=Replicas}, _V, [_, NewReplicas0]) ->
 
 %% ------ Grouped operator: add
 %% Add a new field
+
 add_pre(S) ->
     replicas_ready(S).
 
 add_args(#state{replicas=Replicas, replica_data=ReplicaData, counter=Cnt}) ->
     [
-     %% a new field (too broad?)
+     %% a new field
      gen_field(),
      elements(Replicas), % The replica
      Cnt,
      ReplicaData %% The existing vnode data
     ].
 
+%% Keep the number of possible field names down to a minimum. The
+%% smaller state space makes EQC more likely to find bugs since there
+%% will be more action on the fields. Learned this from
+%% crdt_statem_eqc having to large a state space and missing bugs.
 gen_field() ->
     {oneof(['X,', 'Y', 'Z']),
      oneof([
@@ -137,17 +140,15 @@ add(Field, Actor, Cnt, ReplicaData) ->
     {Actor, Map2, Model2}.
 
 add_next(S=#state{replica_data=ReplicaData, adds=Adds, counter=Cnt}, Res, [Field, Actor, _, _]) ->
-    %% The state data is prepend only, it grows and grows, but it's based on older state
-    %% Newest at the front.
     S#state{replica_data=[Res | ReplicaData], adds=[{Actor, Field} | Adds], counter=Cnt+1}.
 
 add_post(_S, _Args, Res) ->
     post_all(Res, add).
 
 %% ------ Grouped operator: remove
+
 %% remove, but only something that has been added already
 remove_pre(S=#state{adds=Adds}) ->
-    %% Only do an update if you already did a get
     replicas_ready(S) andalso Adds /= [].
 
 remove_args(#state{adds=Adds, replica_data=ReplicaData}) ->
@@ -165,21 +166,11 @@ remove({Replica, Field}, ReplicaData) ->
     %% guarantee a merge from another replica hasn't led to the
     %% Field being removed already, so ignore precon errors (they
     %% don't change state)
-    Map2 = ignore_preconerror_remove(Field, Replica, Map),
+    {ok, Map2} = ignore_precon_error(riak_dt_map:update({update, [{remove, Field}]}, Replica, Map), Map),
     Model2 = model_remove_field(Field, Model),
     {Replica, Map2, Model2}.
 
-ignore_preconerror_remove(Field, Actor, Map) ->
-    case riak_dt_map:update({update, [{remove, Field}]}, Actor, Map) of
-        {ok, Map2} ->
-            Map2;
-        _ ->
-            Map
-    end.
-
 remove_next(S=#state{replica_data=ReplicaData, adds=Adds}, Res, [Add, _]) ->
-    %% The state data is prepend only, it grows and grows, but it's based on older state
-    %% Newest at the front.
     S#state{replica_data=[Res | ReplicaData], adds=lists:delete(Add, Adds)}.
 
 remove_post(_S, _Args, Res) ->
@@ -193,7 +184,7 @@ replicate_pre(S=#state{replica_data=ReplicaData}) ->
 replicate_args(#state{replicas=Replicas, replica_data=ReplicaData}) ->
     [
      elements(Replicas), %% Replicate from
-     elements(Replicas), %% Replicate too
+     elements(Replicas), %% Replicate to
      ReplicaData
     ].
 
@@ -219,8 +210,8 @@ replicate_post(_S, _Args, Res) ->
 
 %% ------ Grouped operator: update
 %% Update a Field in the Map
-update_pre(S=#state{replica_data=ReplicaData}) ->
-    replicas_ready(S) andalso ReplicaData /= [].
+update_pre(S) ->
+    replicas_ready(S).
 
 update_args(#state{replicas=Replicas, replica_data=ReplicaData, counter=Cnt}) ->
     [
@@ -236,6 +227,7 @@ update({Field, Op}, Replica, ReplicaData, Cnt) ->
     {ok, Model} = model_update_field(Field, Op, Replica, Cnt, Model0),
     {Replica, Map, Model}.
 
+%% precondition errors don't change the state of a map
 ignore_precon_error({ok, NewMap}, _) ->
     {ok, NewMap};
 ignore_precon_error(_, Map) ->
@@ -248,7 +240,7 @@ update_next(S=#state{replica_data=ReplicaData, counter=Cnt}, Res, _Args) ->
 update_post(_S, _Args, Res) ->
     post_all(Res, update).
 
-%% Tests the property that an ORSWOT is equivalent to an ORSet
+%% Tests the property that an Map is equivalent to the Map Model
 prop_merge() ->
     ?FORALL(Cmds, commands(?MODULE),
             begin
@@ -261,13 +253,10 @@ prop_merge() ->
                                                  %% Get ALL actor's values
                                                  {Map, Model} = lists:foldl(fun(Actor, {M, Mo}) ->
                                                                                     {M1, Mo1} = get(Actor, ReplicaData),
-                                                                                    %% io:format("~nXXXX DUMP XXXX~nMap:::: ~p~nModel:::: ~p~n", [M1, Mo1]),
                                                                                     {riak_dt_map:merge(M, M1),
                                                                                      model_merge(Mo, Mo1)} end,
                                                                             {riak_dt_map:new(), model_new()},
                                                                             Replicas),
-                                                 %% {Clock, V} = Map,
-                                                 %% io:format("~nXXXX FINAL XXXX~nMap:::: ~p~nSize:::~p~n", [Clock, length(V)]),
                                                  {riak_dt_map:value(Map), model_value(Model)}
                                          end,
                 aggregate(command_names(Cmds),
@@ -294,7 +283,7 @@ post_all({_, Map, Model}, Cmd) ->
 
 
 %% if a replica does not yet have replica data, return `new()` for the
-%% ORSWOT and ORSet
+%% Map and Model
 get(Replica, ReplicaData) ->
     case lists:keyfind(Replica, 1, ReplicaData) of
         {Replica, Map, Model} ->
@@ -310,15 +299,6 @@ model_new() ->
     {sets:new(), sets:new()}.
 
 model_add_field({_Name, Type}=Field, Cnt, {Adds, Removes}) ->
-    %% Adding a field that is already present merges with the field
-%%    InMap = sets:subtract(Adds, Removes),
-    %% CRDT = lists:foldl(fun({{FName, FType}, Value, _X}, Acc) when FName == Name,
-    %%                                                               FType == Type ->
-    %%                            Type:merge(Acc, Value);
-    %%                       (_, Acc) -> Acc
-    %%                    end,
-    %%                    Type:new(),
-    %%                    sets:to_list(InMap)),
     {ok, {sets:add_element({Field, Type:new(), Cnt}, Adds), Removes}}.
 
 model_update_field({Name, Type}=Field, Op, Actor, Cnt, {Adds, Removes}=Model) ->

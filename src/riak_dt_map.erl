@@ -24,7 +24,7 @@
 %% same tombstone-less, Observed Remove semantics as `riak_dt_orswot'.
 %% A Map is set of `Field's a `Field' is a two-tuple of:
 %% `{Name::binary(), CRDTModule::module()}' where the second element
-%% is the name of a crdt module that confirms to the `riak_dt'
+%% is the name of a crdt module that conforms to the `riak_dt'
 %% behaviour. CRDTs stored inside the Map will have their `update/3'
 %% function called, but the second argument will be a `riak_dt:dot()',
 %% so that they share the causal context of the map, even when fields
@@ -37,9 +37,9 @@
 %% elements in the set for that field are merged, updated, and
 %% replaced with a new `dot' for the update event. This means that in
 %% a divergent Map with many concurrent updates, a merged map will
-%% have duplicate entries for any update fields until and update event
-%% occurs. There is a paper on this implementation forthcoming at
-%% PaPEC 2014, we will provide a reference when we have one.
+%% have duplicate entries for any updated fields until an update event
+%% occurs for that field, unifying the divergent field into a single
+%% field.
 %%
 %% Attempting to remove a `field' that is not present in the map will
 %% lead to a precondition error. An operation on a field value that
@@ -72,11 +72,9 @@
          init_state/0, gen_field/0, generate/0, size/1]).
 -endif.
 
-
 -export_type([map/0, binary_map/0, map_op/0]).
 
 -type binary_map() :: binary(). %% A binary that from_binary/1 will accept
-
 -type map() :: {riak_dt_vclock:vclock(), entries()}.
 -type entries() :: ordsets:ordset(entry()).
 -type entry() :: {Field :: field(), CRDT :: crdt(), Tag :: riak_dt:dot()}.
@@ -152,10 +150,7 @@ value(_, Map) ->
 update({update, Ops}, Dot, {Clock, Values}) when is_tuple(Dot) ->
     NewClock = riak_dt_vclock:merge([[Dot], Clock]),
     apply_ops(Ops, Dot, NewClock, Values);
-update({update, [{remove, _F}]=Ops}, Actor, {Clock, Values}) ->
-    NewClock = riak_dt_vclock:increment(Actor, Clock),
-    Dot = {Actor, riak_dt_vclock:get_counter(Actor, NewClock)},
-    apply_ops(Ops, Dot, NewClock, Values);
+%% Yes, the Map increments the vlcock on field removals!
 update({update, Ops}, Actor, {Clock, Values}) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
     Dot = {Actor, riak_dt_vclock:get_counter(Actor, NewClock)},
@@ -175,14 +170,12 @@ apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, Clock, Values) ->
                                                 %% be superseded by
                                                 %% the new update
                                                 {Type:merge(Acc, Value),
-                                                 ordsets:del_element(E, ValuesAcc)};
-                                           (_, Acc) -> Acc
+                                                 ordsets:del_element(E, ValuesAcc)}
                                         end,
                                         {Type:new(), Values},
                                         FieldInMap),
     case Type:update(Op, Dot, CRDT) of
         {ok, Updated} ->
-            %% ¿¿Remove? all the values you merged with?
             NewValues = ordsets:add_element({Field, Updated, Dot}, TrimmedValues),
             apply_ops(Rest, Dot, Clock, NewValues);
         Error ->
@@ -216,46 +209,53 @@ apply_ops([{add, {_Name, Mod}=Field} | Rest], Dot, Clock, Values) ->
 %% @Doc merge two `map()'s.  and then a pairwise merge on all values
 %% in the value list.  This is the LUB function.
 -spec merge(map(), map()) -> map().
-merge({LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
-    Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
-
-    RHS0 = ordsets:to_list(RHSEntries),
-
-    {Entries0, RHSUnique} = lists:foldl(fun({_F, _CRDT, Tag}=E, {Acc, RHS}) ->
-                                                case lists:keytake(Tag, 3, RHS) of
-                                                    {value, E, RHS1} ->
-                                                        %% same in bolth
-                                                        {ordsets:add_element(E, Acc), RHS1};
-                                                    false ->
-                                                        %% RHS does not have this field, should be dropped, or kept?
-                                                        case riak_dt_vclock:descends(RHSClock, [Tag]) of
-                                                            true ->
-                                                                %% RHS has seen it, and removed it
-                                                                {Acc, RHS};
+merge({LHSClock, LHSEntries}=LHMap, {RHSClock, RHSEntries}=RHMap) ->
+    %% As the clock is incremented for removes as well as adds we can
+    %% optimise here if one clock dominates the other, pick that Map
+    case {riak_dt_vclock:dominates(LHSClock, RHSClock),
+          riak_dt_vclock:dominates(RHSClock, LHSClock)} of
+        {true, false} -> LHMap;
+        {false, true} -> RHMap;
+        _ ->
+            Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
+            {Entries0, RHSUnique} = lists:foldl(fun({_F, _CRDT, Tag}=E, {Acc, RHS}) ->
+                                                        case lists:keytake(Tag, 3, RHS) of
+                                                            {value, E, RHS1} ->
+                                                                %% same in bolth
+                                                                {ordsets:add_element(E, Acc), RHS1};
                                                             false ->
-                                                                %% RHS not seen it yet, keep it
-                                                                {ordsets:add_element(E, Acc), RHS}
+                                                                %% RHS does not have this field, should be dropped, or kept?
+                                                                case riak_dt_vclock:descends(RHSClock, [Tag]) of
+                                                                    true ->
+                                                                        %% RHS has seen it, and removed it
+                                                                        {Acc, RHS};
+                                                                    false ->
+                                                                        %% RHS not seen it yet, keep it
+                                                                        {ordsets:add_element(E, Acc), RHS}
+                                                                end
                                                         end
-                                                end
-                                        end,
-                                        {ordsets:new(), RHS0},
-                                        LHSEntries),
-    %% What about the things left in RHS, should they be kept?
-    Entries1 = lists:foldl(fun({_F, _CRDT, Tag}=E, Acc) ->
-                                   case riak_dt_vclock:descends(LHSClock, [Tag]) of
-                                       true ->
-                                           %% LHS has seen, and removed this
-                                           Acc;
-                                       false ->
-                                           %% Not in LHS, should be kept
-                                           ordsets:add_element(E, Acc)
-                                   end
-                           end,
-                           ordsets:new(),
-                           RHSUnique),
+                                                end,
+                                                {ordsets:new(), RHSEntries},
+                                                LHSEntries),
+            %% What about the things left in RHS, should they be kept?
+            Entries1 = lists:foldl(fun({_F, _CRDT, Tag}=E, Acc) ->
+                                           case riak_dt_vclock:descends(LHSClock, [Tag]) of
+                                               true ->
+                                                   %% LHS has seen, and removed this
+                                                   Acc;
+                                               false ->
+                                                   %% Not in or seen
+                                                   %% by LHS, should
+                                                   %% be kept
+                                                   ordsets:add_element(E, Acc)
+                                           end
+                                   end,
+                                   ordsets:new(),
+                                   RHSUnique),
 
-    Entries = ordsets:union(Entries0, Entries1),
-    {Clock, Entries}.
+            Entries = ordsets:union(Entries0, Entries1),
+            {Clock, Entries}
+    end.
 
 %% @Doc compare two `map()'s for equality of structure Both schemas
 %% and value list must be equal. Performs a pariwise equals for all
@@ -281,13 +281,17 @@ pairwise_equals(_, _) ->
     false.
 
 %% @Doc a "fragment" of the Map that can be used for precondition
-%% operations. The schema is just the active Key Set The values are
-%% just those values that are present We use either the values
-%% precondition_context or the whole CRDT
+%% operations. Is the whole map right now :(
 -spec precondition_context(map()) -> map().
 precondition_context(Map) ->
     Map.
 
+%% @Doc stats on internal state of Map.
+%% A proplist of `{StatName :: atom(), Value :: integer()}'. Stats exposed are:
+%% `actor_count': The number of actors in the clock for the Map.
+%% `field_count': The total number of fields in the Map (including divergent field entries).
+%% `duplication': The number of duplicate entries in the Map across all fields.
+%%                basically `field_count' - ( unique fields)
 -spec stats(map()) -> [{atom(), integer()}].
 stats(Map) ->
     [ {S, stat(S, Map)} || S <- [actor_count, field_count, duplication]].
@@ -318,6 +322,7 @@ stat(_,_) -> undefined.
 %% (`false')
 %%
 %% @see `from_binary/1'
+-spec to_binary(map()) -> binary_map().
 to_binary(Map) ->
     Opts = case application:get_env(riak_dt, binary_compression, 1) of
                true -> [compressed];
@@ -330,6 +335,7 @@ to_binary(Map) ->
 %% `to_binary/1' will return the original `map()'.
 %%
 %% @see `to_binary/1'
+-spec from_binary(binary_map()) -> map().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
     binary_to_term(B).
 
@@ -373,11 +379,11 @@ remfield_test() ->
     ?assertEqual([{Field, [2]}], value(AB)).
 
 %% Bug found by EQC, not dropping dots in merge when an element is
-%% present in both Sets leads to removed items remaining after merge.
+%% present in both Maos leads to removed items remaining after merge.
 present_but_removed_test() ->
     %% Add Z to A
     {ok, A} = update({update, [{add, {'Z', riak_dt_lwwreg}}]}, a, new()),
-    %% Replicate it to C so A has 'Z'->{e, 1}
+    %% Replicate it to C so A has 'Z'->{a, 1}
     C = A,
     %% Remove Z from A
     {ok, A2} = update({update, [{remove, {'Z', riak_dt_lwwreg}}]}, a, A),
@@ -437,7 +443,8 @@ eqc_value_test_() ->
 %% crdt_statem_eqc callbacks
 %% ===================================
 size(Map) ->
-    %% How big is a Map? Maybe number of fields and depth matter? But then the number of fields in sub maps too?
+    %% How big is a Map? Maybe number of fields and depth matter? But
+    %% then the number of fields in sub maps too?
     byte_size(term_to_binary(Map)) div 10.
 
 generate() ->
