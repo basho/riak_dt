@@ -153,7 +153,8 @@ stat(waste_pct, ORSet) ->
     end;
 stat(_, _) -> undefined.
 
--define(TAG, 76).
+-include("riak_dt_tags.hrl").
+-define(TAG, ?DT_ORSET_TAG).
 -define(V1_VERS, 1).
 
 -spec to_binary(orset()) -> binary_orset().

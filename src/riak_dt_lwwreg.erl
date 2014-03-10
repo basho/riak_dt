@@ -122,8 +122,8 @@ stat(value_size, {Value,_}=_LWW) ->
     erlang:external_size(Value);
 stat(_, _) -> undefined.
 
-
--define(TAG, 72).
+-include("riak_dt_tags.hrl").
+-define(TAG, ?DT_LWWREG_TAG).
 -define(V1_VERS, 1).
 
 %% @doc Encode an effecient binary representation of an `lwwreg()'
