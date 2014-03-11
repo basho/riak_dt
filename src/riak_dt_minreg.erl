@@ -89,7 +89,8 @@ min_with_large_undefined(X, Y) ->
 equal(Val1, Val2) ->
     Val1 =:= Val2.
 
--define(TAG, 82).
+-include("riak_dt_tags.hrl").
+-define(TAG, ?DT_MINREG_TAG).
 -define(V1_VERS, 1).
 
 % TODO: is 32 bits of integer enough? Do we require more bits?

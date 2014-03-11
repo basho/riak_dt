@@ -165,7 +165,8 @@ lww(A,B) ->
 equal(Val1, Val2) ->
     Val1 =:= Val2.
 
--define(TAG, 83).
+-include("riak_dt_tags.hrl").
+-define(TAG, ?DT_RANGEREG_TAG).
 -define(V1_VERS, 1).
 
 % TODO: compression?

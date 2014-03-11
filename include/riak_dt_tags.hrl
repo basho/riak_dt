@@ -12,25 +12,28 @@
 %%% 
 %%% Then use ?TAG in the to_/from_binary kerfuffle.
 
-%% Flags
+%% Flags: [73,74,79,80]
 -define(DT_ENABLE_FLAG_TAG, 79).
 -define(DT_DISABLE_FLAG_TAG, 80).
 -define(DT_OD_FLAG_TAG, 73).
 -define(DT_OE_FLAG_TAG, 74).
 
-%% Registers
+%% Registers: [72] + [90-99]
 -define(DT_LWWREG_TAG, 72).
+-define(DT_MAXREG_TAG, 90).
+-define(DT_MINREG_TAG, 91).
+-define(DT_RANGEREG_TAG, 92).
 
-%% Counters
+%% Counters: [70,71]
 -define(DT_GCOUNTER_TAG, 70).
 -define(DT_PNCOUNTER_TAG, 71).
 
-%% Sets
+%% Sets: [75,76,82]
 -define(DT_GSET_TAG, 82).
 -define(DT_ORSET_TAG, 76).
 -define(DT_ORSWOT_TAG, 75).
 
-%% Maps
+%% Maps: [77]
 -define(DT_MAP_TAG, 77).
 
-%% Other
+%% Other:
