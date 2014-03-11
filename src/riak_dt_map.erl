@@ -44,12 +44,12 @@
 
 %% API
 -export([new/0, value/1, value/2, update/3, merge/2,
-         equal/2, to_binary/1, from_binary/1, precondition_context/1]).
+         equal/2, to_binary/1, from_binary/1, precondition_context/1, stats/1, stat/2]).
 
 %% EQC API
 -ifdef(EQC).
 -export([gen_op/0, update_expected/3, eqc_state_value/1,
-         init_state/0, gen_field/0]).
+         init_state/0, gen_field/0, generate/0, size/1]).
 -endif.
 
 -export_type([map/0, binary_map/0, map_op/0]).
@@ -60,7 +60,8 @@
 -type crdt_mod() :: riak_dt_pncounter | riak_dt_lwwreg |
                     riak_dt_od_flag |
                     riak_dt_map | riak_dt_orswot.
--type valuelist() :: [{field(), {minimal_clock(), crdt()}}].
+-type valuelist() :: [{field(), entry()}].
+-type entry() :: {minimal_clock(), crdt()}.
 
 %% a minimal clock is just the dots for the element, each dot being an
 %% actor and event counter for when the element was added.
@@ -121,9 +122,14 @@ value(keyset, {_Clock, Values}) ->
 value({contains, Field}, {_Clock, Values}) ->
     lists:member(Field, keys(Values)).
 
+%% @private
+-spec get_crdt({ok, entry()} | error, crdt_mod()) -> crdt() | error.
 get_crdt(Entry, Mod) ->
     get_crdt(Entry, Mod, false).
 
+%% @private
+-spec get_crdt({ok, entry()} | error, crdt_mod(), boolean()) ->
+                      crdt() | error.
 get_crdt({ok, {_Dot, Value}}, _Mod, _) ->
     Value;
 get_crdt(error, _Mod, false) ->
@@ -131,6 +137,7 @@ get_crdt(error, _Mod, false) ->
 get_crdt(error, Mod, true) ->
     Mod:new().
 
+-spec keys(orddict:orddict()) -> [field()] | [].
 keys(Values) ->
     orddict:fetch_keys(Values).
 
@@ -158,7 +165,10 @@ keys(Values) ->
 update({update, Ops}, Actor, {Clock, Values}) ->
     apply_ops(Ops, Actor, Clock, Values).
 
-%% @Private
+%% @private
+-spec apply_ops([map_field_update() | map_field_op()], riak_dt:actor(),
+                riak_dt_vclock:vclock(), orddict:orddict()) ->
+                       {ok, map()} | precondition_error().
 apply_ops([], _Actor, Clock, Values) ->
     {ok, {Clock, Values}};
 apply_ops([{update, {_Name, Mod}=Field, Op} | Rest], Actor, Clock, Values) ->
@@ -207,6 +217,9 @@ merge({LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
 
 %% @doc check if each element in `Entries' should be in the merged
 %% set.
+-spec merge_disjoint_fields(set(), valuelist(),
+                            riak_dt_vclock:vclock(), valuelist()) ->
+                                   valuelist().
 merge_disjoint_fields(Fields, Entries, SetClock, Accumulator) ->
     sets:fold(fun(Field, Acc) ->
                       {Dots, Value} = orddict:fetch(Field, Entries),
@@ -225,6 +238,7 @@ merge_disjoint_fields(Fields, Entries, SetClock, Accumulator) ->
 
 %% @doc merges the minimal clocks and values for the common entries in
 %% both sets.
+-spec merge_common_fields(set(), valuelist(), valuelist()) -> valuelist().
 merge_common_fields(CommonFields, Entries1, Entries2) ->
     sets:fold(fun({_Name, Mod}=Field, Acc) ->
                       {Dots1, V1} = orddict:fetch(Field, Entries1),
@@ -246,11 +260,13 @@ equal({Clock1, Values1}, {Clock2, Values2}) ->
 
 %% @Private Note, only called when we know that 2 sets of fields are
 %% equal. Both dicts therefore have the same set of keys.
+-spec pairwise_equals(valuelist(), valuelist()) -> boolean().
 pairwise_equals(Values1, Values2) ->
     short_circuit_equals(orddict:to_list(Values1), Values2).
 
 %% @Private
 %% Compare each value. Return false as soon as any pair are not equal.
+-spec short_circuit_equals(valuelist(), valuelist()) -> boolean().
 short_circuit_equals([], _Values2) ->
     true;
 short_circuit_equals([{{_Name, Mod}=Field, {Dot1,Val1}} | Rest], Values2) ->
@@ -270,18 +286,50 @@ short_circuit_equals([{{_Name, Mod}=Field, {Dot1,Val1}} | Rest], Values2) ->
 precondition_context(Map) ->
     Map.
 
--define(TAG, 77).
+-spec stats(map()) -> [{atom(), integer()}].
+stats(Map) ->
+    [ {S, stat(S, Map)} || S <- [actor_count, field_count, max_dot_length]].
+
+-spec stat(atom(), map()) -> number() | undefined.
+stat(actor_count, {Clock, _}) ->
+    length(Clock);
+stat(field_count, {_, Fields}) ->
+    length(Fields);
+stat(max_dot_length, {_, Fields}) ->
+    orddict:fold(fun(_K, {Dots, _}, Acc) ->
+                         max(length(Dots), Acc)
+                 end, 0, Fields);
+stat(_,_) -> undefined.
+
+-include("riak_dt_tags.hrl").
+-define(TAG, ?DT_MAP_TAG).
 -define(V1_VERS, 1).
 
+%% @doc returns a binary representation of the provided `map()'. The
+%% resulting binary is tagged and versioned for ease of future
+%% upgrade. Calling `from_binary/1' with the result of this function
+%% will return the original map.  Use the application env var
+%% `binary_compression' to turn t2b compression on (`true') and off
+%% (`false')
+%%
+%% @see `from_binary/1'
 -spec to_binary(map()) -> binary_map().
 to_binary(Map) ->
-    %% @TODO something smarter (recurse down valulist calling to_binary?)
-    <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(Map))/binary>>.
+    Opts = case application:get_env(riak_dt, binary_compression, 1) of
+               true -> [compressed];
+               N when N >= 0, N =< 9 -> [{compressed, N}];
+               _ -> []
+           end,
+    <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(Map, Opts))/binary>>.
 
+%% @doc When the argument is a `binary_map()' produced by
+%% `to_binary/1' will return the original `map()'.
+%%
+%% @see `to_binary/1'
 -spec from_binary(binary_map()) -> map().
-from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
-    %% @TODO something smarter
-    binary_to_term(Bin).
+from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
+    binary_to_term(B).
+
 
 %% ===================================================================
 %% EUnit tests
@@ -289,12 +337,36 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
 -ifdef(TEST).
 
 -ifdef(EQC).
+-define(NUMTESTS, 1000).
+
+bin_roundtrip_test_() ->
+    crdt_statem_eqc:run_binary_rt(?MODULE, ?NUMTESTS).
+
 eqc_value_test_() ->
-    crdt_statem_eqc:run(?MODULE, 1000).
+    crdt_statem_eqc:run(?MODULE, ?NUMTESTS).
 
 %% ===================================
 %% crdt_statem_eqc callbacks
 %% ===================================
+size(Map) ->
+    byte_size(term_to_binary(Map)) div 10.
+
+generate() ->
+        ?LET({Ops, Actors}, {non_empty(list(gen_op())), non_empty(list(bitstring(16*8)))},
+         lists:foldl(fun(Op, Map) ->
+                             Actor = case length(Actors) of
+                                         1 -> hd(Actors);
+                                         _ -> lists:nth(crypto:rand_uniform(1, length(Actors)), Actors)
+                                     end,
+                             case riak_dt_map:update(Op, Actor, Map) of
+                                 {ok, M} -> M;
+                                 _ -> Map
+                             end
+                     end,
+                     riak_dt_map:new(),
+                     Ops)).
+
+
 gen_op() ->
     ?LET(Ops, non_empty(list(gen_update())), {update, Ops}).
 
@@ -304,7 +376,7 @@ gen_update() ->
                 {update, Field, gen_field_op(Field)}])).
 
 gen_field() ->
-    {binary(), oneof([riak_dt_pncounter, riak_dt_orswot,
+    {non_empty(binary()), oneof([riak_dt_pncounter, riak_dt_orswot,
                       riak_dt_lwwreg,
                       riak_dt_map])}.
 
@@ -421,5 +493,22 @@ query_test() ->
 
     ?assertEqual(33, value({get, {c, riak_dt_pncounter}}, Map3)),
     ?assertEqual({lww_val, 77}, value({get_crdt, {l, riak_dt_lwwreg}}, Map3)).
+
+
+stat_test() ->
+    Map = new(),
+    {ok, Map1} = update({update, [{add, {c, riak_dt_pncounter}},
+                                  {add, {s, riak_dt_orswot}},
+                                  {add, {m, riak_dt_map}},
+                                  {add, {l, riak_dt_lwwreg}},
+                                  {add, {l2, riak_dt_lwwreg}}]}, a1, Map),
+    {ok, Map2} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"foo">>, 1}}]}, a2, Map1),
+    {ok, Map3} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"bar">>, 2}}]}, a3, Map1),
+    Map4 = merge(Map2, Map3),
+    ?assertEqual([{actor_count, 0}, {field_count, 0}, {max_dot_length, 0}], stats(Map)),
+    ?assertEqual(3, stat(actor_count, Map4)),
+    ?assertEqual(5, stat(field_count, Map4)),
+    ?assertEqual(2, stat(max_dot_length, Map4)),
+    ?assertEqual(undefined, stat(waste_pct, Map4)).
 
 -endif.

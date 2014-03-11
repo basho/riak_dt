@@ -26,7 +26,7 @@
 
 %% API
 -export([new/0, value/1, update/3, merge/2, equal/2,
-         to_binary/1, from_binary/1, value/2, precondition_context/1]).
+         to_binary/1, from_binary/1, value/2, precondition_context/1, stats/1, stat/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -115,7 +115,46 @@ precondition_context(ORDict) ->
             end
         end, orddict:new(), ORDict).
 
--define(TAG, 76).
+-spec stats(orset()) -> [{atom(), number()}].
+stats(ORSet) ->
+    [ {S, stat(S, ORSet)} || S <- [element_count,
+                                   adds_count,
+                                   removes_count,
+                                   waste_pct] ].
+
+-spec stat(atom(), orset()) -> number() | undefined.
+stat(element_count, ORSet) ->
+    orddict:size(ORSet);
+stat(adds_count, ORSet) ->
+    orddict:fold(fun(_K, Tags, Acc0) ->
+                         lists:foldl(fun({_Tag, false}, Acc) -> Acc + 1;
+                                        (_, Acc) -> Acc end,
+                                     Acc0, Tags)
+                 end, 0, ORSet);
+stat(removes_count, ORSet) ->
+    orddict:fold(fun(_K, Tags, Acc0) ->
+                         lists:foldl(fun({_Tag, true}, Acc) -> Acc + 1;
+                                        (_, Acc) -> Acc end,
+                                     Acc0, Tags)
+                 end, 0, ORSet);
+stat(waste_pct, ORSet) ->
+    {Tags, Tombs} = orddict:fold(
+                      fun(_K, Tags, Acc0) ->
+                              lists:foldl(fun({_Tag, false}, {As, Rs}) ->
+                                                  {As + 1, Rs};
+                                             ({_Tag, true}, {As, Rs}) ->
+                                                  {As, Rs + 1}
+                                          end, Acc0, Tags)
+                      end, {0,0}, ORSet),
+    AllTags = Tags + Tombs,
+    case Tags of
+        0 -> 0;
+        _ ->  round(Tombs / AllTags * 100)
+    end;
+stat(_, _) -> undefined.
+
+-include("riak_dt_tags.hrl").
+-define(TAG, ?DT_ORSET_TAG).
 -define(V1_VERS, 1).
 
 -spec to_binary(orset()) -> binary_orset().
@@ -130,19 +169,23 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
 %% Private
 add_elem(Elem,Token,ORDict) ->
     case orddict:find(Elem, ORDict) of
-        {ok, Tokens} -> Tokens1 = orddict:store(Token, false, Tokens),
-                        {ok, orddict:store(Elem, Tokens1, ORDict)};
-        error        -> Tokens = orddict:store(Token, false, orddict:new()),
-                        {ok, orddict:store(Elem, Tokens, ORDict)}
+        {ok, Tokens} ->
+            Tokens1 = orddict:store(Token, false, Tokens),
+            {ok, orddict:store(Elem, Tokens1, ORDict)};
+        error ->
+            Tokens = orddict:store(Token, false, orddict:new()),
+            {ok, orddict:store(Elem, Tokens, ORDict)}
     end.
 
 remove_elem(Elem, ORDict) ->
     case orddict:find(Elem, ORDict) of
-        {ok, Tokens} -> Tokens1 = orddict:fold(fun(Token, _, Tokens0) ->
-                                orddict:store(Token, true, Tokens0)
-                            end, orddict:new(), Tokens),
-                        {ok, orddict:store(Elem, Tokens1, ORDict)};
-        error        -> {error, {precondition, {not_present, Elem}}}
+        {ok, Tokens} ->
+            Tokens1 = orddict:fold(fun(Token, _, Tokens0) ->
+                                           orddict:store(Token, true, Tokens0)
+                                   end, orddict:new(), Tokens),
+            {ok, orddict:store(Elem, Tokens1, ORDict)};
+        error ->
+            {error, {precondition, {not_present, Elem}}}
     end.
 
 
@@ -175,6 +218,21 @@ minimum_tokens(Tokens) ->
 %% EUnit tests
 %% ===================================================================
 -ifdef(TEST).
+stat_test() ->
+    Set = new(),
+    {ok, Set1} = update({add, <<"foo">>}, 1, Set),
+    {ok, Set2} = update({add, <<"foo">>}, 2, Set1),
+    {ok, Set3} = update({add, <<"bar">>}, 3, Set2),
+    {ok, Set4} = update({remove, <<"foo">>}, 1, Set3),
+    ?assertEqual([{element_count, 0},
+                  {adds_count, 0},
+                  {removes_count, 0},
+                  {waste_pct, 0}], stats(Set)),
+    %% Note this doesn't exclude things that are not all removed!
+    ?assertEqual(2, stat(element_count, Set4)),
+    ?assertEqual(1, stat(adds_count, Set4)),
+    ?assertEqual(2, stat(removes_count, Set4)),
+    ?assertEqual(67, stat(waste_pct, Set4)).
 
 -ifdef(EQC).
 eqc_value_test_() ->

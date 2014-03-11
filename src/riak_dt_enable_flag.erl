@@ -29,7 +29,7 @@
 
 -behaviour(riak_dt).
 
--export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1]).
+-export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1, stats/1, stat/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -40,31 +40,51 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--define(TAG, 79).
+-include("riak_dt_tags.hrl").
+-define(TAG, ?DT_ENABLE_FLAG_TAG).
 
+-export_type([enable_flag/0]).
+-opaque enable_flag() :: on | off.
+-type enable_flag_op() :: enable.
+
+-spec new() -> enable_flag().
 new() ->
     off.
 
+-spec value(enable_flag()) -> on | off.
 value(Flag) ->
     Flag.
 
+-spec value(term(), enable_flag()) -> on | off.
 value(_, Flag) ->
     Flag.
 
+-spec update(enable_flag_op(), riak_dt:actor(), enable_flag()) -> {ok, enable_flag()}.
 update(enable, _Actor, _Flag) ->
     {ok, on}.
 
+-spec merge(enable_flag(), enable_flag()) -> enable_flag().
 merge(FA, FB) ->
     flag_or(FA, FB).
 
+-spec equal(enable_flag(), enable_flag()) -> boolean().
 equal(FA,FB) ->
     FA =:= FB.
 
+-spec from_binary(binary()) -> enable_flag().
 from_binary(<<?TAG:7, 0:1>>) -> off;
 from_binary(<<?TAG:7, 1:1>>) -> on.
 
+-spec to_binary(enable_flag()) -> binary().
 to_binary(off) -> <<?TAG:7, 0:1>>;
 to_binary(on) -> <<?TAG:7, 1:1>>.
+
+-spec stats(enable_flag()) -> [{atom(), number()}].
+stats(_) -> [].
+
+-spec stat(atom(), enable_flag()) -> number() | undefined.
+stat(_, _) ->
+    undefined.
 
 %% priv
 flag_or(on, _) ->
@@ -134,4 +154,10 @@ merge_on_both_test() ->
     {ok, F1} = update(enable, 1, F0),
     ?assertEqual(on, merge(F1, F1)).
 
+stat_test() ->
+    F0 = new(),
+    {ok, F1} = update(enable, 1, F0),
+    ?assertEqual([], stats(F1)),
+    ?assertEqual(undefined, stat(actor_count, F1)),
+    ?assertEqual(undefined, stat(max_dot_length, F1)).
 -endif.

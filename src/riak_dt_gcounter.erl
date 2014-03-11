@@ -35,8 +35,8 @@
 %% @end
 
 -module(riak_dt_gcounter).
-
--export([new/0, new/2, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
+-behaviour(riak_dt).
+-export([new/0, new/2, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -60,7 +60,7 @@ new() ->
     orddict:new().
 
 %% @doc Create a `gcounter()' with an initial update
--spec new(term(), pos_integer()) -> gcounter().
+-spec new(riak_dt:actor(), pos_integer()) -> gcounter().
 new(Id, Count) when is_integer(Count), Count > 0 ->
     {ok, Cnt} = update({increment, Count}, Id, new()),
     Cnt.
@@ -103,7 +103,17 @@ equal(VA,VB) ->
 increment_by(Amount, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
     orddict:update_counter(Actor, Amount, GCnt).
 
--define(TAG, 70).
+-spec stats(gcounter()) -> [{atom(), number()}].
+stats(GCnt) ->
+    [{actor_count, stat(actor_count, GCnt)}].
+
+-spec stat(atom(), gcounter()) -> number() | undefined.
+stat(actor_count, GCnt) ->
+    length(GCnt);
+stat(_,_) -> undefined.
+
+-include("riak_dt_tags.hrl").
+-define(TAG, ?DT_GCOUNTER_TAG).
 -define(V1_VERS, 1).
 
 %% @doc Encode an effecient binary representation of a `gcounter()'
@@ -250,5 +260,14 @@ lots_of_actors_test() ->
     Bin = to_binary(GC),
     Decoded = from_binary(Bin),
     ?assert(equal(GC, Decoded)).
+
+stat_test() ->
+    GC0 = new(),
+    {ok, GC1} = update(increment, 1, GC0),
+    {ok, GC2} = update(increment, 2, GC1),
+    {ok, GC3} = update(increment, 3, GC2),
+    ?assertEqual([{actor_count, 3}], stats(GC3)),
+    ?assertEqual(3, stat(actor_count, GC3)),
+    ?assertEqual(undefined, stat(field_count, GC3)).
 
 -endif.

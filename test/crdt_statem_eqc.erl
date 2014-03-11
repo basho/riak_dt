@@ -39,6 +39,9 @@
 run(Module, Count) ->
     {atom_to_list(Module), {timeout, 120, [?_assert(prop_converge(Count, Module))]}}.
 
+run_binary_rt(Module, Count) ->
+    {atom_to_list(Module), {timeout, 120, [?_assert(prop_bin_roundtrip(Count, Module))]}}.
+
 %% Initialize the state
 initial_state() ->
     #state{}.
@@ -101,6 +104,32 @@ prop_converge(Mod) ->
                    conjunction([{res, equals(Res, ok)},
                                 {total, equals(sort(Mod, MergedVal), sort(Mod, ExpectedValue))}]))
             end).
+
+prop_bin_roundtrip(Count, Mod) ->
+    eqc:quickcheck(eqc:numtests(Count, ?QC_OUT(prop_bin_roundtrip(Mod)))).
+
+prop_bin_roundtrip(Mod) ->
+    ?FORALL(CRDT, Mod:generate(),
+            begin
+                Bin = Mod:to_binary(CRDT),
+                CRDT2= Mod:from_binary(Bin),
+                collect({range(Mod:size(CRDT)), range(bytes_smaller(Bin, term_to_binary(CRDT)))},
+                        ?WHENFAIL(
+                           begin
+                               io:format("Gen ~p~n", [CRDT]),
+                               io:format("Rountripped ~p~n", [CRDT2])
+                           end,
+                           Mod:equal(CRDT, CRDT2)))
+            end).
+
+bytes_smaller(Bin1, Bin2) ->
+   trunc(((byte_size(Bin2) - byte_size(Bin1)) / byte_size(Bin1)) *  100).
+
+range(0) ->
+    0;
+range(Value) ->
+    N = Value div 10,
+    {N * 10, (N +1) * 10}.
 
 merge_crdts(Mod, []) ->
     Mod:new();

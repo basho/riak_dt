@@ -29,7 +29,7 @@
 
 -behaviour(riak_dt).
 
--export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1]).
+-export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1, stats/1, stat/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -40,48 +40,50 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
-%% EQC generator
--ifdef(EQC).
-init_state() ->
-    on.
+-include("riak_dt_tags.hrl").
+-define(TAG, ?DT_DISABLE_FLAG_TAG).
 
-gen_op() ->
-    disable.
+-export_type([disable_flag/0]).
+-opaque disable_flag() :: on | off.
+-type disable_flag_op() :: disable.
 
-update_expected(_ID, disable, _Prev) ->
-    off;
-update_expected(_ID, _Op, Prev) ->
-    Prev.
-
-eqc_state_value(S) ->
-    S.
--endif.
-
--define(TAG, 80).
-
+-spec new() -> disable_flag().
 new() ->
     on.
 
+-spec value(disable_flag()) -> on | off.
 value(Flag) ->
     Flag.
 
+-spec value(term(), disable_flag()) -> on | off.
 value(_, Flag) ->
     Flag.
 
+-spec update(disable_flag_op(), riak_dt:actor(), disable_flag()) -> {ok, disable_flag()}.
 update(disable, _Actor, _Flag) ->
     {ok, off}.
 
+-spec merge(disable_flag(), disable_flag()) -> disable_flag().
 merge(FA, FB) ->
     flag_and(FA, FB).
 
+-spec equal(disable_flag(), disable_flag()) -> boolean().
 equal(FA,FB) ->
     FA =:= FB.
 
+-spec from_binary(binary()) -> disable_flag().
 from_binary(<<?TAG:7, 0:1>>) -> off;
 from_binary(<<?TAG:7, 1:1>>) -> on.
 
+-spec to_binary(disable_flag()) -> binary().
 to_binary(off) -> <<?TAG:7, 0:1>>;
 to_binary(on) -> <<?TAG:7, 1:1>>.
+
+-spec stats(disable_flag()) -> [{atom(), number()}].
+stats(_) -> [].
+
+-spec stat(atom(), disable_flag()) -> number() | undefined.
+stat(_, _) -> undefined.
 
 %% priv
 flag_and(on, on) ->
@@ -135,4 +137,28 @@ merge_on_both_test() ->
     {ok, F1} = update(disable, 1, F0),
     ?assertEqual(off, merge(F1, F1)).
 
+stat_test() ->
+    F0 = new(),
+    {ok, F1} = update(disable, 1, F0),
+    ?assertEqual([], stats(F1)),
+    ?assertEqual(undefined, stat(actor_count, F1)),
+    ?assertEqual(undefined, stat(max_dot_length, F1)).
+-endif.
+
+
+%% EQC generator
+-ifdef(EQC).
+init_state() ->
+    on.
+
+gen_op() ->
+    disable.
+
+update_expected(_ID, disable, _Prev) ->
+    off;
+update_expected(_ID, _Op, Prev) ->
+    Prev.
+
+eqc_state_value(S) ->
+    S.
 -endif.

@@ -64,6 +64,10 @@
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
+-define(QC_OUT(P),
+        eqc:on_output(fun(Str, Args) ->
+                              io:format(user, Str, Args) end, P)).
+-define(NUMTESTS, 1000).
 -endif.
 
 -ifdef(TEST).
@@ -74,17 +78,19 @@
 -export([new/0, value/1, value/2]).
 -export([update/3, merge/2, equal/2]).
 -export([to_binary/1, from_binary/1]).
--export([precondition_context/1]).
+-export([precondition_context/1, stats/1, stat/2]).
 
 %% EQC API
 -ifdef(EQC).
--export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0, generate/0]).
+-export([gen_op/0, update_expected/3, eqc_state_value/1]).
+-export([init_state/0, generate/0, size/1]).
+
 -endif.
 
 -export_type([orswot/0, orswot_op/0, binary_orswot/0]).
 
 -opaque orswot() :: {riak_dt_vclock:vclock(), entries()}.
--opaque binary_orswot() :: binary(). %% A binary that from_binary/1 will operate on.
+-type binary_orswot() :: binary(). %% A binary that from_binary/1 will operate on.
 
 -type orswot_op() ::  {add, member()} | {remove, member()} |
                       {add_all, [member()]} | {remove_all, [member()]} |
@@ -104,6 +110,8 @@
 -type dot() :: {actor(), Count::pos_integer()}.
 -type member() :: term().
 
+-type precondition_error() :: {error, {precondition ,{not_present, member()}}}.
+
 -spec new() -> orswot().
 new() ->
     {riak_dt_vclock:fresh(), orddict:new()}.
@@ -119,7 +127,7 @@ value({contains, Elem}, ORset) ->
     lists:member(Elem, value(ORset)).
 
 -spec update(orswot_op(), actor(), orswot()) -> {ok, orswot()} |
-                                                  {error, {precondition ,{not_present, member()}}}.
+                                                precondition_error().
 %% @doc take a list of Set operations and apply them to the set.
 %% NOTE: either _all_ are applied, or _none_ are.
 update({update, Ops}, Actor, ORSet) ->
@@ -162,7 +170,9 @@ remove_all([Elem | Rest], Actor, ORSet) ->
     end.
 
 -spec merge(orswot(), orswot()) -> orswot().
-merge({LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
+merge({Clock, Entries}, {Clock, Entries}) ->
+    {Clock, Entries};
+merge({LHSClock, LHSEntries}=_LHS, {RHSClock, RHSEntries}=_RHS) ->
     Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
     %% If an element is in both dicts, merge it. If it occurs in one,
     %% then see if its dots are dominated by the others whole set
@@ -179,8 +189,13 @@ merge({LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
 
     {Clock, Entries}.
 
+
+
+
 %% @doc check if each element in `Entries' should be in the merged
 %% set.
+-spec merge_disjoint_keys(set(), orddict:orddict(),
+                          riak_dt_vclock:vclock(), orddict:orddict()) -> orddict:orddict().
 merge_disjoint_keys(Keys, Entries, SetClock, Accumulator) ->
     sets:fold(fun(Key, Acc) ->
                       Dots = orddict:fetch(Key, Entries),
@@ -198,6 +213,7 @@ merge_disjoint_keys(Keys, Entries, SetClock, Accumulator) ->
               Keys).
 
 %% @doc merges the minimal clocks for the common entries in both sets.
+-spec merge_common_keys(set(), orddict:orddict(), orddict:orddict()) -> orddict:orddict().
 merge_common_keys(CommonKeys, Entries1, Entries2) ->
     sets:fold(fun(Key, Acc) ->
                       V1 = orddict:fetch(Key, Entries1),
@@ -208,8 +224,22 @@ merge_common_keys(CommonKeys, Entries1, Entries2) ->
               CommonKeys).
 
 -spec equal(orswot(), orswot()) -> boolean().
-equal(ORSet1, ORSet2) ->
-    ORSet1 == ORSet2.
+equal({Clock1, Entries1}, {Clock2, Entries2}) ->
+    riak_dt_vclock:equal(Clock1, Clock2) andalso
+        orddict:fetch_keys(Entries1) == orddict:fetch_keys(Entries2) andalso
+        clocks_equal(Entries1, Entries2).
+
+-spec clocks_equal(orddict:orddict(), orddict:orddict()) -> boolean().
+clocks_equal([], _) ->
+    true;
+clocks_equal([{Elem, Clock1} | Rest], Entries2) ->
+    Clock2 = orddict:fetch(Elem, Entries2),
+    case riak_dt_vclock:equal(Clock1, Clock2) of
+        true ->
+            clocks_equal(Rest, Entries2);
+        false ->
+            false
+    end.
 
 %% Private
 -spec add_elem(actor(), orswot(), member()) -> orswot().
@@ -218,13 +248,19 @@ add_elem(Actor, {Clock, Entries}, Elem) ->
     Dot = [{Actor, riak_dt_vclock:get_counter(Actor, NewClock)}],
     {NewClock, update_entry(Elem, Entries, Dot)}.
 
+-spec update_entry(member(), orddict:orddict(), riak_dt_vclock:vclock()) ->
+                          orddict:orddict().
 update_entry(Elem, Entries, Dot) ->
     orddict:update(Elem, fun(Clock) ->
                                  riak_dt_vclock:merge([Clock, Dot]) end,
                    Dot,
                    Entries).
 
-remove_elem({ok, _Vclock}, Elem, {Clock, Dict}) ->
+-spec remove_elem({ok, riak_dt_vclock:vclock()} | error,
+                  member(), {riak_dt_vclock:vclock(), orddict:orddict()}) ->
+                         {ok, riak_dt_vclock:vclock(), orddict:orddict()} |
+                         precondition_error().
+remove_elem({ok, _VClock}, Elem, {Clock, Dict}) ->
     {ok, {Clock, orddict:erase(Elem, Dict)}};
 remove_elem(_, Elem, _ORSet) ->
     {error, {precondition, {not_present, Elem}}}.
@@ -239,46 +275,117 @@ remove_elem(_, Elem, _ORSet) ->
 precondition_context(ORSet) ->
     ORSet.
 
--define(TAG, 75).
+-spec stats(orswot()) -> [{atom(), number()}].
+stats(ORSWOT) ->
+    [ {S, stat(S, ORSWOT)} || S <- [actor_count, element_count, max_dot_length]].
+
+-spec stat(atom(), orswot()) -> number() | undefined.
+stat(actor_count, {Clock, _Dict}) ->
+    length(Clock);
+stat(element_count, {_Clock, Dict}) ->
+    orddict:size(Dict);
+stat(max_dot_length, {_Clock, Dict}) ->
+    orddict:fold(fun(_K, Dots, Acc) ->
+                         max(length(Dots), Acc)
+                 end, 0, Dict);
+stat(_,_) -> undefined.
+
+-include("riak_dt_tags.hrl").
+-define(TAG, ?DT_ORSWOT_TAG).
 -define(V1_VERS, 1).
 
--spec to_binary(orswot()) -> binary().
-to_binary(ORSet) ->
-    %% @TODO something smarter
-    <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(ORSet))/binary>>.
+%% @doc returns a binary representation of the provided
+%% `orswot()'. The resulting binary is tagged and versioned for ease
+%% of future upgrade. Calling `from_binary/1' with the result of this
+%% function will return the original set. Use the application env var
+%% `binary_compression' to turn t2b compression on (`true') and off
+%% (`false')
+%%
+%% @see `from_binary/1'
+-spec to_binary(orswot()) -> binary_orswot().
+to_binary(S) ->
+    Opts = case application:get_env(riak_dt, binary_compression, 1) of
+               true -> [{compressed, 1}];
+               N when N >= 0, N =< 9 -> [{compressed, N}];
+               _ -> []
+           end,
+     <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(S, Opts))/binary>>.
 
--spec from_binary(binary()) -> orswot().
-from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
-    %% @TODO something smarter
-    binary_to_term(Bin).
+%% @doc When the argument is a `binary_orswot()' produced by
+%% `to_binary/1' will return the original `orswot()'.
+%%
+%% @see `to_binary/1'
+-spec from_binary(binary_orswot()) -> orswot().
+from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
+    binary_to_term(B).
 
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
 -ifdef(TEST).
 
+stat_test() ->
+    Set = new(),
+    {ok, Set1} = update({add, <<"foo">>}, 1, Set),
+    {ok, Set2} = update({add, <<"foo">>}, 2, Set1),
+    {ok, Set3} = update({add, <<"bar">>}, 3, Set2),
+    {ok, Set4} = update({remove, <<"foo">>}, 1, Set3),
+    ?assertEqual([{actor_count, 0}, {element_count, 0}, {max_dot_length, 0}],
+                 stats(Set)),
+    ?assertEqual(3, stat(actor_count, Set4)),
+    ?assertEqual(1, stat(element_count, Set4)),
+    ?assertEqual(1, stat(max_dot_length, Set4)),
+    ?assertEqual(undefined, stat(waste_pct, Set4)).
+
+disjoint_merge_test() ->
+    {ok, A1} = update({add, <<"foo">>}, 1, new()),
+    {ok, A2} = update({add, <<"bar">>}, 1, A1),
+    {ok, B1} = update({add, <<"baz">>}, 2, new()),
+    C = merge(A2, B1),
+    {ok, A3} = update({remove, <<"bar">>}, 1, A2),
+    D = merge(A3, C),
+    ?assertEqual([<<"baz">>,<<"foo">>], value(D)).
+
 -ifdef(EQC).
+
+bin_roundtrip_test_() ->
+    crdt_statem_eqc:run_binary_rt(?MODULE, ?NUMTESTS).
+
 eqc_value_test_() ->
-    crdt_statem_eqc:run(?MODULE, 1000).
+    crdt_statem_eqc:run(?MODULE, ?NUMTESTS).
+
+size(Set) ->
+    value(size, Set).
 
 generate() ->
-    ?LET(Members, list(int()),
-         lists:foldl(fun(M, Set) ->
-                            riak_dt_orswot:update({add, M}, choose(1, 50), Set) end,
-                    riak_dt_orswot:new(),
-                    Members)).
+    ?LET({Ops, Actors}, {non_empty(list(gen_op(fun() -> bitstring(20*8) end))), non_empty(list(bitstring(16*8)))},
+         lists:foldl(fun(Op, Set) ->
+                             Actor = case length(Actors) of
+                                         1 -> hd(Actors);
+                                         _ -> lists:nth(crypto:rand_uniform(1, length(Actors)), Actors)
+                                     end,
+                             case riak_dt_orswot:update(Op, Actor, Set) of
+                                 {ok, S} -> S;
+                                 _ -> Set
+                             end
+                     end,
+                     riak_dt_orswot:new(),
+                     Ops)).
 
 %% EQC generator
 gen_op() ->
-    oneof([gen_updates(), gen_update()]).
+    gen_op(fun() -> int() end).
 
-gen_updates() ->
-     {update, non_empty(list(gen_update()))}.
+gen_op(Gen) ->
+    oneof([gen_updates(Gen), gen_update(Gen)]).
 
-gen_update() ->
-    oneof([{add, int()}, {remove, int()},
-           {add_all, non_empty(list(int()))},
-           {remove_all, non_empty(list(int()))}]).
+gen_updates(Gen) ->
+     {update, non_empty(list(gen_update(Gen)))}.
+
+gen_update(Gen) ->
+    oneof([{add, Gen()}, {remove, Gen()},
+           {add_all, non_empty(list(Gen()))},
+           {remove_all, non_empty(list(Gen()))}]).
 
 init_state() ->
     {0, dict:new()}.

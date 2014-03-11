@@ -29,9 +29,10 @@
 %% @end
 
 -module(riak_dt_lwwreg).
+-behaviour(riak_dt).
 
 -export([new/0, value/1, value/2, update/3, merge/2,
-         equal/2, to_binary/1, from_binary/1]).
+         equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -47,14 +48,14 @@
 
 -opaque lwwreg() :: {term(), non_neg_integer()}.
 
--type lwwreg_op() :: {assign, term(), non_neg_integer()}.
+-type lwwreg_op() :: {assign, term(), non_neg_integer()}  | {assign, term()}.
 
 -type lww_q() :: timestamp.
 
 %% @doc Create a new, empty `lwwreg()'
 -spec new() -> lwwreg().
 new() ->
-    {undefined, 0}.
+    {<<>>, 0}.
 
 %% @doc The single total value of a `gcounter()'.
 -spec value(lwwreg()) -> term().
@@ -70,7 +71,7 @@ value(timestamp, {_V, TS}) ->
 %% @doc Assign a `Value' to the `lwwreg()'
 %% associating the update with time `TS'
 -spec update(lwwreg_op(), term(), lwwreg()) ->
-                    lwwreg().
+                    {ok, lwwreg()}.
 update({assign, Value, TS}, _Actor, {_OldVal, OldTS}) when is_integer(TS), TS > 0, TS >= OldTS ->
     {ok, {Value, TS}};
 update({assign, _Value, _TS}, _Actor, OldLWWReg) ->
@@ -112,7 +113,17 @@ equal({Val, TS}, {Val, TS}) ->
 equal(_, _) ->
     false.
 
--define(TAG, 72).
+-spec stats(lwwreg()) -> [{atom(), number()}].
+stats(LWW) ->
+    [{value_size, stat(value_size, LWW)}].
+
+-spec stat(atom(), lwwreg()) -> number() | undefined.
+stat(value_size, {Value,_}=_LWW) ->
+    erlang:external_size(Value);
+stat(_, _) -> undefined.
+
+-include("riak_dt_tags.hrl").
+-define(TAG, ?DT_LWWREG_TAG).
 -define(V1_VERS, 1).
 
 %% @doc Encode an effecient binary representation of an `lwwreg()'
@@ -169,7 +180,7 @@ generate() ->
          end).
 
 init_state() ->
-    {undefined, 0}.
+    {<<>>, 0}.
 
 gen_op() ->
     ?LET(TS, largeint(), {assign, binary(), abs(TS)}).
@@ -189,14 +200,14 @@ eqc_state_value({Val, _TS}) ->
 -endif.
 
 new_test() ->
-    ?assertEqual({undefined, 0}, new()).
+    ?assertEqual({<<>>, 0}, new()).
 
 value_test() ->
     Val1 = "the rain in spain falls mainly on the plane",
     LWWREG1 = {Val1, 19090},
     LWWREG2 = new(),
     ?assertEqual(Val1, value(LWWREG1)),
-    ?assertEqual(undefined, value(LWWREG2)).
+    ?assertEqual(<<>>, value(LWWREG2)).
 
 update_assign_test() ->
     LWW0 = new(),
@@ -215,7 +226,7 @@ update_assign_ts_test() ->
 merge_test() ->
     LWW1 = {old_value, 3},
     LWW2 = {new_value, 4},
-    ?assertEqual({undefined, 0}, merge(new(), new())),
+    ?assertEqual({<<>>, 0}, merge(new(), new())),
     ?assertEqual({new_value, 4}, merge(LWW1, LWW2)),
     ?assertEqual({new_value, 4}, merge(LWW2, LWW1)).
 
@@ -243,4 +254,11 @@ query_test() ->
     {ok, LWW1} = update({assign, value, 100}, a1, LWW),
     ?assertEqual(100, value(timestamp, LWW1)).
 
+stat_test() ->
+    LWW = new(),
+    {ok, LWW1} = update({assign, <<"abcd">>}, 1, LWW),
+    ?assertEqual([{value_size, 11}], stats(LWW)),
+    ?assertEqual([{value_size, 15}], stats(LWW1)),
+    ?assertEqual(15, stat(value_size, LWW1)),
+    ?assertEqual(undefined, stat(actor_count, LWW1)).
 -endif.
