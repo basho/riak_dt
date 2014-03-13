@@ -149,7 +149,7 @@ value(_, Map) ->
 update({update, Ops}, Dot, {Clock, Values}) when is_tuple(Dot) ->
     NewClock = riak_dt_vclock:merge([[Dot], Clock]),
     apply_ops(Ops, Dot, NewClock, Values);
-%% Yes, the Map increments the vclock on field removals!
+%% Yes, the Map increments the vlcock on field removals, (sometimes!)
 update({update, Ops}, Actor, {Clock, Values}) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
     Dot = {Actor, riak_dt_vclock:get_counter(Actor, NewClock)},
