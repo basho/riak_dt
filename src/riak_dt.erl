@@ -22,26 +22,23 @@
 
 -module(riak_dt).
 
--export_type([actor/0, dot/0, crdt/0]).
+-export_type([actor/0, dot/0, crdt/0, context/0, deferred/0]).
 
 -type crdt() :: term().
 -type operation() :: term().
--type defered() :: [{context(), [operation()]}].
+-type deferred() :: [{context(), [operation()]}].
 -type actor() :: term().
 -type value() :: term().
 -type error() :: term().
 -type dot() :: {actor(), pos_integer()}.
--type opts() :: [opt()].
--type opt() :: {top_clock, riak_dt_vclock:vclock()} %% the clock at the top of a nested CRDT (like a Map)
-             | {context, context()}. %% The context for an operation, at the moment, always a vclock
 -type context() :: riak_dt_vclock:vclock().
 
 -callback new() -> crdt().
 -callback value(crdt()) -> term().
 -callback value(term(), crdt()) -> value().
--callback update(operation(), actor(), crdt()) -> {ok, crdt()} | {error, error()} | {ok, crdt(), defered()}.
--callback update(operation(), actor(), crdt(), opts()) ->
-    {ok, crdt()} | {error, error()}.
+-callback update(operation(), actor(), crdt()) -> {ok, crdt()} | {error, error()}.
+-callback update(operation(), actor(), crdt(), context()) ->
+    {ok,  crdt(), deferred()} | {error, error()}.
 -callback merge(crdt(), crdt()) -> crdt().
 -callback equal(crdt(), crdt()) -> boolean().
 -callback to_binary(crdt()) -> binary().

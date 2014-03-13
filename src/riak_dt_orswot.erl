@@ -76,7 +76,7 @@
 
 %% API
 -export([new/0, value/1, value/2]).
--export([update/3, merge/2, equal/2]).
+-export([update/3, update/4, merge/2, equal/2]).
 -export([to_binary/1, from_binary/1]).
 -export([precondition_context/1, stats/1, stat/2]).
 
@@ -148,6 +148,39 @@ update({add_all, Elems}, Actor, ORSet) ->
 %% none are.
 update({remove_all, Elems}, Actor, ORSet) ->
     remove_all(Elems, Actor, ORSet).
+
+-spec update(orswot_op(), actor() | dot(), orswot(), riak_dt:context()) ->
+                    {ok, orswot(), riak_dt:deferred()} | precondition_error().
+update({add, Elem}, Actor, ORSet, _Ctx) ->
+    {ok, add_elem(Actor, ORSet, Elem), []};
+update({remove, Elem}=Op, Actor, {Clock, Entries}=ORSet, Ctx) ->
+    case riak_dt_vclock:descends(Clock, Ctx) of
+        true ->
+            {ok, ORSet2} = update(Op, Actor, ORSet),
+            {ok, ORSet2, []};
+        false ->
+            %% Being asked to remove something we may not have seen.
+            %% If we have this element, we can drop any dots it has
+            %% that the Context has seen. But we still need to save
+            %% this operation for later.
+            case orddict:find(Elem, Entries) of
+                {ok, ElemClock} ->
+                    ElemClock2 = riak_dt_vclock:subtract_dots(ElemClock, Ctx),
+                    case ElemClock2 of
+                        [] ->
+                            {ok, {Clock, orddict:erase(Elem, Entries), [{Ctx, Op}]}};
+                        _ ->
+                            {ok, {Clock, orddict:store(Elem, ElemClock2), [{Ctx, Op}]}}
+                    end;
+                error ->
+                    {ok, ORSet, [{Ctx, Op}]}
+            end
+    end;
+update({update, Ops}=Op, Actor, ORSet, Ctx) ->
+    case riak_dt_vclock:descends(Clock, Ctx) of
+        true ->
+            update(Op, Actor, ORSet)
+
 
 
 -spec apply_ops([orswot_op], actor() | dot(), orswot()) ->
