@@ -183,8 +183,8 @@ replicate_pre(_S, [_VN1, _VN2, _]) ->
 %% Mutating multiple elements in replica_data in place is bad idea
 %% (symbolic vs dynamic state), so instead of treating add/remove and
 %% replicate as the same action, this command handles the replicate
-%% part of the. Data from some random replica (From) is replicated to
-%% some random replica (To)
+%% part. Data from some random replica (From) is replicated to some
+%% random replica (To)
 replicate(From, To, ReplicaData) ->
     {FromORSWOT, FromORSet} = get(From, ReplicaData),
     {ToORSWOT, ToORSet} = get(To, ReplicaData),
