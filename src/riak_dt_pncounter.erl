@@ -94,7 +94,9 @@ value(negative, PNCnt) ->
 %% `Actor' is any term, and the 3rd argument is the `pncounter()' to update.
 %%
 %% returns the updated `pncounter()'
--spec update(pncounter_op(), term(), pncounter()) -> {ok, pncounter()}.
+-spec update(pncounter_op(), riak_dt:actor() | riak_dt:dot(), pncounter()) -> {ok, pncounter()}.
+update(Op, {Actor, _Cnt}, PNCnt) ->
+    update(Op, Actor, PNCnt);
 update(increment, Actor, PNCnt) ->
     update({increment, 1}, Actor, PNCnt);
 update(decrement, Actor, PNCnt) ->

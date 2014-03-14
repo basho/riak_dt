@@ -113,7 +113,7 @@ prop_bin_roundtrip(Mod) ->
             begin
                 Bin = Mod:to_binary(CRDT),
                 CRDT2= Mod:from_binary(Bin),
-                collect({range(Mod:size(CRDT)), range(bytes_smaller(Bin, term_to_binary(CRDT)))},
+                collect({range(byte_size(term_to_binary(CRDT))), range(byte_size(Bin))},
                         ?WHENFAIL(
                            begin
                                io:format("Gen ~p~n", [CRDT]),
@@ -163,7 +163,8 @@ crdt_equals(Mod, {_IDS, CS}, {_IDD, CD}) ->
 %% The orset CRDT returns a list, it has no guarantees about order
 %% list equality expects lists in order
 sort(Mod, L) when Mod == riak_dt_orset; Mod == riak_dt_gset;
-                  Mod == riak_dt_orswot; Mod == riak_dt_map ->
+                  Mod == riak_dt_orswot; Mod == riak_dt_map;
+                  Mod == riak_dt_tsmap ->
     lists:sort(L);
 sort(_, Other) ->
     Other.

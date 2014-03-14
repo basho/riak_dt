@@ -107,7 +107,7 @@
 %% a minimal clock is just the dots for the element, each dot being an
 %% actor and event counter for when the element was added.
 -type minimal_clock() :: [dot()].
--type dot() :: {actor(), Count::pos_integer()}.
+-type dot() :: riak_dt:dot().
 -type member() :: term().
 
 -type precondition_error() :: {error, {precondition ,{not_present, member()}}}.
@@ -126,10 +126,10 @@ value(size, ORset) ->
 value({contains, Elem}, ORset) ->
     lists:member(Elem, value(ORset)).
 
--spec update(orswot_op(), actor(), orswot()) -> {ok, orswot()} |
-                                                precondition_error().
 %% @doc take a list of Set operations and apply them to the set.
 %% NOTE: either _all_ are applied, or _none_ are.
+-spec update(orswot_op(), actor() | dot(), orswot()) -> {ok, orswot()} |
+                                                precondition_error().
 update({update, Ops}, Actor, ORSet) ->
     apply_ops(lists:sort(Ops), Actor, ORSet);
 update({add, Elem}, Actor, ORSet) ->
@@ -149,6 +149,9 @@ update({add_all, Elems}, Actor, ORSet) ->
 update({remove_all, Elems}, Actor, ORSet) ->
     remove_all(Elems, Actor, ORSet).
 
+
+-spec apply_ops([orswot_op], actor() | dot(), orswot()) ->
+                       {ok, orswot()} | precondition_error().
 apply_ops([], _Actor, ORSet) ->
     {ok, ORSet};
 apply_ops([Op | Rest], Actor, ORSet) ->
@@ -172,7 +175,7 @@ remove_all([Elem | Rest], Actor, ORSet) ->
 -spec merge(orswot(), orswot()) -> orswot().
 merge({Clock, Entries}, {Clock, Entries}) ->
     {Clock, Entries};
-merge({LHSClock, LHSEntries}=_LHS, {RHSClock, RHSEntries}=_RHS) ->
+merge({LHSClock, LHSEntries}=LHS, {RHSClock, RHSEntries}=RHS) ->
     Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
     %% If an element is in both dicts, merge it. If it occurs in one,
     %% then see if its dots are dominated by the others whole set
@@ -182,15 +185,12 @@ merge({LHSClock, LHSEntries}=_LHS, {RHSClock, RHSEntries}=_RHS) ->
     CommonKeys = sets:intersection(LHSKeys, RHSKeys),
     LHSUnique = sets:subtract(LHSKeys, CommonKeys),
     RHSUnique = sets:subtract(RHSKeys, CommonKeys),
+    Entries00 = merge_common_keys(CommonKeys, LHS, RHS),
 
-    Entries00 = merge_common_keys(CommonKeys, LHSEntries, RHSEntries),
     Entries0 = merge_disjoint_keys(LHSUnique, LHSEntries, RHSClock, Entries00),
     Entries = merge_disjoint_keys(RHSUnique, RHSEntries, LHSClock, Entries0),
 
     {Clock, Entries}.
-
-
-
 
 %% @doc check if each element in `Entries' should be in the merged
 %% set.
@@ -213,13 +213,35 @@ merge_disjoint_keys(Keys, Entries, SetClock, Accumulator) ->
               Keys).
 
 %% @doc merges the minimal clocks for the common entries in both sets.
--spec merge_common_keys(set(), orddict:orddict(), orddict:orddict()) -> orddict:orddict().
-merge_common_keys(CommonKeys, Entries1, Entries2) ->
+-spec merge_common_keys(set(), {riak_dt_vclock:vclock(), entries()},
+                        {riak_dt_vclock:vclock(), entries()}) -> orddict:orddict().
+merge_common_keys(CommonKeys, {LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
+
+    %% If both sides have the same values, some dots may still need to
+    %% be shed.  If LHS has dots for 'X' that RHS does _not_ have, and
+    %% RHS's clock dominates those dots, then we need to drop those
+    %% dots.  We only keep dots BOTH side agree on, or dots that are
+    %% not dominated. Keep only common dots, and dots that are not
+    %% dominated by the other sides clock
+
     sets:fold(fun(Key, Acc) ->
-                      V1 = orddict:fetch(Key, Entries1),
-                      V2 = orddict:fetch(Key, Entries2),
-                      V = riak_dt_vclock:merge([V1, V2]),
-                      orddict:store(Key, V, Acc) end,
+                      V1 = orddict:fetch(Key, LHSEntries),
+                      V2 = orddict:fetch(Key, RHSEntries),
+
+                      CommonDots = sets:intersection(sets:from_list(V1), sets:from_list(V2)),
+                      LHSUnique = sets:to_list(sets:subtract(sets:from_list(V1), CommonDots)),
+                      RHSUnique = sets:to_list(sets:subtract(sets:from_list(V2), CommonDots)),
+                      LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, RHSClock),
+                      RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, LHSClock),
+                      V = riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]),
+                      %% Perfectly possible that an item in both sets should be dropped
+                      case V of
+                          [] ->
+                              orddict:erase(Key, Acc);
+                          _ ->
+                              orddict:store(Key, V, Acc)
+                      end
+              end,
               orddict:new(),
               CommonKeys).
 
@@ -242,7 +264,9 @@ clocks_equal([{Elem, Clock1} | Rest], Entries2) ->
     end.
 
 %% Private
--spec add_elem(actor(), orswot(), member()) -> orswot().
+-spec add_elem(actor() | dot(), orswot(), member()) -> orswot().
+add_elem(Dot, {Clock, Entries}, Elem) when is_tuple(Dot) ->
+    {riak_dt_vclock:merge([Clock, [Dot]]), update_entry(Elem, Entries, [Dot])};
 add_elem(Actor, {Clock, Entries}, Elem) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
     Dot = [{Actor, riak_dt_vclock:get_counter(Actor, NewClock)}],
@@ -304,7 +328,7 @@ stat(_,_) -> undefined.
 %% @see `from_binary/1'
 -spec to_binary(orswot()) -> binary_orswot().
 to_binary(S) ->
-    Opts = case application:get_env(riak_dt, binary_compression, 1) of
+    Opts = case application:get_env(riak_dt, binary_compression, true) of
                true -> [{compressed, 1}];
                N when N >= 0, N =< 9 -> [{compressed, N}];
                _ -> []
@@ -337,14 +361,67 @@ stat_test() ->
     ?assertEqual(1, stat(max_dot_length, Set4)),
     ?assertEqual(undefined, stat(waste_pct, Set4)).
 
+%% Added by @asonge from github to catch a bug I added by trying to
+%% bypass merge if one side's clcok dominated the others. The
+%% optimisation was bogus, this test remains in case someone else
+%% tries that
 disjoint_merge_test() ->
-    {ok, A1} = update({add, <<"foo">>}, 1, new()),
-    {ok, A2} = update({add, <<"bar">>}, 1, A1),
+    {ok, A1} = update({add, <<"bar">>}, 1, new()),
     {ok, B1} = update({add, <<"baz">>}, 2, new()),
-    C = merge(A2, B1),
-    {ok, A3} = update({remove, <<"bar">>}, 1, A2),
-    D = merge(A3, C),
-    ?assertEqual([<<"baz">>,<<"foo">>], value(D)).
+    C = merge(A1, B1),
+    {ok, A2} = update({remove, <<"bar">>}, 1, A1),
+    D = merge(A2, C),
+    ?assertEqual([<<"baz">>], value(D)).
+
+%% Bug found by EQC, not dropping dots in merge when an element is
+%% present in both Sets leads to removed items remaining after merge.
+present_but_removed_test() ->
+    %% Add Z to A
+    {ok, A} = update({add, 'Z'}, a, new()),
+    %% Replicate it to C so A has 'Z'->{e, 1}
+    C = A,
+    %% Remove Z from A
+    {ok, A2} = update({remove, 'Z'}, a, A),
+    %% Add Z to B, a new replica
+    {ok, B} = update({add, 'Z'}, b, new()),
+    %%  Replicate B to A, so now A has a Z, the one with a Dot of
+    %%  {b,1} and clock of [{a, 1}, {b, 1}]
+    A3 = merge(B, A2),
+    %% Remove the 'Z' from B replica
+    {ok, B2} = update({remove, 'Z'}, b, B),
+    %% Both C and A have a 'Z', but when they merge, there should be
+    %% no 'Z' as C's has been removed by A and A's has been removed by
+    %% C.
+    Merged = lists:foldl(fun(Set, Acc) ->
+                                 merge(Set, Acc) end,
+                         %% the order matters, the two replicas that
+                         %% have 'Z' need to merge first to provoke
+                         %% the bug. You end up with 'Z' with two
+                         %% dots, when really it should be removed.
+                         A3,
+                         [C, B2]),
+    ?assertEqual([], value(Merged)).
+
+%% A bug EQC found where dropping the dots in merge was not enough if
+%% you then store the value with an empty clock (derp).
+no_dots_left_test() ->
+    {ok, A} = update({add, 'Z'}, a, new()),
+    {ok, B} = update({add, 'Z'}, b, new()),
+    C = A, %% replicate A to empty C
+    {ok, A2} = riak_dt_orswot:update({remove, 'Z'}, a, A),
+    %% replicate B to A, now A has B's 'Z'
+    A3 = riak_dt_orswot:merge(A2, B),
+    %% Remove B's 'Z'
+    {ok, B2} = riak_dt_orswot:update({remove, 'Z'}, b, B),
+    %% Replicate C to B, now B has A's old 'Z'
+    B3 = riak_dt_orswot:merge(B2, C),
+    %% Merge everytyhing, without the fix You end up with 'Z' present,
+    %% with no dots
+    Merged = lists:foldl(fun(Set, Acc) ->
+                                 merge(Set, Acc) end,
+                         A3,
+                         [B3, C]),
+    ?assertEqual([], value(Merged)).
 
 -ifdef(EQC).
 
@@ -358,7 +435,8 @@ size(Set) ->
     value(size, Set).
 
 generate() ->
-    ?LET({Ops, Actors}, {non_empty(list(gen_op(fun() -> bitstring(20*8) end))), non_empty(list(bitstring(16*8)))},
+    %% Only generate add ops
+    ?LET({Ops, Actors}, {non_empty(list({add, bitstring(20*8)})), non_empty(list(bitstring(16*8)))},
          lists:foldl(fun(Op, Set) ->
                              Actor = case length(Actors) of
                                          1 -> hd(Actors);
@@ -380,7 +458,7 @@ gen_op(Gen) ->
     oneof([gen_updates(Gen), gen_update(Gen)]).
 
 gen_updates(Gen) ->
-     {update, non_empty(list(gen_update(Gen)))}.
+    {update, non_empty(list(gen_update(Gen)))}.
 
 gen_update(Gen) ->
     oneof([{add, Gen()}, {remove, Gen()},
@@ -440,7 +518,6 @@ update_expected(ID, {remove_all, Elems}, {_Cnt, Dict}=State) ->
         false ->
             State
     end.
-
 
 eqc_state_value({_Cnt, Dict}) ->
     {A, R} = dict:fold(fun(_K, {Add, Rem}, {AAcc, RAcc}) ->

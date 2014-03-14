@@ -39,64 +39,65 @@
 
 -export_type([od_flag/0, od_flag_op/0]).
 
--opaque od_flag() :: {riak_dt_vclock:vclock(), boolean()}.
+-opaque od_flag() :: {riak_dt_vclock:vclock(), [riak_dt:dot()]}.
 -type od_flag_op() :: enable | disable.
 
 -spec new() -> od_flag().
 new() ->
-    {riak_dt_vclock:fresh(), false}.
+    {riak_dt_vclock:fresh(), []}.
 
 -spec value(od_flag()) -> boolean().
-value({_, F}) -> F.
+value({_, []}) -> false;
+value({_, _}) -> true.
 
 -spec value(term(), od_flag()) -> boolean().
 value(_, Flag) ->
     value(Flag).
 
--spec update(od_flag_op(), riak_dt:actor(), od_flag()) -> {ok, od_flag()}.
-update(enable, Actor, {Clock,_}=_Flag) ->
+-spec update(od_flag_op(), riak_dt:actor() | riak_dt:dot(), od_flag()) -> {ok, od_flag()}.
+update(enable, Dot, {Clock, Dots}) when is_tuple(Dot) ->
+    NewClock = riak_dt_vclock:merge([[Dot], Clock]),
+    {ok, {NewClock, riak_dt_vclock:merge([[Dot], Dots])}};
+update(enable, Actor, {Clock,Dots}) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
-    {ok, {NewClock, true}};
+    Dot = [{Actor, riak_dt_vclock:get_counter(Actor, NewClock)}],
+    {ok, {NewClock, riak_dt_vclock:merge([Dot, Dots])}};
 update(disable, _Actor, {Clock,_}=_Flag) ->
-    {ok, {Clock, false}}.
+    {ok, {Clock, []}}.
 
 -spec merge(od_flag(), od_flag()) -> od_flag().
-merge({C1, F}, {C2,F}) ->
-    %% When they are the same result (true or false), just merge the
-    %% vclock.
-    {riak_dt_vclock:merge([C1, C2]), F};
-merge({C1, _}=ODF1, {C2, _}=ODF2) ->
-    %% When the flag disagrees:
-    case {riak_dt_vclock:equal(C1, C2),
-          riak_dt_vclock:descends(C1, C2),
-          riak_dt_vclock:descends(C2, C1)} of
-    %% 1) If the clocks are equal, the result is 'false' (observed
-    %% disable).
-        {true, _, _} ->
-            {riak_dt_vclock:merge([C1, C2]), false};
-    %% 2) If they are sibling/divergent clocks, the result is 'true'.
-        {_, false, false} ->
-            {riak_dt_vclock:merge([C1, C2]), true};
-    %% 3) If one clock dominates the other, its value should be
-    %% chosen.
-        {_, true, false} ->
-            ODF1;
-        {_, false, true} ->
-            ODF2
-    end.
+merge({Clock, Entries}, {Clock, Entries}) ->
+    %% When they are the same result why merge?
+    {Clock, Entries};
+merge({LHSClock, LHSDots}, {RHSClock, RHSDots}) ->
+    NewClock = riak_dt_vclock:merge([LHSClock, RHSClock]),
+    %% drop all the LHS dots that are dominated by the rhs clock
+    %% drop all the RHS dots that dominated by the LHS clock
+    %% keep all the dots that are in both
+    %% save value as value of flag
+    CommonDots = sets:intersection(sets:from_list(LHSDots), sets:from_list(RHSDots)),
+    LHSUnique = sets:to_list(sets:subtract(sets:from_list(LHSDots), CommonDots)),
+    RHSUnique = sets:to_list(sets:subtract(sets:from_list(RHSDots), CommonDots)),
+    LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, RHSClock),
+    RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, LHSClock),
+    Flag = riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]),
+    %% Perfectly possible that an item in both sets should be dropped
+    {NewClock, Flag}.
 
 -spec equal(od_flag(), od_flag()) -> boolean().
-equal({C1,F},{C2,F}) ->
-    riak_dt_vclock:equal(C1,C2);
-equal(_,_) -> false.
+equal({C1,D1},{C2,D2}) ->
+    riak_dt_vclock:equal(C1,C2) andalso riak_dt_vclock:equal(D1, D2).
 
 -spec stats(od_flag()) -> [{atom(), integer()}].
 stats(ODF) ->
-    [{actor_count, stat(actor_count, ODF)}].
+    [{actor_count, stat(actor_count, ODF)},
+     {dot_length, stat(dot_length, ODF)}].
 
 -spec stat(atom(), od_flag()) -> number() | undefined.
 stat(actor_count, {C, _}) ->
     length(C);
+stat(dot_length, {_, D}) ->
+    length(D);
 stat(_, _) -> undefined.
 
 -include("riak_dt_tags.hrl").
@@ -104,21 +105,13 @@ stat(_, _) -> undefined.
 -define(VSN1, 1).
 
 -spec from_binary(binary()) -> od_flag().
-from_binary(<<?TAG:8, ?VSN1:8, BFlag:8, VClock/binary>>) ->
-    Flag = case BFlag of
-               1 -> true;
-               0 -> false
-           end,
-    {riak_dt_vclock:from_binary(VClock), Flag}.
+from_binary(<<?TAG:8, ?VSN1:8, Bin/binary>>) ->
+    binary_to_term(Bin).
 
 -spec to_binary(od_flag()) -> binary().
-to_binary({Clock, Flag}) ->
-    BFlag = case Flag of
-                true -> 1;
-                false -> 0
-            end,
-    VCBin = riak_dt_vclock:to_binary(Clock),
-    <<?TAG:8, ?VSN1:8, BFlag:8, VCBin/binary>>.
+to_binary(Flag) ->
+    Bin = term_to_binary(Flag),
+    <<?TAG:8, ?VSN1:8, Bin/binary>>.
 
 
 %% ===================================================================
@@ -168,6 +161,16 @@ eqc_state_value(Dict) ->
     orddict:fold(fun(_K, V, Acc) -> V or Acc end, false, Dict).
 -endif.
 
+disable_test() ->
+    {ok, A} = update(enable, a, new()),
+    {ok, B} = update(enable, b, new()),
+    C = A,
+    {ok, A2} = update(disable, a, A),
+    A3 = merge(A2, B),
+    {ok, B2} = update(disable, b, B),
+    Merged = merge(merge(C, A3), B2),
+    ?assertEqual(false, value(Merged)).
+
 new_test() ->
     ?assertEqual(false, value(new())).
 
@@ -211,12 +214,13 @@ binary_roundtrip_test() ->
     ?assert(equal(from_binary(to_binary(F3)), F3)).
 
 stat_test() ->
-    F0 = new(),
+    {ok, F0} = update(enable, 1, new()),
     {ok, F1} = update(enable, 1, F0),
     {ok, F2} = update(enable, 2, F1),
     {ok, F3} = update(enable, 3, F2),
+    ?assertEqual([{actor_count, 3}, {dot_length, 3}], stats(F3)),
     {ok, F4} = update(disable, 4, F3), %% Observed-disable doesn't add an actor
-    ?assertEqual([{actor_count, 3}], stats(F4)),
+    ?assertEqual([{actor_count, 3}, {dot_length, 0}], stats(F4)),
     ?assertEqual(3, stat(actor_count, F4)),
     ?assertEqual(undefined, stat(max_dot_length, F4)).
 -endif.
