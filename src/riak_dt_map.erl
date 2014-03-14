@@ -111,14 +111,13 @@ new() ->
 %% @doc get the current set of values for this Map
 -spec value(map()) -> values().
 value({_Clock, Values}) ->
-    Remaining = [{Field, CRDT} || {Field, CRDT, _Tag} <- ordsets:to_list(Values)],
-    Res = lists:foldl(fun({{_Name, Type}=Key, Value}, Acc) ->
+    Res = lists:foldl(fun({{_Name, Type}=Key, Value, _Dot}, Acc) ->
                               %% if key is in Acc merge with it and replace
                               dict:update(Key, fun(V) ->
                                                        Type:merge(V, Value) end,
                                           Value, Acc) end,
                       dict:new(),
-                      Remaining),
+                      Values),
     [{K, Type:value(V)} || {{_Name, Type}=K, V} <- dict:to_list(Res)].
 
 %% @doc query map (not implemented yet)
@@ -150,7 +149,7 @@ value(_, Map) ->
 update({update, Ops}, Dot, {Clock, Values}) when is_tuple(Dot) ->
     NewClock = riak_dt_vclock:merge([[Dot], Clock]),
     apply_ops(Ops, Dot, NewClock, Values);
-%% Yes, the Map increments the vlcock on field removals!
+%% Yes, the Map increments the vclock on field removals!
 update({update, Ops}, Actor, {Clock, Values}) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
     Dot = {Actor, riak_dt_vclock:get_counter(Actor, NewClock)},
@@ -286,7 +285,7 @@ pairwise_equals(_, _) ->
 precondition_context(Map) ->
     Map.
 
-%% @Doc stats on internal state of Map.
+%% @doc stats on internal state of Map.
 %% A proplist of `{StatName :: atom(), Value :: integer()}'. Stats exposed are:
 %% `actor_count': The number of actors in the clock for the Map.
 %% `field_count': The total number of fields in the Map (including divergent field entries).
