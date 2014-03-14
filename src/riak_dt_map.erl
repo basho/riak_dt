@@ -125,7 +125,7 @@ value({_Clock, Values}) ->
 value(_, Map) ->
     value(Map).
 
-%% @Doc update the `map()' or a field in the `map()' by executing
+%% @doc update the `map()' or a field in the `map()' by executing
 %% the `map_op()'. `Ops' is a list of one or more of the following
 %% ops:
 %%
@@ -205,7 +205,7 @@ apply_ops([{add, {_Name, Mod}=Field} | Rest], Dot, Clock, Values) ->
     NewValues = ordsets:add_element(ToAdd, Values),
     apply_ops(Rest, Dot, Clock, NewValues).
 
-%% @Doc merge two `map()'s.  and then a pairwise merge on all values
+%% @doc merge two `map()'s.  and then a pairwise merge on all values
 %% in the value list.  This is the LUB function.
 -spec merge(map(), map()) -> map().
 merge({LHSClock, LHSEntries}=LHMap, {RHSClock, RHSEntries}=RHMap) ->
@@ -217,46 +217,54 @@ merge({LHSClock, LHSEntries}=LHMap, {RHSClock, RHSEntries}=RHMap) ->
         {false, true} -> RHMap;
         _ ->
             Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
-            {Entries0, RHSUnique} = lists:foldl(fun({_F, _CRDT, Tag}=E, {Acc, RHS}) ->
-                                                        case lists:keytake(Tag, 3, RHS) of
-                                                            {value, E, RHS1} ->
-                                                                %% same in bolth
-                                                                {ordsets:add_element(E, Acc), RHS1};
-                                                            false ->
-                                                                %% RHS does not have this field, should be dropped, or kept?
-                                                                case riak_dt_vclock:descends(RHSClock, [Tag]) of
-                                                                    true ->
-                                                                        %% RHS has seen it, and removed it
-                                                                        {Acc, RHS};
-                                                                    false ->
-                                                                        %% RHS not seen it yet, keep it
-                                                                        {ordsets:add_element(E, Acc), RHS}
-                                                                end
-                                                        end
-                                                end,
-                                                {ordsets:new(), RHSEntries},
-                                                LHSEntries),
-            %% What about the things left in RHS, should they be kept?
-            Entries1 = lists:foldl(fun({_F, _CRDT, Tag}=E, Acc) ->
-                                           case riak_dt_vclock:descends(LHSClock, [Tag]) of
-                                               true ->
-                                                   %% LHS has seen, and removed this
-                                                   Acc;
-                                               false ->
-                                                   %% Not in or seen
-                                                   %% by LHS, should
-                                                   %% be kept
-                                                   ordsets:add_element(E, Acc)
-                                           end
-                                   end,
-                                   ordsets:new(),
-                                   RHSUnique),
-
+            {Entries0, RHSUnique} = merge_left(LHSEntries, RHSEntries, RHSClock),
+            Entries1 = merge_right(LHSClock, RHSUnique),
             Entries = ordsets:union(Entries0, Entries1),
             {Clock, Entries}
     end.
 
-%% @Doc compare two `map()'s for equality of structure Both schemas
+%% @private Merge the common entries, returns the merged common and
+%% those unique to the right hand side.
+-spec merge_left(entries(), entries(), riak_dt_vclock:vclock()) ->
+                        {entries(), entries()}.
+merge_left(LHSEntries, RHSEntries, RHSClock) ->
+    lists:foldl(fun({_F, _CRDT, Tag}=E, {Acc, RHS}) ->
+                        case lists:keytake(Tag, 3, RHS) of
+                            {value, E, RHS1} ->
+                                %% same in bolth
+                                {ordsets:add_element(E, Acc), RHS1};
+                            false ->
+                                %% RHS does not have this field, should be dropped, or kept?
+                                Acc2 = keep_or_drop(RHSClock, Tag, Acc, E),
+                                {Acc2, RHS}
+                        end
+                end,
+                {ordsets:new(), RHSEntries},
+                LHSEntries).
+
+%% @private merge those elements that were unique to the right hand
+%% side. Returns the subset of entries that should be kept.
+-spec merge_right(riak_dt_vclock:vclock(), entries()) -> entries().
+merge_right(LHSClock, RHSUnique) ->
+    lists:foldl(fun({_F, _CRDT, Tag}=E, Acc) ->
+                        keep_or_drop(LHSClock, Tag, Acc, E)
+                end,
+                ordsets:new(),
+                RHSUnique).
+
+%% @private decide (using `Clock') if the `Field' with `Tag' gets into
+%% `Entries' or not.
+-spec keep_or_drop(riak_dt_vclock:vclock(), riak_dt:dot(), entries(), entry()) ->
+                          entries().
+keep_or_drop(Clock, Tag, Entries, Field) ->
+    case riak_dt_vclock:descends(Clock, [Tag]) of
+        true ->
+            Entries;
+        false ->
+            ordsets:add_element(Field, Entries)
+    end.
+
+%% @doc compare two `map()'s for equality of structure Both schemas
 %% and value list must be equal. Performs a pariwise equals for all
 %% values in the value lists
 -spec equal(map(), map()) -> boolean().
@@ -279,7 +287,7 @@ pairwise_equals([{{_Name, Type}, CRDT1, Tag}| Rest1], [{{_Name, Type}, CRDT2, Ta
 pairwise_equals(_, _) ->
     false.
 
-%% @Doc a "fragment" of the Map that can be used for precondition
+%% @doc a "fragment" of the Map that can be used for precondition
 %% operations. Is the whole map right now :(
 -spec precondition_context(map()) -> map().
 precondition_context(Map) ->
