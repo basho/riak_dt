@@ -89,7 +89,8 @@
 
 -export_type([orswot/0, orswot_op/0, binary_orswot/0]).
 
--opaque orswot() :: {riak_dt_vclock:vclock(), entries()}.
+-opaque orswot() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
+-type deferred() :: [{riak_dt_vclock:vclock(), [orswot_op()]}].
 -type binary_orswot() :: binary(). %% A binary that from_binary/1 will operate on.
 
 -type orswot_op() ::  {add, member()} | {remove, member()} |
@@ -114,10 +115,10 @@
 
 -spec new() -> orswot().
 new() ->
-    {riak_dt_vclock:fresh(), orddict:new()}.
+    {riak_dt_vclock:fresh(), orddict:new(), orddict:new()}.
 
 -spec value(orswot()) -> [member()].
-value({_Clock, Entries}) ->
+value({_Clock, Entries, _Deferred}) ->
     [K || {K, _Dots} <- orddict:to_list(Entries)].
 
 -spec value(orswot_q(), orswot()) -> term().
@@ -135,7 +136,7 @@ update({update, Ops}, Actor, ORSet) ->
 update({add, Elem}, Actor, ORSet) ->
     {ok, add_elem(Actor, ORSet, Elem)};
 update({remove, Elem}, _Actor, ORSet) ->
-    {_Clock, Entries} = ORSet,
+    {_Clock, Entries, _Deferred} = ORSet,
     remove_elem(orddict:find(Elem, Entries), Elem, ORSet);
 update({add_all, Elems}, Actor, ORSet) ->
     ORSet2 = lists:foldl(fun(E, S) ->
@@ -150,38 +151,71 @@ update({remove_all, Elems}, Actor, ORSet) ->
     remove_all(Elems, Actor, ORSet).
 
 -spec update(orswot_op(), actor() | dot(), orswot(), riak_dt:context()) ->
-                    {ok, orswot(), riak_dt:deferred()} | precondition_error().
+                    {ok, orswot()} | precondition_error().
 update({add, Elem}, Actor, ORSet, _Ctx) ->
-    {ok, add_elem(Actor, ORSet, Elem), []};
-update({remove, Elem}=Op, Actor, {Clock, Entries}=ORSet, Ctx) ->
-    case riak_dt_vclock:descends(Clock, Ctx) of
-        true ->
-            {ok, ORSet2} = update(Op, Actor, ORSet),
-            {ok, ORSet2, []};
-        false ->
-            %% Being asked to remove something we may not have seen.
-            %% If we have this element, we can drop any dots it has
-            %% that the Context has seen. But we still need to save
-            %% this operation for later.
-            case orddict:find(Elem, Entries) of
-                {ok, ElemClock} ->
-                    ElemClock2 = riak_dt_vclock:subtract_dots(ElemClock, Ctx),
-                    case ElemClock2 of
-                        [] ->
-                            {ok, {Clock, orddict:erase(Elem, Entries), [{Ctx, Op}]}};
-                        _ ->
-                            {ok, {Clock, orddict:store(Elem, ElemClock2), [{Ctx, Op}]}}
-                    end;
-                error ->
-                    {ok, ORSet, [{Ctx, Op}]}
+    ORSet = add_elem(Actor, ORSet, Elem),
+    {ok, ORSet};
+update({remove, Elem}, _Actor, {Clock, Entries, Deferred}, Ctx) ->
+    %% Being asked to remove something with a context.  If we
+    %% have this element, we can drop any dots it has that the
+    %% Context has seen.
+    case orddict:find(Elem, Entries) of
+        {ok, ElemClock} ->
+            ElemClock2 = riak_dt_vclock:subtract_dots(ElemClock, Ctx),
+            case ElemClock2 of
+                [] ->
+                    {ok, {Clock, orddict:erase(Elem, Entries), defer_remove(Clock, Ctx, Elem, Deferred)}};
+                _ ->
+                    {ok, {Clock, orddict:store(Elem, ElemClock2, Entries), defer_remove(Clock, Ctx, Elem, Deferred)}}
+            end;
+        error ->
+            %% Do we not have this because we removed it already, or
+            %% because we haven't seen the add?
+            %% Should there be a precondition error if Clock descends Ctx?
+            case defer_remove(Clock, Ctx, Elem, Deferred) of
+                Deferred ->
+                    {error, {precondition, {not_present, Elem}}};
+                Deferred2 ->
+                    {ok, {Clock, Entries, Deferred2}}
             end
     end;
-update({update, Ops}=Op, Actor, ORSet, Ctx) ->
+update({update, Ops}, Actor, ORSet, Ctx) ->
+    ORSet2 = lists:foldl(fun(Op, Set) ->
+                                 {ok, NewSet} = update(Op, Actor, Set, Ctx),
+                                 NewSet
+                         end,
+                         ORSet,
+                         Ops),
+    {ok, ORSet2}.
+
+
+%% @private If we're asked to remove something we don't have (or have,
+%% but maybe not having seen all 'adds' for the element), is it
+%% because we've not seen the add that we've been asked to remove, or
+%% is it because we already removed it? In the former case, we can
+%% "defer" this operation by storing it, with its context, for later
+%% execution. If the clock for the Set descends the operation clock,
+%% then we don't need to defer the op, its already been done. It is
+%% _very_ important to note, that only _actorless_ operations can be
+%% saved. That is operations that DO NOT increment the clock. In
+%% ORSWOTS this is easy, as only removes need a context. A context for
+%% an 'add' is meaningless.
+%%
+%% @TODO revist this, as it might be meaningful in some cases (for
+%% true idempotence) and we can have merges triggering updates,
+%% maybe.)
+-spec defer_remove(riak_dt_vclock:vclock(), riak_dt_vclock:vclock(), orswot_op(), deferred()) ->
+                      deferred().
+defer_remove(Clock, Ctx, Elem, Deferred) ->
     case riak_dt_vclock:descends(Clock, Ctx) of
-        true ->
-            update(Op, Actor, ORSet)
-
-
+        %% no need to save this remove, we're done
+        true -> Deferred;
+        false -> orddict:update(Ctx,
+                                fun(Elems) ->
+                                        ordsets:add_element(Elem, Elems) end,
+                                ordsets:add_element(Elem, ordsets:new()),
+                                Deferred)
+    end.
 
 -spec apply_ops([orswot_op], actor() | dot(), orswot()) ->
                        {ok, orswot()} | precondition_error().
@@ -206,9 +240,9 @@ remove_all([Elem | Rest], Actor, ORSet) ->
     end.
 
 -spec merge(orswot(), orswot()) -> orswot().
-merge({Clock, Entries}, {Clock, Entries}) ->
-    {Clock, Entries};
-merge({LHSClock, LHSEntries}=LHS, {RHSClock, RHSEntries}=RHS) ->
+merge({Clock, Entries, Deferred}, {Clock, Entries, Deferred}) ->
+    {Clock, Entries, Deferred};
+merge({LHSClock, LHSEntries, LHSDeferred}=LHS, {RHSClock, RHSEntries, RHSDeferred}=RHS) ->
     Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
     %% If an element is in both dicts, merge it. If it occurs in one,
     %% then see if its dots are dominated by the others whole set
@@ -223,7 +257,33 @@ merge({LHSClock, LHSEntries}=LHS, {RHSClock, RHSEntries}=RHS) ->
     Entries0 = merge_disjoint_keys(LHSUnique, LHSEntries, RHSClock, Entries00),
     Entries = merge_disjoint_keys(RHSUnique, RHSEntries, LHSClock, Entries0),
 
-    {Clock, Entries}.
+    Deffered = merge_deferred(LHSDeferred, RHSDeferred),
+
+    apply_deferred(Clock, Entries, Deffered).
+
+%% @private merge the deffered operations for both sets.
+-spec merge_deferred(deferred(), deferred()) -> deferred().
+merge_deferred(LHS, RHS) ->
+    orddict:merge(fun(_K, LH, RH) ->
+                          ordsets:union(LH, RH) end,
+                  LHS, RHS).
+
+%% @private any operation in the deferred list that has been seen as a
+%% result of the merge, can be applied
+%%
+%% @TODO again, think hard on this, should it be called in process by
+%% an actor only?
+apply_deferred(Clock, Entries, Deferred) ->
+    lists:foldl(fun({Ctx, Elems}, ORSwot) ->
+                        case update({remove_all, Elems}, <<"a">>, ORSwot, Ctx) of
+                            {error, _} ->
+                                ORSwot;
+                            {ok, ORSwot2} ->
+                                ORSwot2
+                        end
+                end,
+                {Clock, Entries},
+                Deferred).
 
 %% @doc check if each element in `Entries' should be in the merged
 %% set.
@@ -248,7 +308,7 @@ merge_disjoint_keys(Keys, Entries, SetClock, Accumulator) ->
 %% @doc merges the minimal clocks for the common entries in both sets.
 -spec merge_common_keys(set(), {riak_dt_vclock:vclock(), entries()},
                         {riak_dt_vclock:vclock(), entries()}) -> orddict:orddict().
-merge_common_keys(CommonKeys, {LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
+merge_common_keys(CommonKeys, {LHSClock, LHSEntries, _}, {RHSClock, RHSEntries, _}) ->
 
     %% If both sides have the same values, some dots may still need to
     %% be shed.  If LHS has dots for 'X' that RHS does _not_ have, and
@@ -279,7 +339,7 @@ merge_common_keys(CommonKeys, {LHSClock, LHSEntries}, {RHSClock, RHSEntries}) ->
               CommonKeys).
 
 -spec equal(orswot(), orswot()) -> boolean().
-equal({Clock1, Entries1}, {Clock2, Entries2}) ->
+equal({Clock1, Entries1, _}, {Clock2, Entries2, _}) ->
     riak_dt_vclock:equal(Clock1, Clock2) andalso
         orddict:fetch_keys(Entries1) == orddict:fetch_keys(Entries2) andalso
         clocks_equal(Entries1, Entries2).
@@ -298,12 +358,12 @@ clocks_equal([{Elem, Clock1} | Rest], Entries2) ->
 
 %% Private
 -spec add_elem(actor() | dot(), orswot(), member()) -> orswot().
-add_elem(Dot, {Clock, Entries}, Elem) when is_tuple(Dot) ->
-    {riak_dt_vclock:merge([Clock, [Dot]]), update_entry(Elem, Entries, [Dot])};
-add_elem(Actor, {Clock, Entries}, Elem) ->
+add_elem(Dot, {Clock, Entries, Deferred}, Elem) when is_tuple(Dot) ->
+    {riak_dt_vclock:merge([Clock, [Dot]]), update_entry(Elem, Entries, [Dot]), Deferred};
+add_elem(Actor, {Clock, Entries, Deferred}, Elem) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
     Dot = [{Actor, riak_dt_vclock:get_counter(Actor, NewClock)}],
-    {NewClock, update_entry(Elem, Entries, Dot)}.
+    {NewClock, update_entry(Elem, Entries, Dot), Deferred}.
 
 -spec update_entry(member(), orddict:orddict(), riak_dt_vclock:vclock()) ->
                           orddict:orddict().
@@ -317,8 +377,8 @@ update_entry(Elem, Entries, Dot) ->
                   member(), {riak_dt_vclock:vclock(), orddict:orddict()}) ->
                          {ok, riak_dt_vclock:vclock(), orddict:orddict()} |
                          precondition_error().
-remove_elem({ok, _VClock}, Elem, {Clock, Dict}) ->
-    {ok, {Clock, orddict:erase(Elem, Dict)}};
+remove_elem({ok, _VClock}, Elem, {Clock, Dict, Deferred}) ->
+    {ok, {Clock, orddict:erase(Elem, Dict)}, Deferred};
 remove_elem(_, Elem, _ORSet) ->
     {error, {precondition, {not_present, Elem}}}.
 
@@ -329,22 +389,24 @@ remove_elem(_, Elem, _ORSet) ->
 %% Especially useful for hybrid op/state systems where the context of an operation is
 %% needed at a replica without sending the entire state to the client.
 -spec precondition_context(orswot()) -> orswot().
-precondition_context(ORSet) ->
-    ORSet.
+precondition_context({Clock, _Entries, _Deferred}) ->
+    Clock.
 
 -spec stats(orswot()) -> [{atom(), number()}].
 stats(ORSWOT) ->
     [ {S, stat(S, ORSWOT)} || S <- [actor_count, element_count, max_dot_length]].
 
 -spec stat(atom(), orswot()) -> number() | undefined.
-stat(actor_count, {Clock, _Dict}) ->
+stat(actor_count, {Clock, _Dict, _}) ->
     length(Clock);
-stat(element_count, {_Clock, Dict}) ->
+stat(element_count, {_Clock, Dict, _}) ->
     orddict:size(Dict);
-stat(max_dot_length, {_Clock, Dict}) ->
+stat(max_dot_length, {_Clock, Dict, _}) ->
     orddict:fold(fun(_K, Dots, Acc) ->
                          max(length(Dots), Acc)
                  end, 0, Dict);
+stat(deferred_length, {_Clock, _Dict, Deferred}) ->
+    length(Deferred);
 stat(_,_) -> undefined.
 
 -include("riak_dt_tags.hrl").
