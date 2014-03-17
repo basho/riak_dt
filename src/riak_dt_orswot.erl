@@ -241,12 +241,8 @@ remove_all([Elem | Rest], Actor, ORSet) ->
 remove_all([], _Actor, ORSet, _Ctx) ->
     {ok, ORSet};
 remove_all([Elem | Rest], Actor, ORSet, Ctx) ->
-    case update({remove, Elem}, Actor, ORSet, Ctx) of
-        {ok, ORSet2} ->
-            remove_all(Rest, Actor, ORSet2, Ctx);
-        Error ->
-            Error
-    end.
+    {ok, ORSet2} =  update({remove, Elem}, Actor, ORSet, Ctx),
+    remove_all(Rest, Actor, ORSet2, Ctx).
 
 -spec merge(orswot(), orswot()) -> orswot().
 merge({Clock, Entries, Deferred}, {Clock, Entries, Deferred}) ->
@@ -282,6 +278,8 @@ merge_deferred(LHS, RHS) ->
 %%
 %% @TODO again, think hard on this, should it be called in process by
 %% an actor only?
+-spec apply_deferred(riak_dt_vclock:vclock(), entries(), deferred()) ->
+                            orswot().
 apply_deferred(Clock, Entries, Deferred) ->
     lists:foldl(fun({Ctx, Elems}, ORSwot) ->
                         remove_all_noerrors(Elems, ORSwot, Ctx)
@@ -292,14 +290,12 @@ apply_deferred(Clock, Entries, Deferred) ->
 %% @private the same as `remove_all' but not atomic, if some element
 %% can't be removed, so what, keep going and remove all those that
 %% can.
+-spec remove_all_noerrors(entries(), orswot(), riak_dt_vclock:vclock()) ->
+                                 orswot().
 remove_all_noerrors(Elems, ORSwot, Ctx) ->
     lists:foldl(fun(E, Acc) ->
-                        case update({remove, E}, undefined, Acc, Ctx) of
-                            {error, _} ->
-                                Acc;
-                            {ok, Acc2} ->
-                                Acc2
-                        end
+                        {ok, Acc2} =  update({remove, E}, undefined, Acc, Ctx),
+                        Acc2
                 end,
                 ORSwot,
                 Elems).
@@ -325,8 +321,9 @@ merge_disjoint_keys(Keys, Entries, SetClock, Accumulator) ->
               Keys).
 
 %% @doc merges the minimal clocks for the common entries in both sets.
--spec merge_common_keys(set(), {riak_dt_vclock:vclock(), entries()},
-                        {riak_dt_vclock:vclock(), entries()}) -> orddict:orddict().
+-spec merge_common_keys(set(), {riak_dt_vclock:vclock(), entries(), deferred()},
+                        {riak_dt_vclock:vclock(), entries(), deferred()}) ->
+                               orddict:orddict().
 merge_common_keys(CommonKeys, {LHSClock, LHSEntries, _}, {RHSClock, RHSEntries, _}) ->
 
     %% If both sides have the same values, some dots may still need to
@@ -393,8 +390,8 @@ update_entry(Elem, Entries, Dot) ->
                    Entries).
 
 -spec remove_elem({ok, riak_dt_vclock:vclock()} | error,
-                  member(), {riak_dt_vclock:vclock(), orddict:orddict()}) ->
-                         {ok, riak_dt_vclock:vclock(), orddict:orddict()} |
+                  member(), {riak_dt_vclock:vclock(), orddict:orddict(), deferred()}) ->
+                         {ok, {riak_dt_vclock:vclock(), orddict:orddict(), deferred()}} |
                          precondition_error().
 remove_elem({ok, _VClock}, Elem, {Clock, Dict, Deferred}) ->
     {ok, {Clock, orddict:erase(Elem, Dict), Deferred}};
@@ -413,7 +410,7 @@ precondition_context({Clock, _Entries, _Deferred}) ->
 
 -spec stats(orswot()) -> [{atom(), number()}].
 stats(ORSWOT) ->
-    [ {S, stat(S, ORSWOT)} || S <- [actor_count, element_count, max_dot_length]].
+    [ {S, stat(S, ORSWOT)} || S <- [actor_count, element_count, max_dot_length, deferred_length]].
 
 -spec stat(atom(), orswot()) -> number() | undefined.
 stat(actor_count, {Clock, _Dict, _}) ->
