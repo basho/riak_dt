@@ -152,7 +152,7 @@ ignore_preconerror_remove(Value, Actor, Set, Mod) ->
     case Mod:update({remove, Value}, Actor, Set) of
         {ok, Set2} ->
             Set2;
-        _ ->
+        _E ->
             Set
     end.
 

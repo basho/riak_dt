@@ -144,7 +144,6 @@ update({add_all, Elems}, Actor, ORSet) ->
                          ORSet,
                          Elems),
     {ok, ORSet2};
-
 %% @doc note: this is atomic, either _all_ `Elems` are removed, or
 %% none are.
 update({remove_all, Elems}, Actor, ORSet) ->
@@ -169,15 +168,14 @@ update({remove, Elem}, _Actor, {Clock, Entries, Deferred}, Ctx) ->
                     {ok, {Clock, orddict:store(Elem, ElemClock2, Entries), defer_remove(Clock, Ctx, Elem, Deferred)}}
             end;
         error ->
-            %% Do we not have this because we removed it already, or
-            %% because we haven't seen the add?
-            %% Should there be a precondition error if Clock descends Ctx?
-            case defer_remove(Clock, Ctx, Elem, Deferred) of
-                Deferred ->
-                    {error, {precondition, {not_present, Elem}}};
-                Deferred2 ->
-                    {ok, {Clock, Entries, Deferred2}}
-            end
+            %% Do we not have the element because we removed it
+            %% already, or because we haven't seen the add?  Should
+            %% there be a precondition error if Clock descends Ctx?
+            %% In a way it makes no sense to have a precon error here,
+            %% as the precon has been satisfied or will be: this is
+            %% either deferred or a NO-OP
+            Deferred2 = defer_remove(Clock, Ctx, Elem, Deferred),
+            {ok, {Clock, Entries, Deferred2}}
     end;
 update({update, Ops}, Actor, ORSet, Ctx) ->
     ORSet2 = lists:foldl(fun(Op, Set) ->
@@ -186,8 +184,9 @@ update({update, Ops}, Actor, ORSet, Ctx) ->
                          end,
                          ORSet,
                          Ops),
-    {ok, ORSet2}.
-
+    {ok, ORSet2};
+update({remove_all, Elems}, Actor, ORSet, Ctx) ->
+    remove_all(Elems, Actor, ORSet, Ctx).
 
 %% @private If we're asked to remove something we don't have (or have,
 %% but maybe not having seen all 'adds' for the element), is it
@@ -239,6 +238,16 @@ remove_all([Elem | Rest], Actor, ORSet) ->
             Error
     end.
 
+remove_all([], _Actor, ORSet, _Ctx) ->
+    {ok, ORSet};
+remove_all([Elem | Rest], Actor, ORSet, Ctx) ->
+    case update({remove, Elem}, Actor, ORSet, Ctx) of
+        {ok, ORSet2} ->
+            remove_all(Rest, Actor, ORSet2, Ctx);
+        Error ->
+            Error
+    end.
+
 -spec merge(orswot(), orswot()) -> orswot().
 merge({Clock, Entries, Deferred}, {Clock, Entries, Deferred}) ->
     {Clock, Entries, Deferred};
@@ -275,15 +284,25 @@ merge_deferred(LHS, RHS) ->
 %% an actor only?
 apply_deferred(Clock, Entries, Deferred) ->
     lists:foldl(fun({Ctx, Elems}, ORSwot) ->
-                        case update({remove_all, Elems}, <<"a">>, ORSwot, Ctx) of
+                        remove_all_noerrors(Elems, ORSwot, Ctx)
+                end,
+                {Clock, Entries, []}, %% Start with an empty deferred list
+                Deferred).
+
+%% @private the same as `remove_all' but not atomic, if some element
+%% can't be removed, so what, keep going and remove all those that
+%% can.
+remove_all_noerrors(Elems, ORSwot, Ctx) ->
+    lists:foldl(fun(E, Acc) ->
+                        case update({remove, E}, undefined, Acc, Ctx) of
                             {error, _} ->
-                                ORSwot;
-                            {ok, ORSwot2} ->
-                                ORSwot2
+                                Acc;
+                            {ok, Acc2} ->
+                                Acc2
                         end
                 end,
-                {Clock, Entries},
-                Deferred).
+                ORSwot,
+                Elems).
 
 %% @doc check if each element in `Entries' should be in the merged
 %% set.
@@ -378,7 +397,7 @@ update_entry(Elem, Entries, Dot) ->
                          {ok, riak_dt_vclock:vclock(), orddict:orddict()} |
                          precondition_error().
 remove_elem({ok, _VClock}, Elem, {Clock, Dict, Deferred}) ->
-    {ok, {Clock, orddict:erase(Elem, Dict)}, Deferred};
+    {ok, {Clock, orddict:erase(Elem, Dict), Deferred}};
 remove_elem(_, Elem, _ORSet) ->
     {error, {precondition, {not_present, Elem}}}.
 
