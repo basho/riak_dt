@@ -38,6 +38,7 @@
 -export([new/0, new/2, value/1, value/2,
          update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
 -export([to_binary/2, from_binary/2, current_version/1, change_versions/3]).
+-export([parent_clock/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -73,6 +74,12 @@ new(Actor, Value) when Value < 0 ->
     update({decrement, Value * -1}, Actor, new());
 new(_Actor, _Zero) ->
     new().
+
+%% @doc no-op
+-spec parent_clock(riak_dt_vclock:vclock(), pncounter()) ->
+                          pncounter().
+parent_clock(_Clock, Cntr) ->
+    Cntr.
 
 %% @doc The single, total value of a `pncounter()'
 -spec value(pncounter()) -> integer().

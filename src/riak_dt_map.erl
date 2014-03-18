@@ -66,6 +66,7 @@
 -export([new/0, value/1, value/2, update/3, update/4]).
 -export([merge/2, equal/2, to_binary/1, from_binary/1]).
 -export([precondition_context/1, stats/1, stat/2]).
+-export([parent_clock/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -110,10 +111,18 @@
 -type value() :: {field(), riak_dt_map:values() | integer() | [term()] | boolean() | term()}.
 -type precondition_error() :: {error, {precondition, {not_present, field()}}}.
 
+-define(FRESH, riak_dt_vclock:vclock()).
+
 %% @doc Create a new, empty Map.
 -spec new() -> map().
 new() ->
     {riak_dt_vclock:fresh(), ordsets:new(), orddict:new()}.
+
+%% @doc sets the clock in the map to that `Clock'. Used by a
+%% containing Map for sub-CRDTs
+-spec parent_clock(riak_dt_vclock:vclock(), map()) -> map().
+parent_clock(Clock, {_MapClock, Values, Deferred}) ->
+    {Clock, Values, Deferred}.
 
 %% @doc get the current set of values for this Map
 -spec value(map()) -> values().
@@ -168,7 +177,8 @@ update({update, Ops}, ActorOrDot, {Clock0, Values, Deferred}, Ctx) ->
 
 %% @private update the clock, and get a dot for the operations. This
 %% means that field removals increment the clock too.
--spec update_clock(riak_dt:actor() | riak_dt:dot(), riak_dt_vclock:vclock()) ->
+-spec update_clock(riak_dt:actor() | riak_dt:dot(),
+                   riak_dt_vclock:vclock()) ->
                           {riak_dt:dot(), riak_dt_vclock:vclock()}.
 update_clock(Dot, Clock) when is_tuple(Dot) ->
     NewClock = riak_dt_vclock:merge([[Dot], Clock]),
@@ -196,7 +206,8 @@ apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock, Values, Defer
                                         end,
                                         {Type:new(), Values},
                                         FieldInMap),
-    case update_field(Type, Op, Dot, CRDT, Ctx) of
+    CRDT1 = Type:parent_clock(Clock, CRDT),
+    case update_field(Type, Op, Dot, CRDT1, Ctx) of
         {ok, Updated} ->
             NewValues = ordsets:add_element({Field, Updated, Dot}, TrimmedValues),
             apply_ops(Rest, Dot, {Clock, NewValues, Deferred}, Ctx);
@@ -226,9 +237,7 @@ apply_ops([{add, {_Name, Mod}=Field} | Rest], Dot, {Clock, Values, Deferred}, Ct
 update_field(Type, Op, Dot, CRDT, undefined) ->
     Type:update(Op, Dot, CRDT);
 update_field(Type, Op, Dot, CRDT, Ctx) ->
-    %% @TODO we need to substitue the CRDTs clock for the Map clock
-    %% here
-    Type:update(Type, Op, Dot, CRDT, Ctx).
+    Type:update(Op, Dot, CRDT, Ctx).
 
 %% @private when context is undefined, we simply remove all instances
 %% of Field, regardless of their dot. If the field is not present then

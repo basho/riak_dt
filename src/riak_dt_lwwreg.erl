@@ -33,6 +33,7 @@
 
 -export([new/0, value/1, value/2, update/3, merge/2,
          equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
+-export([parent_clock/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -56,6 +57,10 @@
 -spec new() -> lwwreg().
 new() ->
     {<<>>, 0}.
+
+-spec parent_clock(riak_dt_vclock:vclock(), lwwreg()) -> lwwreg().
+parent_clock(_Clock, Reg) ->
+    Reg.
 
 %% @doc The single total value of a `gcounter()'.
 -spec value(lwwreg()) -> term().

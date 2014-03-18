@@ -79,6 +79,7 @@
 -export([update/3, update/4, merge/2, equal/2]).
 -export([to_binary/1, from_binary/1]).
 -export([precondition_context/1, stats/1, stat/2]).
+-export([parent_clock/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -118,6 +119,12 @@
 -spec new() -> orswot().
 new() ->
     {riak_dt_vclock:fresh(), orddict:new(), orddict:new()}.
+
+%% @doc sets the clock in the Set to that `Clock'. Used by a
+%% containing Map for sub-CRDTs
+-spec parent_clock(riak_dt_vclock:vclock(), orswot()) -> orswot().
+parent_clock(Clock, {_SetClock, Entries, Deferred}) ->
+    {Clock, Entries, Deferred}.
 
 -spec value(orswot()) -> [member()].
 value({_Clock, Entries, _Deferred}) ->
@@ -284,23 +291,11 @@ merge_deferred(LHS, RHS) ->
                             orswot().
 apply_deferred(Clock, Entries, Deferred) ->
     lists:foldl(fun({Ctx, Elems}, ORSwot) ->
-                        remove_all_noerrors(Elems, ORSwot, Ctx)
+                        {ok, ORSwot2} = remove_all(Elems, undefined,  ORSwot, Ctx),
+                        ORSwot2
                 end,
                 {Clock, Entries, []}, %% Start with an empty deferred list
                 Deferred).
-
-%% @private the same as `remove_all' but not atomic, if some element
-%% can't be removed, so what, keep going and remove all those that
-%% can.
--spec remove_all_noerrors(entries(), orswot(), riak_dt_vclock:vclock()) ->
-                                 orswot().
-remove_all_noerrors(Elems, ORSwot, Ctx) ->
-    lists:foldl(fun(E, Acc) ->
-                        {ok, Acc2} =  update({remove, E}, undefined, Acc, Ctx),
-                        Acc2
-                end,
-                ORSwot,
-                Elems).
 
 %% @doc check if each element in `Entries' should be in the merged
 %% set.

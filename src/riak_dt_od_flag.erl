@@ -29,6 +29,7 @@
 -export([ merge/2, equal/2, from_binary/1]).
 -export([to_binary/1, stats/1, stat/2]).
 -export([precondition_context/1]).
+-export([parent_clock/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -49,6 +50,12 @@
 -spec new() -> od_flag().
 new() ->
     {riak_dt_vclock:fresh(), [], []}.
+
+%% @doc sets the clock in the flag to that `Clock'. Used by a
+%% containing Map for sub-CRDTs
+-spec parent_clock(riak_dt_vclock:vclock(), od_flag()) -> od_flag().
+parent_clock(Clock, {_SetClock, Flag , Deferred}) ->
+    {Clock, Flag, Deferred}.
 
 -spec value(od_flag()) -> boolean().
 value({_, [], _}) -> false;
