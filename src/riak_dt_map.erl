@@ -290,7 +290,7 @@ remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
 %% saved. That is operations that DO NOT increment the clock. In Map
 %% this means field removals. Contexts for update operations do not
 %% result in deferred operations on the parent Map.
--spec defer_remove(riak_dt_vclock:vclock(), riak_dt_vclock:clock(), field(), deferred()) ->
+-spec defer_remove(riak_dt_vclock:vclock(), riak_dt_vclock:vclock(), field(), deferred()) ->
                           deferred().
 defer_remove(Clock, Ctx, Field, Deferred) ->
     case riak_dt_vclock:descends(Clock, Ctx) of
@@ -427,14 +427,14 @@ precondition_context({Clock, _Field, _Deferred}) ->
 %%                   of lag/staleness.
 -spec stats(map()) -> [{atom(), integer()}].
 stats(Map) ->
-    [ {S, stat(S, Map)} || S <- [actor_count, field_count, duplication]].
+    [ {S, stat(S, Map)} || S <- [actor_count, field_count, duplication, deferred_length]].
 
 -spec stat(atom(), map()) -> number() | undefined.
-stat(actor_count, {Clock, _}) ->
+stat(actor_count, {Clock, _, _}) ->
     length(Clock);
-stat(field_count, {_, Fields}) ->
+stat(field_count, {_, Fields, _}) ->
     length(Fields);
-stat(duplication, {_, Fields}) ->
+stat(duplication, {_, Fields, _}) ->
     %% Number of duplicated fields
     DeDuped = ordsets:fold(fun({Field, _, _}, Acc) ->
                           ordsets:add_element(Field, Acc) end,
@@ -711,7 +711,7 @@ stat_test() ->
     {ok, Map3} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"bar">>, 2}}]}, a3, Map1),
     Map4 = merge(Map2, Map3),
     io:format("map :: ~p~n", [Map4]),
-    ?assertEqual([{actor_count, 0}, {field_count, 0}, {duplication, 0}], stats(Map)),
+    ?assertEqual([{actor_count, 0}, {field_count, 0}, {duplication, 0}, {deferred_length, 0}], stats(Map)),
     ?assertEqual(3, stat(actor_count, Map4)),
     ?assertEqual(6, stat(field_count, Map4)),
     ?assertEqual(undefined, stat(waste_pct, Map4)),
