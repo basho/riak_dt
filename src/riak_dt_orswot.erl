@@ -195,7 +195,10 @@ update({update, Ops}, Actor, ORSet, Ctx) ->
                          Ops),
     {ok, ORSet2};
 update({remove_all, Elems}, Actor, ORSet, Ctx) ->
-    remove_all(Elems, Actor, ORSet, Ctx).
+    remove_all(Elems, Actor, ORSet, Ctx);
+update({add_all, Elems}, Actor, ORSet, _Ctx) ->
+    update({add_all, Elems}, Actor, ORSet).
+
 
 %% @private If we're asked to remove something we don't have (or have,
 %% but maybe not having seen all 'adds' for the element), is it
