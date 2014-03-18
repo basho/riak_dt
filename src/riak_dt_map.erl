@@ -63,8 +63,9 @@
 -endif.
 
 %% API
--export([new/0, value/1, value/2, update/3, merge/2,
-         equal/2, to_binary/1, from_binary/1, precondition_context/1, stats/1, stat/2]).
+-export([new/0, value/1, value/2, update/3, update/4]).
+-export([merge/2, equal/2, to_binary/1, from_binary/1]).
+-export([precondition_context/1, stats/1, stat/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -75,10 +76,14 @@
 -export_type([map/0, binary_map/0, map_op/0]).
 
 -type binary_map() :: binary(). %% A binary that from_binary/1 will accept
--type map() :: {riak_dt_vclock:vclock(), entries()}.
+-type map() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
 -type entries() :: ordsets:ordset(entry()).
 -type entry() :: {Field :: field(), CRDT :: crdt(), Tag :: riak_dt:dot()}.
 -type field() :: {Name :: binary(), CRDTModule :: crdt_mod()}.
+%% Only field removals can be deferred. CRDTs stored in the map may
+%% have contexts and deferred operatiosn, but as these are part of the
+%% state, they are stored under the field as an update like any other.
+-type deferred() :: [{context, [field()]}].
 
 -type crdt_mod() :: riak_dt_pncounter | riak_dt_lwwreg |
                     riak_dt_od_flag |
@@ -99,6 +104,8 @@
                    riak_dt_orswot:orswot_op() | riak_dt_od_flag:od_flag_op() |
                    riak_dt_map:map_op().
 
+-type context() :: riak_dt_vclock:vclock() | undefined.
+
 -type values() :: [value()].
 -type value() :: {field(), riak_dt_map:values() | integer() | [term()] | boolean() | term()}.
 -type precondition_error() :: {error, {precondition, {not_present, field()}}}.
@@ -106,11 +113,11 @@
 %% @doc Create a new, empty Map.
 -spec new() -> map().
 new() ->
-    {riak_dt_vclock:fresh(), ordsets:new()}.
+    {riak_dt_vclock:fresh(), ordsets:new(), orddict:new()}.
 
 %% @doc get the current set of values for this Map
 -spec value(map()) -> values().
-value({_Clock, Values}) ->
+value({_Clock, Values, _Deferred}) ->
     Res = lists:foldl(fun({{_Name, Type}=Key, Value, _Dot}, Acc) ->
                               %% if key is in Acc merge with it and replace
                               dict:update(Key, fun(V) ->
@@ -146,22 +153,38 @@ value(_, Map) ->
 %% @see riak_dt_orswot for more details.
 -spec update(map_op(), riak_dt:actor() | riak_dt:dot(), map()) ->
                     {ok, map()} | precondition_error().
-update({update, Ops}, Dot, {Clock, Values}) when is_tuple(Dot) ->
+update(Op, ActorOrDot, Map) ->
+    update(Op, ActorOrDot, Map, undefined).
+
+%% @doc the same as `update/3' except that the context ensures no
+%% unseen field adds are removed, and removal of unseen adds is
+%% deferred. The Context is passed on as the context for any nested
+%% types.
+-spec update(map_op(), riak_dt:actor() | riak_dt:dot(), map(), riak_dt:context()) ->
+                    {ok, map()}.
+update({update, Ops}, ActorOrDot, {Clock0, Values, Deferred}, Ctx) ->
+    {Dot, Clock} = update_clock(ActorOrDot, Clock0),
+    apply_ops(Ops, Dot, {Clock, Values, Deferred}, Ctx).
+
+%% @private update the clock, and get a dot for the operations. This
+%% means that field removals increment the clock too.
+-spec update_clock(riak_dt:actor() | riak_dt:dot(), riak_dt_vclock:vclock()) ->
+                          {riak_dt:dot(), riak_dt_vclock:vclock()}.
+update_clock(Dot, Clock) when is_tuple(Dot) ->
     NewClock = riak_dt_vclock:merge([[Dot], Clock]),
-    apply_ops(Ops, Dot, NewClock, Values);
-%% Yes, the Map increments the vlcock on field removals, (sometimes!)
-update({update, Ops}, Actor, {Clock, Values}) ->
+    {Dot, NewClock};
+update_clock(Actor, Clock) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
     Dot = {Actor, riak_dt_vclock:get_counter(Actor, NewClock)},
-    apply_ops(Ops, Dot, NewClock, Values).
+    {Dot, NewClock}.
 
 %% @private
--spec apply_ops([map_field_update() | map_field_op()], riak_dt:actor(),
-                riak_dt_vclock:vclock(), orddict:orddict()) ->
+-spec apply_ops([map_field_update() | map_field_op()], riak_dt:dot(),
+                {riak_dt_vclock:vclock(), entries() , deferred()}, context()) ->
                        {ok, map()} | precondition_error().
-apply_ops([], _Dot, Clock, Values) ->
-    {ok, {Clock, Values}};
-apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, Clock, Values) ->
+apply_ops([], _Dot, Map, _Ctx) ->
+    {ok, Map};
+apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock, Values, Deferred}, Ctx) ->
     FieldInMap = [{F, CRDT, Tag} || {F, CRDT, Tag} <- ordsets:to_list(Values), F == Field],
     {CRDT, TrimmedValues} = lists:foldl(fun({_F, Value, _T}=E, {Acc, ValuesAcc}) ->
                                                 %% remove the tagged
@@ -173,14 +196,55 @@ apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, Clock, Values) ->
                                         end,
                                         {Type:new(), Values},
                                         FieldInMap),
-    case Type:update(Op, Dot, CRDT) of
+    case update_field(Type, Op, Dot, CRDT, Ctx) of
         {ok, Updated} ->
             NewValues = ordsets:add_element({Field, Updated, Dot}, TrimmedValues),
-            apply_ops(Rest, Dot, Clock, NewValues);
+            apply_ops(Rest, Dot, {Clock, NewValues, Deferred}, Ctx);
         Error ->
             Error
     end;
-apply_ops([{remove, Field} | Rest], Dot, Clock, Values) ->
+apply_ops([{remove, Field} | Rest], Dot, Map, Ctx) ->
+    case remove_field(Field, Map, Ctx)  of
+        {ok, Map} ->
+            apply_ops(Rest, Dot, Map, Ctx);
+        E ->
+            E
+    end;
+apply_ops([{add, {_Name, Mod}=Field} | Rest], Dot, {Clock, Values, Deferred}, Ctx) ->
+    %% @TODO ¿Should an add read and replace, or stand alone? If it
+    %% stands alone, a concurrent remove results in an empty field,
+    %% which is nice. After an update though, we're back to a mixed,
+    %% unknown result. And of course we have a duplicate entry. Adds
+    %% are weird.
+    ToAdd = {Field, Mod:new(), Dot},
+    NewValues = ordsets:add_element(ToAdd, Values),
+    apply_ops(Rest, Dot, {Clock, NewValues, Deferred}, Ctx).
+
+%% @private depending on context, call type's update/3 or update/4 fun
+-spec update_field(crdt_mod(), crdt_op(), riak_dt:dot(), crdt(), context()) ->
+                          {ok, crdt()} | precondition_error().
+update_field(Type, Op, Dot, CRDT, undefined) ->
+    Type:update(Op, Dot, CRDT);
+update_field(Type, Op, Dot, CRDT, Ctx) ->
+    %% @TODO we need to substitue the CRDTs clock for the Map clock
+    %% here
+    Type:update(Type, Op, Dot, CRDT, Ctx).
+
+%% @private when context is undefined, we simply remove all instances
+%% of Field, regardless of their dot. If the field is not present then
+%% we warn the user with a precondition error. However, in the case
+%% that a context is provided we can be more fine grained, and only
+%% remove those field entries whose dots are seen by the context. This
+%% preserves the "observed" part of "observed-remove". There is no
+%% precondition error if we're asked to remove smoething that isn't
+%% present, either we defer it, or it has been done already, depending
+%% on if the Map clock descends the context clock or not.
+%%
+%% @see defer_remove/4 for handling of removes of fields that are
+%% _not_ present
+-spec remove_field(field(), map(), context()) ->
+                          {ok, map()} | precondition_error().
+remove_field(Field, {Clock, Values, Deferred}, undefined) ->
     {Removed, NewValues} = ordsets:fold(fun({F, _Val, _Token}, {_B, AccIn}) when F == Field ->
                                                 {true, AccIn};
                                            (Elem, {B, AccIn}) ->
@@ -192,36 +256,61 @@ apply_ops([{remove, Field} | Rest], Dot, Clock, Values) ->
         false ->
             {error, {precondition, {not_present, Field}}};
         _ ->
-            apply_ops(Rest, Dot, Clock, NewValues)
+            {ok, {Clock, NewValues, Deferred}}
     end;
-apply_ops([{add, {_Name, Mod}=Field} | Rest], Dot, Clock, Values) ->
-    %% @TODO ¿Should an add read and replace, or stand alone? If it
-    %% stands alone, a concurrent remove results in an empty field,
-    %% which is nice. After an update though, we're back to a mixed,
-    %% unknown result. And of course we have a duplicate entry. Adds
-    %% are weird.
+%% Context removes
+remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
+    Deferred = defer_remove(Clock, Ctx, Field, Deferred0),
+    NewValues = ordsets:fold(fun({F, _Val, Dot}, AccIn) when F == Field ->
+                                     keep_or_drop(Ctx, Dot, F, AccIn);
+                                (Elem, AccIn) ->
+                                     ordsets:add_element(Elem, AccIn)
+                             end,
+                             ordsets:new(),
+                             Values),
+    {ok, {Clock, NewValues, Deferred}}.
 
-    ToAdd = {Field, Mod:new(), Dot},
-    NewValues = ordsets:add_element(ToAdd, Values),
-    apply_ops(Rest, Dot, Clock, NewValues).
+%% @private If we're asked to remove something we don't have (or have,
+%% but maybe not having seen all 'adds' for it), is it because we've
+%% not seen the add|update that we've been asked to remove, or is it
+%% because we already removed it? In the former case, we can "defer"
+%% this operation by storing it, with its context, for later
+%% execution. If the clock for the Map descends the operation clock,
+%% then we don't need to defer the op, its already been done. It is
+%% _very_ important to note, that only _actorless_ operations can be
+%% saved. That is operations that DO NOT increment the clock. In Map
+%% this means field removals. Contexts for update operations do not
+%% result in deferred operations on the parent Map.
+-spec defer_remove(riak_dt_vclock:vclock(), riak_dt_vclock:clock(), field(), deferred()) ->
+                          deferred().
+defer_remove(Clock, Ctx, Field, Deferred) ->
+    case riak_dt_vclock:descends(Clock, Ctx) of
+        %% no need to save this remove, we're done
+        true -> Deferred;
+        false -> orddict:update(Ctx,
+                                fun(Fields) ->
+                                        ordsets:add_element(Field, Fields) end,
+                                ordsets:add_element(Field, ordsets:new()),
+                                Deferred)
+    end.
 
 %% @doc merge two `map()'s.  and then a pairwise merge on all values
 %% in the value list.  This is the LUB function.
 -spec merge(map(), map()) -> map().
-merge({LHSClock, LHSEntries}=LHMap, {RHSClock, RHSEntries}=RHMap) ->
-    %% As the clock is incremented for removes as well as adds we can
-    %% optimise here if one clock dominates the other, pick that Map
-    case {riak_dt_vclock:dominates(LHSClock, RHSClock),
-          riak_dt_vclock:dominates(RHSClock, LHSClock)} of
-        {true, false} -> LHMap;
-        {false, true} -> RHMap;
-        _ ->
-            Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
-            {Entries0, RHSUnique} = merge_left(LHSEntries, RHSEntries, RHSClock),
-            Entries1 = merge_right(LHSClock, RHSUnique),
-            Entries = ordsets:union(Entries0, Entries1),
-            {Clock, Entries}
-    end.
+merge({LHSClock, LHSEntries, LHSDeferred}, {RHSClock, RHSEntries, RHSDeferred}) ->
+    Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
+    {Entries0, RHSUnique} = merge_left(LHSEntries, RHSEntries, RHSClock),
+    Entries1 = merge_right(LHSClock, RHSUnique),
+    Entries2 = ordsets:union(Entries0, Entries1),
+    Deferred = merge_deferred(LHSDeferred, RHSDeferred),
+    apply_deferred(Clock, Entries2, Deferred).
+
+%% @private
+-spec merge_deferred(deferred(), deferred()) -> deferred().
+merge_deferred(LHS, RHS) ->
+    orddict:merge(fun(_K, LH, RH) ->
+                          ordsets:union(LH, RH) end,
+                  LHS, RHS).
 
 %% @private Merge the common entries, returns the merged common and
 %% those unique to the right hand side.
@@ -264,12 +353,36 @@ keep_or_drop(Clock, Tag, Entries, Field) ->
             ordsets:add_element(Field, Entries)
     end.
 
+
+%% @private apply those deferred field removals, if they're
+%% preconditions have been met, that is.
+-spec apply_deferred(riak_dt_vclock:vclock(), entries(), deferred()) ->
+                            {riak_dt_vclock:vclock(), entries(), deferred()}.
+apply_deferred(Clock, Entries, Deferred) ->
+    lists:foldl(fun({Ctx, Fields}, Map) ->
+                        remove_all(Fields, Map, Ctx)
+                end,
+                {Clock, Entries, []},
+                Deferred).
+
+%% @private
+-spec remove_all([field()], map(), context()) ->
+                        map().
+remove_all(Fields, Map, Ctx) ->
+    lists:foldl(fun(Field, MapAcc) ->
+                        {ok, MapAcc2}= remove_field(Field, MapAcc, Ctx),
+                        MapAcc2
+                end,
+                Map,
+                Fields).
+
 %% @doc compare two `map()'s for equality of structure Both schemas
 %% and value list must be equal. Performs a pariwise equals for all
 %% values in the value lists
 -spec equal(map(), map()) -> boolean().
-equal({Clock1, Values1}, {Clock2, Values2}) ->
+equal({Clock1, Values1, Deferred1}, {Clock2, Values2, Deferred2}) ->
     riak_dt_vclock:equal(Clock1, Clock2) andalso
+        Deferred1 == Deferred2 andalso
         pairwise_equals(ordsets:to_list(Values1), ordsets:to_list(Values2)).
 
 %% @Private Note, only called when we know that 2 sets of fields are
@@ -287,11 +400,13 @@ pairwise_equals([{{_Name, Type}, CRDT1, Tag}| Rest1], [{{_Name, Type}, CRDT2, Ta
 pairwise_equals(_, _) ->
     false.
 
-%% @doc a "fragment" of the Map that can be used for precondition
-%% operations. Is the whole map right now :(
--spec precondition_context(map()) -> map().
-precondition_context(Map) ->
-    Map.
+%% @doc an opaque context that can be passed to `update/4' to ensure
+%% that only seen fields are removed. If a field removal operation has
+%% a context that the Map has not seen, it will be deferred until
+%% causally relevant.
+-spec precondition_context(map()) -> riak_dt:context().
+precondition_context({Clock, _Field, _Deferred}) ->
+    Clock.
 
 %% @doc stats on internal state of Map.
 %% A proplist of `{StatName :: atom(), Value :: integer()}'. Stats exposed are:
@@ -299,6 +414,8 @@ precondition_context(Map) ->
 %% `field_count': The total number of fields in the Map (including divergent field entries).
 %% `duplication': The number of duplicate entries in the Map across all fields.
 %%                basically `field_count' - ( unique fields)
+%% `deferred_length': How many operations on the deferred list, a reasonable expression
+%%                   of lag/staleness.
 -spec stats(map()) -> [{atom(), integer()}].
 stats(Map) ->
     [ {S, stat(S, Map)} || S <- [actor_count, field_count, duplication]].
@@ -315,6 +432,8 @@ stat(duplication, {_, Fields}) ->
                   ordsets:new(),
                   Fields),
     length(Fields) - length(DeDuped);
+stat(deferred_length, {_, _, Deferred}) ->
+    length(Deferred);
 stat(_,_) -> undefined.
 
 -include("riak_dt_tags.hrl").

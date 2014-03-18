@@ -28,6 +28,7 @@
 -export([new/0, value/1, value/2, update/3, update/4]).
 -export([ merge/2, equal/2, from_binary/1]).
 -export([to_binary/1, stats/1, stat/2]).
+-export([precondition_context/1]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -165,6 +166,14 @@ to_binary(Flag) ->
     Bin = term_to_binary(Flag),
     <<?TAG:8, ?VSN1:8, Bin/binary>>.
 
+%% @doc the `precondition_context' is an opaque piece of state that
+%% can be used for context operations to ensure only observed state is
+%% affected.
+%%
+%% @see update/4
+-spec precondition_context(od_flag()) -> riak_dt:context().
+precondition_context({Clock, _Flag, _Deferred}) ->
+    Clock.
 
 %% ===================================================================
 %% EUnit tests

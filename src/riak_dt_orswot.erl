@@ -90,7 +90,9 @@
 -export_type([orswot/0, orswot_op/0, binary_orswot/0]).
 
 -opaque orswot() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
--type deferred() :: [{riak_dt_vclock:vclock(), [orswot_op()]}].
+%% Only removes can be deferred, so a list of members to be removed
+%% per context.
+-type deferred() :: [{riak_dt_vclock:vclock(), [member()]}].
 -type binary_orswot() :: binary(). %% A binary that from_binary/1 will operate on.
 
 -type orswot_op() ::  {add, member()} | {remove, member()} |
@@ -158,14 +160,15 @@ update({remove, Elem}, _Actor, {Clock, Entries, Deferred}, Ctx) ->
     %% Being asked to remove something with a context.  If we
     %% have this element, we can drop any dots it has that the
     %% Context has seen.
+    Deferred2 = defer_remove(Clock, Ctx, Elem, Deferred),
     case orddict:find(Elem, Entries) of
         {ok, ElemClock} ->
             ElemClock2 = riak_dt_vclock:subtract_dots(ElemClock, Ctx),
             case ElemClock2 of
                 [] ->
-                    {ok, {Clock, orddict:erase(Elem, Entries), defer_remove(Clock, Ctx, Elem, Deferred)}};
+                    {ok, {Clock, orddict:erase(Elem, Entries), Deferred2}};
                 _ ->
-                    {ok, {Clock, orddict:store(Elem, ElemClock2, Entries), defer_remove(Clock, Ctx, Elem, Deferred)}}
+                    {ok, {Clock, orddict:store(Elem, ElemClock2, Entries), Deferred2}}
             end;
         error ->
             %% Do we not have the element because we removed it
@@ -174,7 +177,6 @@ update({remove, Elem}, _Actor, {Clock, Entries, Deferred}, Ctx) ->
             %% In a way it makes no sense to have a precon error here,
             %% as the precon has been satisfied or will be: this is
             %% either deferred or a NO-OP
-            Deferred2 = defer_remove(Clock, Ctx, Elem, Deferred),
             {ok, {Clock, Entries, Deferred2}}
     end;
 update({update, Ops}, Actor, ORSet, Ctx) ->
@@ -398,12 +400,14 @@ remove_elem({ok, _VClock}, Elem, {Clock, Dict, Deferred}) ->
 remove_elem(_, Elem, _ORSet) ->
     {error, {precondition, {not_present, Elem}}}.
 
-%% @doc the precondition context is a fragment of the CRDT
-%% that operations with pre-conditions can be applied too.
-%% In the case of OR-Sets this is the set of adds observed.
-%% The system can then apply a remove to this context and merge it with a replica.
-%% Especially useful for hybrid op/state systems where the context of an operation is
-%% needed at a replica without sending the entire state to the client.
+%% @doc the precondition context is a fragment of the CRDT that
+%%  operations requiring certain pre-conditions can be applied with.
+%%  Especially useful for hybrid op/state systems where the context of
+%%  an operation is needed at a replica without sending the entire
+%%  state to the client. In the case of the ORSWOT the context is a
+%%  version vector. When passed as an argument to `update/4' the
+%%  context ensures that only seen adds are removed, and that removes
+%%  of unseen adds can be deferred until they're seen.
 -spec precondition_context(orswot()) -> orswot().
 precondition_context({Clock, _Entries, _Deferred}) ->
     Clock.
