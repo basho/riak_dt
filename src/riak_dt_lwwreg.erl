@@ -33,7 +33,7 @@
 
 -export([new/0, value/1, value/2, update/3, merge/2,
          equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
--export([parent_clock/2]).
+-export([parent_clock/2, update/4]).
 
 %% EQC API
 -ifdef(EQC).
@@ -92,6 +92,9 @@ update({assign, Value}, _Actor, {OldVal, OldTS}) ->
                   {OldVal, OldTS}
           end,
     {ok, LWW}.
+
+update(Op, Actor, Reg, _Ctx) ->
+    update(Op, Actor, Reg).
 
 make_micro_epoch() ->
     {Mega, Sec, Micro} = os:timestamp(),

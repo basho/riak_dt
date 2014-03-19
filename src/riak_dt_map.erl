@@ -216,8 +216,8 @@ apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock, Values, Defer
     end;
 apply_ops([{remove, Field} | Rest], Dot, Map, Ctx) ->
     case remove_field(Field, Map, Ctx)  of
-        {ok, Map} ->
-            apply_ops(Rest, Dot, Map, Ctx);
+        {ok, NewMap} ->
+            apply_ops(Rest, Dot, NewMap, Ctx);
         E ->
             E
     end;
@@ -271,7 +271,7 @@ remove_field(Field, {Clock, Values, Deferred}, undefined) ->
 remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
     Deferred = defer_remove(Clock, Ctx, Field, Deferred0),
     NewValues = ordsets:fold(fun({F, _Val, Dot}, AccIn) when F == Field ->
-                                     keep_or_drop(Ctx, Dot, F, AccIn);
+                                     keep_or_drop(Ctx, Dot, AccIn, F);
                                 (Elem, AccIn) ->
                                      ordsets:add_element(Elem, AccIn)
                              end,
