@@ -65,7 +65,27 @@ value(ORDict0) ->
         end, ORDict0),
     orddict:fetch_keys(ORDict1).
 
--spec value(any(), orset()) -> [member()].
+-spec value(any(), orset()) -> [member()] | orddict:orddict().
+value({fragment, Elem}, ORSet) ->
+    case value({tokens, Elem}, ORSet) of
+        [] ->
+            orddict:new();
+        Tokens ->
+            orddict:store(Elem, Tokens, orddict:new())
+    end;
+value({tokens, Elem}, ORSet) ->
+    case orddict:find(Elem, ORSet) of
+        error ->
+            orddict:new();
+        {ok, Tokens} ->
+            Tokens
+    end;
+value(removed, ORDict0) ->
+    ORDict1 = orddict:filter(fun(_Elem, Tokens) ->
+                                     ValidTokens = [Token || {Token, true} <- orddict:to_list(Tokens)],
+                                     length(ValidTokens) > 0
+                             end, ORDict0),
+    orddict:fetch_keys(ORDict1);
 value(_,ORSet) ->
     value(ORSet).
 
