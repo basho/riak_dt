@@ -246,7 +246,7 @@ context_remove_pre(_S, [_VN1, _VN2, _]) ->
 context_remove(From, To, ReplicaData) ->
     {FromORSWOT, {FromORSet, FromDeferred}} = get(From, ReplicaData),
     {ToORSWOT, {ToORSet, ToDeferred}} = get(To, ReplicaData),
-    case chose_element(FromORSWOT, FromORSet) of
+    case choose_element(FromORSWOT, FromORSet) of
         empty ->
             %% No-op
             {From, FromORSWOT, {FromORSet, FromDeferred}};
@@ -257,7 +257,7 @@ context_remove(From, To, ReplicaData) ->
     end.
 
 %% Don't know how to make this a quickcheck generated thing
-chose_element(ORSWOT, ORSet) ->
+choose_element(ORSWOT, ORSet) ->
     Elems = riak_dt_orswot:value(ORSWOT),
     %% any element in ORSWOT must be ORSet (see post conditions)
     case Elems of
@@ -309,7 +309,7 @@ context_remove_next(S=#state{replica_data=ReplicaData}, Res, _Args) ->
     S#state{replica_data=[Res | ReplicaData]}.
 
 context_remove_post(_S, _Args, Res) ->
-    post_all(Res, rep).
+    post_all(Res, ctx_rem).
 
 %% Tests the property that an ORSWOT is equivalent to an ORSet
 prop_merge() ->

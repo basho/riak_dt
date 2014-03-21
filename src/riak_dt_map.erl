@@ -270,8 +270,8 @@ remove_field(Field, {Clock, Values, Deferred}, undefined) ->
 %% Context removes
 remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
     Deferred = defer_remove(Clock, Ctx, Field, Deferred0),
-    NewValues = ordsets:fold(fun({F, _Val, Dot}, AccIn) when F == Field ->
-                                     keep_or_drop(Ctx, Dot, AccIn, F);
+    NewValues = ordsets:fold(fun({F, _Val, Dot}=E, AccIn) when F == Field ->
+                                     keep_or_drop(Ctx, Dot, AccIn, E);
                                 (Elem, AccIn) ->
                                      ordsets:add_element(Elem, AccIn)
                              end,

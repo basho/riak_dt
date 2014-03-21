@@ -30,7 +30,11 @@
 
 -type map_model() :: {Cntr :: pos_integer(), %% Unique ID per operation
                       Adds :: set(), %% Things added to the Map
-                      Removes :: set() %% Tombstones
+                      Removes :: set(), %% Tombstones
+                      %% Removes that are waiting for adds before they
+                      %% can be run (like context ops in the
+                      %% riak_dt_map)
+                      Deferred :: set()
                      }.
 
 -record(state,{replicas=[] :: [binary()], %% Sort of like the ring, upto N*2 ids
@@ -176,6 +180,53 @@ remove_next(S=#state{replica_data=ReplicaData, adds=Adds}, Res, [Add, _]) ->
 remove_post(_S, _Args, Res) ->
     post_all(Res, remove).
 
+%% ------ Grouped operator: ctx_remove
+%% remove, but with a context
+ctx_remove_pre(S=#state{replica_data=ReplicaData, adds=Adds}) ->
+    replicas_ready(S) andalso Adds /= [] andalso ReplicaData /= [].
+
+ctx_remove_args(#state{replicas=Replicas, replica_data=ReplicaData}) ->
+    [
+     elements(Replicas), %% read from
+     elements(Replicas), %% send op too
+     ReplicaData %% All the vnode data
+    ].
+
+%% Should we send ctx ops to originating replica?
+ctx_remove_pre(_S, [VN, VN, _]) ->
+    false;
+ctx_remove_pre(_S, [_VN1, _VN2, _]) ->
+    true.
+
+ctx_remove(From, To, ReplicaData) ->
+    {FromMap, FromModel} = get(From, ReplicaData),
+    {ToMap, ToModel} = get(To, ReplicaData),
+    case choose_field(FromMap) of
+        empty ->
+            {From, FromMap, FromModel};
+        {Ctx, Field} ->
+            {ok, Map} = riak_dt_map:update({update, [{remove, Field}]}, To, ToMap, Ctx),
+            Model = model_ctx_remove(Field, FromModel, ToModel),
+            {To, Map, Model}
+    end.
+
+choose_field(Map) ->
+    Fields = riak_dt_map:value(Map),
+    case Fields of
+        [] ->
+            empty;
+        _ ->
+            {Field, _Val} = lists:nth(crypto:rand_uniform(1, length(Fields) + 1), Fields),
+            Ctx = riak_dt_map:precondition_context(Map),
+            {Ctx, Field}
+    end.
+
+ctx_remove_next(S=#state{replica_data=ReplicaData}, Res, _) ->
+    S#state{replica_data=[Res | ReplicaData]}.
+
+ctx_remove_post(_S, _Args, Res) ->
+    post_all(Res, ctx_remove).
+
 %% ------ Grouped operator: replicate
 %% Merge two replicas' values
 replicate_pre(S=#state{replica_data=ReplicaData}) ->
@@ -296,12 +347,12 @@ get(Replica, ReplicaData) ->
 %% Model
 %% ----------
 model_new() ->
-    {sets:new(), sets:new()}.
+    {sets:new(), sets:new(), sets:new()}.
 
-model_add_field({_Name, Type}=Field, Cnt, {Adds, Removes}) ->
-    {ok, {sets:add_element({Field, Type:new(), Cnt}, Adds), Removes}}.
+model_add_field({_Name, Type}=Field, Cnt, {Adds, Removes, Deferred}) ->
+    {ok, {sets:add_element({Field, Type:new(), Cnt}, Adds), Removes, Deferred}}.
 
-model_update_field({Name, Type}=Field, Op, Actor, Cnt, {Adds, Removes}=Model) ->
+model_update_field({Name, Type}=Field, Op, Actor, Cnt, {Adds, Removes, Deferred}=Model) ->
     InMap = sets:subtract(Adds, Removes),
     CRDT = lists:foldl(fun({{FName, FType}, Value, _X}, Acc) when FName == Name,
                                                                   FType == Type ->
@@ -312,19 +363,48 @@ model_update_field({Name, Type}=Field, Op, Actor, Cnt, {Adds, Removes}=Model) ->
                        sets:to_list(InMap)),
     case Type:update(Op, {Actor, Cnt}, CRDT) of
         {ok, Updated} ->
-            {ok, {sets:add_element({Field, Updated, Cnt}, Adds), Removes}};
+            {ok, {sets:add_element({Field, Updated, Cnt}, Adds), Removes, Deferred}};
         _ ->
             {ok, Model}
     end.
 
-model_remove_field(Field, {Adds, Removes}) ->
+model_remove_field(Field, {Adds, Removes, Deferred}) ->
     ToRemove = [{F, Val, Token} || {F, Val, Token} <- sets:to_list(Adds), F == Field],
-    {Adds, sets:union(Removes, sets:from_list(ToRemove))}.
+    {Adds, sets:union(Removes, sets:from_list(ToRemove)), Deferred}.
 
-model_merge({Adds1, Removes1}, {Adds2, Removes2}) ->
-    {sets:union(Adds1, Adds2), sets:union(Removes1, Removes2)}.
+model_merge({Adds1, Removes1, Deferred1}, {Adds2, Removes2, Deferred2}) ->
+    Adds = sets:union(Adds1, Adds2),
+    Removes = sets:union(Removes1, Removes2),
+    Deferred = sets:union(Deferred1, Deferred2),
+    model_apply_deferred(Adds, Removes, Deferred).
 
-model_value({Adds, Removes}) ->
+model_apply_deferred(Adds, Removes, Deferred) ->
+    D2 = sets:subtract(Deferred, Adds),
+    ToRem = sets:subtract(Deferred, D2),
+    {Adds, sets:union(ToRem, Removes), D2}.
+
+    %% sets:fold(fun(E, {A, R, D}) ->
+    %%                   case sets:is_element(E, A) of
+    %%                       true ->
+    %%                           {A, sets:add_element(E, R),
+    %%                            sets:del_element(E, D)};
+    %%                       false ->
+    %%                           {A, R, sets:add_element(E, D)}
+    %%                   end
+    %%           end,
+    %%           {Adds, Removes, sets:new()},
+    %%           Deferred).
+
+model_ctx_remove(Field, {FromAdds, _FromRemoves, _FromDeferred}, {ToAdds, ToRemoves, ToDeferred}) ->
+    %% get adds for Field, any adds for field in ToAdds that are in
+    %% FromAdds should be removed any others, put in deferred
+    ToRemove = sets:filter(fun({F, _Val, _Token}) -> F == Field end, FromAdds),
+    %% [{F, Val, Token} || {F, Val, Token} <- sets:to_list(FromAdds), F == Field],
+    Defer = sets:subtract(ToRemove, ToAdds),
+    Remove = sets:subtract(ToRemove, Defer),
+    {ToAdds, sets:union(Remove, ToRemoves), sets:union(Defer, ToDeferred)}.
+
+model_value({Adds, Removes, _Deferred}) ->
     Remaining = sets:subtract(Adds, Removes),
     Res = lists:foldl(fun({{_Name, Type}=Key, Value, _X}, Acc) ->
                         %% if key is in Acc merge with it and replace
