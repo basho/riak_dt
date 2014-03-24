@@ -30,7 +30,7 @@
 -behaviour(riak_dt).
 
 -export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1, stats/1, stat/2]).
-
+-export([update/4, parent_clock/2]).
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -export([gen_op/0, init_state/0, update_expected/3, eqc_state_value/1]).
@@ -63,6 +63,11 @@ value(_, Flag) ->
 update(disable, _Actor, _Flag) ->
     {ok, off}.
 
+-spec update(disable_flag_op(), riak_dt:actor(), disable_flag(), riak_dt:context()) ->
+                    {ok, disable_flag()}.
+update(Op, Actor, Flag, _Ctx) ->
+    update(Op, Actor, Flag).
+
 -spec merge(disable_flag(), disable_flag()) -> disable_flag().
 merge(FA, FB) ->
     flag_and(FA, FB).
@@ -70,6 +75,11 @@ merge(FA, FB) ->
 -spec equal(disable_flag(), disable_flag()) -> boolean().
 equal(FA,FB) ->
     FA =:= FB.
+
+-spec parent_clock(riak_dt_vclock:vclock(), disable_flag()) ->
+                          disable_flag().
+parent_clock(_Clock, Flag) ->
+    Flag.
 
 -spec from_binary(binary()) -> disable_flag().
 from_binary(<<?TAG:7, 0:1>>) -> off;

@@ -26,6 +26,7 @@
 -behaviour(riak_dt).
 
 -export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1, stats/1, stat/2]).
+-export([update/4, parent_clock/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -59,6 +60,16 @@ update(disable, Actor, {Clock,_}) ->
     {ok, {NewClock, false}};
 update(enable, _Actor, {Clock,_}) ->
     {ok, {Clock, true}}.
+
+%% @fixme this needs ot use the context
+-spec update(oe_flag_op(), riak_dt:actor(), oe_flag(), _Ctx) ->
+                    {ok, oe_flag()}.
+update(Op, Actor, Flag, _Ctx) ->
+    update(Op, Actor, Flag).
+
+-spec parent_clock(riak_dt_vclock:vclock(), oe_flag()) -> oe_flag().
+parent_clock(_Clock, Flag) ->
+    Flag.
 
 -spec merge(oe_flag(), oe_flag()) -> oe_flag().
 merge({C1, F}, {C2,F}) ->
