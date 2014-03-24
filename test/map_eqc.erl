@@ -383,18 +383,6 @@ model_apply_deferred(Adds, Removes, Deferred) ->
     ToRem = sets:subtract(Deferred, D2),
     {Adds, sets:union(ToRem, Removes), D2}.
 
-    %% sets:fold(fun(E, {A, R, D}) ->
-    %%                   case sets:is_element(E, A) of
-    %%                       true ->
-    %%                           {A, sets:add_element(E, R),
-    %%                            sets:del_element(E, D)};
-    %%                       false ->
-    %%                           {A, R, sets:add_element(E, D)}
-    %%                   end
-    %%           end,
-    %%           {Adds, Removes, sets:new()},
-    %%           Deferred).
-
 model_ctx_remove(Field, {FromAdds, _FromRemoves, _FromDeferred}, {ToAdds, ToRemoves, ToDeferred}) ->
     %% get adds for Field, any adds for field in ToAdds that are in
     %% FromAdds should be removed any others, put in deferred

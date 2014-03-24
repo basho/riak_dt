@@ -73,8 +73,17 @@ update(enable, Actor, {Clock, Dots, Deferred}) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
     Dot = [{Actor, riak_dt_vclock:get_counter(Actor, NewClock)}],
     {ok, {NewClock, riak_dt_vclock:merge([Dot, Dots]), Deferred}};
-update(disable, _Actor, {Clock, _, Deferred}=_Flag) ->
-    {ok, {Clock, [], Deferred}}.
+update(disable, _Actor, Flag) ->
+    disable(Flag, undefined).
+
+-spec disable(od_flag(), riak_dt:context()) ->
+    {ok, od_flag()}.
+disable({Clock, _, Deferred}, undefined) ->
+    {ok, {Clock, [], Deferred}};
+disable({Clock, Dots, Deferred}, Ctx) ->
+    NewDots = riak_dt_vclock:subtract_dots(Dots, Ctx),
+    NewDeferred = defer_disable(Clock, Ctx, Deferred),
+    {ok, {Clock, NewDots, NewDeferred}}.
 
 %% @doc `update/4' is similar to `update/3' except that it takes a
 %% `context' (obtained from calling `precondition_context/1'). This
@@ -88,12 +97,12 @@ update(disable, _Actor, {Clock, _, Deferred}=_Flag) ->
 -spec update(od_flag_op(), riak_dt:actor() | riak_dt:dot(),
              od_flag(), riak_dt:context()) ->
                     {ok, od_flag()}.
+update(Op, Actor, Flag, undefined) ->
+    update(Op, Actor, Flag);
 update(enable, Actor, Flag, _Ctx) ->
     update(enable, Actor, Flag);
-update(disable, _Actor, {Clock, Dots, Deferred}, Ctx) ->
-    NewDots = riak_dt_vclock:subtract_dots(Dots, Ctx),
-    NewDeferred = defer_disable(Clock, Ctx, Deferred),
-    {ok, {Clock, NewDots, NewDeferred}}.
+update(disable, _Actor, Flag, Ctx) ->
+    disable(Flag, Ctx).
 
 %% @private Determine if a `disable' operation needs to be deferred,
 %% or if it is complete.
@@ -123,14 +132,13 @@ merge({LHSClock, LHSDots, LHSDeferred}, {RHSClock, RHSDots, RHSDeferred}) ->
     LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, RHSClock),
     RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, LHSClock),
     Flag = riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]),
-
     Deferred = ordsets:union(LHSDeferred, RHSDeferred),
 
     apply_deferred(NewClock, Flag, Deferred).
 
 apply_deferred(Clock, Flag, Deferred) ->
     lists:foldl(fun(Ctx, ODFlag) ->
-                        {ok, ODFlag2} = update(disable, a, ODFlag, Ctx),
+                        {ok, ODFlag2} = disable(ODFlag, Ctx),
                         ODFlag2
                 end,
                 %% start with an empty deferred list, those

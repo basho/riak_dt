@@ -35,6 +35,7 @@
 %% API
 -export([new/0, value/1, update/3, merge/2, equal/2,
          to_binary/1, from_binary/1, value/2, stats/1, stat/2]).
+-export([update/4, parent_clock/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -81,6 +82,14 @@ update({add, Elem}, _Actor, GSet) ->
 update({add_all, Elems}, _Actor, GSet) ->
     {ok, ordsets:union(GSet, ordsets:from_list(Elems))}.
 
+-spec update(gset_op(), actor(), gset(), riak_dt:context()) ->
+                    {ok, gset()}.
+update(Op, Actor, GSet, _Ctx) ->
+    update(Op, Actor, GSet).
+
+-spec parent_clock(riak_dt_vclock:vclock(), gset()) -> gset().
+parent_clock(_Clock, GSet) ->
+    GSet.
 
 -spec merge(gset(), gset()) -> gset().
 merge(GSet1, GSet2) ->

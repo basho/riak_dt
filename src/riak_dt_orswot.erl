@@ -160,6 +160,8 @@ update({remove_all, Elems}, Actor, ORSet) ->
 
 -spec update(orswot_op(), actor() | dot(), orswot(), riak_dt:context()) ->
                     {ok, orswot()} | precondition_error().
+update(Op, Actor, ORSet, undefined) ->
+    update(Op, Actor, ORSet);
 update({add, Elem}, Actor, ORSet, _Ctx) ->
     ORSet = add_elem(Actor, ORSet, Elem),
     {ok, ORSet};
@@ -408,13 +410,7 @@ remove_elem(_, Elem, _ORSet) ->
 %%  of unseen adds can be deferred until they're seen.
 -spec precondition_context(orswot()) -> orswot().
 precondition_context({Clock, _Entries, _Deferred}) ->
-    %% @TODO? ¿If we merge all the deferred contexts in, then the target of
-    %% any context operation from this could "fast forward" if it has
-    %% seen events that this set hasn't. This is like forwarding any
-    %% deferred removes, if a remove for one of those elements happens
-    %% to be sent with this context? ¿Maybe?
     Clock.
-
 
 -spec stats(orswot()) -> [{atom(), number()}].
 stats(ORSWOT) ->

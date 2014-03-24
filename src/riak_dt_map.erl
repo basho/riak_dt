@@ -84,7 +84,7 @@
 %% Only field removals can be deferred. CRDTs stored in the map may
 %% have contexts and deferred operatiosn, but as these are part of the
 %% state, they are stored under the field as an update like any other.
--type deferred() :: [{context, [field()]}].
+-type deferred() :: [{context(), [field()]}].
 
 -type crdt_mod() :: riak_dt_pncounter | riak_dt_lwwreg |
                     riak_dt_od_flag |
@@ -110,8 +110,6 @@
 -type values() :: [value()].
 -type value() :: {field(), riak_dt_map:values() | integer() | [term()] | boolean() | term()}.
 -type precondition_error() :: {error, {precondition, {not_present, field()}}}.
-
--define(FRESH, riak_dt_vclock:vclock()).
 
 %% @doc Create a new, empty Map.
 -spec new() -> map().
@@ -207,7 +205,7 @@ apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock, Values, Defer
                                         {Type:new(), Values},
                                         FieldInMap),
     CRDT1 = Type:parent_clock(Clock, CRDT),
-    case update_field(Type, Op, Dot, CRDT1, Ctx) of
+    case Type:update(Op, Dot, CRDT1, Ctx) of
         {ok, Updated} ->
             NewValues = ordsets:add_element({Field, Updated, Dot}, TrimmedValues),
             apply_ops(Rest, Dot, {Clock, NewValues, Deferred}, Ctx);
@@ -230,14 +228,6 @@ apply_ops([{add, {_Name, Mod}=Field} | Rest], Dot, {Clock, Values, Deferred}, Ct
     ToAdd = {Field, Mod:new(), Dot},
     NewValues = ordsets:add_element(ToAdd, Values),
     apply_ops(Rest, Dot, {Clock, NewValues, Deferred}, Ctx).
-
-%% @private depending on context, call type's update/3 or update/4 fun
--spec update_field(crdt_mod(), crdt_op(), riak_dt:dot(), crdt(), context()) ->
-                          {ok, crdt()} | precondition_error().
-update_field(Type, Op, Dot, CRDT, undefined) ->
-    Type:update(Op, Dot, CRDT);
-update_field(Type, Op, Dot, CRDT, Ctx) ->
-    Type:update(Op, Dot, CRDT, Ctx).
 
 %% @private when context is undefined, we simply remove all instances
 %% of Field, regardless of their dot. If the field is not present then
