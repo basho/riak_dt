@@ -354,16 +354,16 @@ model_add_field({_Name, Type}=Field, Cnt, {Adds, Removes, Deferred}) ->
 
 model_update_field({Name, Type}=Field, Op, Actor, Cnt, {Adds, Removes, Deferred}=Model) ->
     InMap = sets:subtract(Adds, Removes),
-    CRDT = lists:foldl(fun({{FName, FType}, Value, _X}, Acc) when FName == Name,
+    {CRDT, ToRem} = lists:foldl(fun({{FName, FType}, Value, _X}=E, {CAcc, RAcc}) when FName == Name,
                                                                   FType == Type ->
-                               Type:merge(Acc, Value);
+                               {Type:merge(CAcc, Value), sets:add_element(E, RAcc)};
                           (_, Acc) -> Acc
                        end,
-                       Type:new(),
+                       {Type:new(), sets:new()},
                        sets:to_list(InMap)),
     case Type:update(Op, {Actor, Cnt}, CRDT) of
         {ok, Updated} ->
-            {ok, {sets:add_element({Field, Updated, Cnt}, Adds), Removes, Deferred}};
+            {ok, {sets:add_element({Field, Updated, Cnt}, Adds), sets:union(ToRem, Removes), Deferred}};
         _ ->
             {ok, Model}
     end.
