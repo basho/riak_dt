@@ -38,6 +38,7 @@
 -export([new/0, new/2, value/1, value/2,
          update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
 -export([to_binary/2, from_binary/2, current_version/1, change_versions/3]).
+-export([parent_clock/2, update/4]).
 
 %% EQC API
 -ifdef(EQC).
@@ -74,6 +75,12 @@ new(Actor, Value) when Value < 0 ->
 new(_Actor, _Zero) ->
     new().
 
+%% @doc no-op
+-spec parent_clock(riak_dt_vclock:vclock(), pncounter()) ->
+                          pncounter().
+parent_clock(_Clock, Cntr) ->
+    Cntr.
+
 %% @doc The single, total value of a `pncounter()'
 -spec value(pncounter()) -> integer().
 value(PNCnt) ->
@@ -109,6 +116,9 @@ update({increment, By}, Actor, PNCnt) when is_integer(By), By < 0 ->
     update({decrement, -By}, Actor, PNCnt);
 update({decrement, By}, Actor, PNCnt) when is_integer(By), By > 0 ->
     {ok, decrement_by(By, Actor, PNCnt)}.
+
+update(Op, Actor, Cntr, _Ctx) ->
+    update(Op, Actor, Cntr).
 
 %% @doc Merge two `pncounter()'s to a single `pncounter()'. This is the Least Upper Bound
 %% function described in the literature.

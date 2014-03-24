@@ -37,6 +37,7 @@
 -module(riak_dt_gcounter).
 -behaviour(riak_dt).
 -export([new/0, new/2, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
+-export([update/4, parent_clock/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -83,6 +84,15 @@ update(increment, Actor, GCnt) ->
     {ok, increment_by(1, Actor, GCnt)};
 update({increment, Amount}, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
     {ok, increment_by(Amount, Actor, GCnt)}.
+
+-spec update(gcounter_op(), riak_dt:actor(), gcounter(), riak_dt:context()) ->
+                    {ok, gcounter()}.
+update(Op, Actor, GCnt, _Ctx) ->
+    update(Op, Actor, GCnt).
+
+-spec parent_clock(riak_dt_vclock:vclock(), gcounter()) -> gcounter().
+parent_clock(_Clock, GCnt) ->
+    GCnt.
 
 %% @doc Merge two `gcounter()'s to a single `gcounter()'. This is the Least Upper Bound
 %% function described in the literature.
