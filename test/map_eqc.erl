@@ -186,12 +186,13 @@ ctx_remove_pre(S=#state{replica_data=ReplicaData, adds=Adds}) ->
     replicas_ready(S) andalso Adds /= [] andalso ReplicaData /= [].
 
 ctx_remove_args(#state{replicas=Replicas, replica_data=ReplicaData, adds=Adds}) ->
-    [
-     elements(Replicas), %% read from
-     elements(Replicas), %% send op too
-     ?LET({_,X}, elements(Adds), X), %% which field to remove
-     ReplicaData %% All the vnode data
-    ].
+    ?LET({{From, Field}, To}, {elements(Adds), elements(Replicas)},
+         [
+          From,        %% read from
+          To,          %% send op to
+          Field,       %% which field to remove
+          ReplicaData  %% All the vnode data
+         ]).
 
 %% Should we send ctx ops to originating replica?
 ctx_remove_pre(_S, [VN, VN, _, _]) ->
