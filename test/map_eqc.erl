@@ -185,41 +185,28 @@ remove_post(_S, _Args, Res) ->
 ctx_remove_pre(S=#state{replica_data=ReplicaData, adds=Adds}) ->
     replicas_ready(S) andalso Adds /= [] andalso ReplicaData /= [].
 
-ctx_remove_args(#state{replicas=Replicas, replica_data=ReplicaData}) ->
+ctx_remove_args(#state{replicas=Replicas, replica_data=ReplicaData, adds=Adds}) ->
     [
      elements(Replicas), %% read from
      elements(Replicas), %% send op too
+     ?LET({_,X}, elements(Adds), X), %% which field to remove
      ReplicaData %% All the vnode data
     ].
 
 %% Should we send ctx ops to originating replica?
-ctx_remove_pre(_S, [VN, VN, _]) ->
+ctx_remove_pre(_S, [VN, VN, _, _]) ->
     false;
-ctx_remove_pre(_S, [_VN1, _VN2, _]) ->
+ctx_remove_pre(_S, [_VN1, _VN2, _, _]) ->
     true.
 
-ctx_remove(From, To, ReplicaData) ->
+ctx_remove(From, To, Field, ReplicaData) ->
     {FromMap, FromModel} = get(From, ReplicaData),
     {ToMap, ToModel} = get(To, ReplicaData),
-    case choose_field(FromMap) of
-        empty ->
-            {From, FromMap, FromModel};
-        {Ctx, Field} ->
-            {ok, Map} = riak_dt_map:update({update, [{remove, Field}]}, To, ToMap, Ctx),
-            Model = model_ctx_remove(Field, FromModel, ToModel),
-            {To, Map, Model}
-    end.
+    Ctx = riak_dt_map:precondition_context(FromMap),
+    {ok, Map} = riak_dt_map:update({update, [{remove, Field}]}, To, ToMap, Ctx),
+    Model = model_ctx_remove(Field, FromModel, ToModel),
+    {To, Map, Model}.
 
-choose_field(Map) ->
-    Fields = riak_dt_map:value(Map),
-    case Fields of
-        [] ->
-            empty;
-        _ ->
-            {Field, _Val} = lists:nth(crypto:rand_uniform(1, length(Fields) + 1), Fields),
-            Ctx = riak_dt_map:precondition_context(Map),
-            {Ctx, Field}
-    end.
 
 ctx_remove_next(S=#state{replica_data=ReplicaData}, Res, _) ->
     S#state{replica_data=[Res | ReplicaData]}.
