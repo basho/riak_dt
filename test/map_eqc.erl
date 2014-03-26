@@ -28,14 +28,17 @@
 
 -compile(export_all).
 
--type map_model() :: {Cntr :: pos_integer(), %% Unique ID per operation
-                      Adds :: set(), %% Things added to the Map
-                      Removes :: set(), %% Tombstones
-                      %% Removes that are waiting for adds before they
-                      %% can be run (like context ops in the
-                      %% riak_dt_map)
-                      Deferred :: set()
-                     }.
+-record(model, {
+          adds=sets:new() :: set(), %% Things added to the Map
+          removes=sets:new() :: set(), %% Tombstones
+          %% Removes that are waiting for adds before they
+          %% can be run (like context ops in the
+          %% riak_dt_map)
+          deferred=sets:new() ::set(),
+          clock=riak_dt_vclock:fresh() :: riak_dt_vclock:vclock() %% for embedded context operations
+         }).
+
+-type map_model() :: #model{}.
 
 -record(state,{replicas=[] :: [binary()], %% Sort of like the ring, upto N*2 ids
                replica_data=[] :: [{ActorId :: binary(),
@@ -140,7 +143,7 @@ gen_field_op({_Name, Type}) ->
 add(Field, Actor, Cnt, ReplicaData) ->
     {Map, Model} = get(Actor, ReplicaData),
     {ok, Map2} = riak_dt_map:update({update, [{add, Field}]}, Actor, Map),
-    {ok, Model2} = model_add_field(Field, Cnt, Model),
+    {ok, Model2} = model_add_field(Field, Actor, Cnt, Model),
     {Actor, Map2, Model2}.
 
 add_next(S=#state{replica_data=ReplicaData, adds=Adds, counter=Cnt}, Res, [Field, Actor, _, _]) ->
@@ -335,52 +338,67 @@ get(Replica, ReplicaData) ->
 %% Model
 %% ----------
 model_new() ->
-    {sets:new(), sets:new(), sets:new()}.
+    #model{}.
 
-model_add_field({_Name, Type}=Field, Cnt, {Adds, Removes, Deferred}) ->
-    {ok, {sets:add_element({Field, Type:new(), Cnt}, Adds), Removes, Deferred}}.
+model_add_field({_Name, Type}=Field, Actor, Cnt, Model) ->
+    #model{adds=Adds, clock=Clock} = Model,
+    {ok, Model#model{adds=sets:add_element({Field, Type:new(), Cnt}, Adds),
+                     clock=riak_dt_vclock:increment(Actor, Clock)}}.
 
-model_update_field({Name, Type}=Field, Op, Actor, Cnt, {Adds, Removes, Deferred}=Model) ->
+model_update_field({_Name, Type}=Field, Op, Actor, Cnt, Model) ->
+    #model{adds=Adds, removes=Removes, clock=Clock} = Model,
+    Clock2 = riak_dt_vclock:increment(Actor, Clock),
     InMap = sets:subtract(Adds, Removes),
-    {CRDT, ToRem} = lists:foldl(fun({{FName, FType}, Value, _X}=E, {CAcc, RAcc}) when FName == Name,
-                                                                  FType == Type ->
-                               {Type:merge(CAcc, Value), sets:add_element(E, RAcc)};
-                          (_, Acc) -> Acc
-                       end,
-                       {Type:new(), sets:new()},
-                       sets:to_list(InMap)),
+    {CRDT0, ToRem} = lists:foldl(fun({F, Value, _X}=E, {CAcc, RAcc}) when F == Field ->
+                                         {Type:merge(CAcc, Value), sets:add_element(E, RAcc)};
+                                    (_, Acc) -> Acc
+                                 end,
+                                 {Type:new(), sets:new()},
+                                 sets:to_list(InMap)),
+    CRDT = Type:parent_clock(Clock2, CRDT0),
     case Type:update(Op, {Actor, Cnt}, CRDT) of
         {ok, Updated} ->
-            {ok, {sets:add_element({Field, Updated, Cnt}, Adds), sets:union(ToRem, Removes), Deferred}};
+            Model2 = Model#model{adds=sets:add_element({Field, Updated, Cnt}, Adds),
+                                 removes=sets:union(ToRem, Removes),
+                                 clock=Clock2},
+            {ok, Model2};
         _ ->
             {ok, Model}
     end.
 
-model_remove_field(Field, {Adds, Removes, Deferred}) ->
+model_remove_field(Field, Model) ->
+    #model{adds=Adds, removes=Removes} = Model,
     ToRemove = [{F, Val, Token} || {F, Val, Token} <- sets:to_list(Adds), F == Field],
-    {Adds, sets:union(Removes, sets:from_list(ToRemove)), Deferred}.
+    Model#model{removes=sets:union(Removes, sets:from_list(ToRemove))}.
 
-model_merge({Adds1, Removes1, Deferred1}, {Adds2, Removes2, Deferred2}) ->
-    Adds = sets:union(Adds1, Adds2),
-    Removes = sets:union(Removes1, Removes2),
-    Deferred = sets:union(Deferred1, Deferred2),
-    model_apply_deferred(Adds, Removes, Deferred).
+model_merge(Model1, Model2) ->
+    #model{adds=Adds1, removes=Removes1, deferred=Deferred1, clock=Clock1} = Model1,
+    #model{adds=Adds2, removes=Removes2, deferred=Deferred2, clock=Clock2} = Model2,
+    Clock = riak_dt_vclock:merge([Clock1, Clock2]),
+    Adds0 = sets:union(Adds1, Adds2),
+    Removes0 = sets:union(Removes1, Removes2),
+    Deferred0 = sets:union(Deferred1, Deferred2),
+    {Adds, Removes, Deferred} =model_apply_deferred(Adds0, Removes0, Deferred0),
+    #model{adds=Adds, removes=Removes, deferred=Deferred, clock=Clock}.
 
 model_apply_deferred(Adds, Removes, Deferred) ->
     D2 = sets:subtract(Deferred, Adds),
     ToRem = sets:subtract(Deferred, D2),
     {Adds, sets:union(ToRem, Removes), D2}.
 
-model_ctx_remove(Field, {FromAdds, _FromRemoves, _FromDeferred}, {ToAdds, ToRemoves, ToDeferred}) ->
+model_ctx_remove(Field, From, To) ->
     %% get adds for Field, any adds for field in ToAdds that are in
     %% FromAdds should be removed any others, put in deferred
+    #model{adds=FromAdds} = From,
+    #model{adds=ToAdds, removes=ToRemoves, deferred=ToDeferred} = To,
     ToRemove = sets:filter(fun({F, _Val, _Token}) -> F == Field end, FromAdds),
-    %% [{F, Val, Token} || {F, Val, Token} <- sets:to_list(FromAdds), F == Field],
     Defer = sets:subtract(ToRemove, ToAdds),
     Remove = sets:subtract(ToRemove, Defer),
-    {ToAdds, sets:union(Remove, ToRemoves), sets:union(Defer, ToDeferred)}.
+    To#model{removes=sets:union(Remove, ToRemoves),
+           deferred=sets:union(Defer, ToDeferred)}.
 
-model_value({Adds, Removes, _Deferred}) ->
+model_value(Model) ->
+    #model{adds=Adds, removes=Removes} = Model,
     Remaining = sets:subtract(Adds, Removes),
     Res = lists:foldl(fun({{_Name, Type}=Key, Value, _X}, Acc) ->
                         %% if key is in Acc merge with it and replace
