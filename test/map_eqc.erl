@@ -343,11 +343,11 @@ model_new() ->
 model_add_field({_Name, Type}=Field, Actor, Cnt, Model) ->
     #model{adds=Adds, clock=Clock} = Model,
     {ok, Model#model{adds=sets:add_element({Field, Type:new(), Cnt}, Adds),
-                     clock=riak_dt_vclock:increment(Actor, Clock)}}.
+                     clock=riak_dt_vclock:merge([[{Actor, Cnt}], Clock])}}.
 
 model_update_field({_Name, Type}=Field, Op, Actor, Cnt, Model) ->
     #model{adds=Adds, removes=Removes, clock=Clock} = Model,
-    Clock2 = riak_dt_vclock:increment(Actor, Clock),
+    Clock2 = riak_dt_vclock:merge([[{Actor, Cnt}], Clock]),
     InMap = sets:subtract(Adds, Removes),
     {CRDT0, ToRem} = lists:foldl(fun({F, Value, _X}=E, {CAcc, RAcc}) when F == Field ->
                                          {Type:merge(CAcc, Value), sets:add_element(E, RAcc)};
