@@ -83,26 +83,26 @@ set_n(_) ->
     ok.
 
 set_n_next(S, _V, [N]) ->
-    S#state{n=N}.
+    S#state{n=N, replicas=[<<I:8>> || I <- lists:seq(1,2*N)]}.
 
 %% ------ Grouped operator: make_ring
 %%
 %% Generate a bunch of replicas, only runs if N is set, and until
 %% "enough" are generated (N*2) is more than enough.
-make_ring_pre(#state{replicas=Replicas, n=N}) ->
-    N > 0 andalso length(Replicas) < N * 2.
+%% make_ring_pre(#state{replicas=Replicas, n=N}) ->
+%%     N > 0 andalso length(Replicas) < N * 2.
 
-make_ring_args(#state{replicas=Replicas, n=N}) ->
-    [Replicas, vector(N, binary(8))].
+%% make_ring_args(#state{replicas=Replicas, n=N}) ->
+%%     [Replicas, vector(N, binary(8))].
 
-make_ring(_,_) ->
-    %% Command args used for next state only
-    ok.
+%% make_ring(_,_) ->
+%%     %% Command args used for next state only
+%%     ok.
 
-make_ring_next(S=#state{replicas=Replicas}, _V, [_, NewReplicas0]) ->
-    %% No duplicate replica ids please!
-    NewReplicas = lists:filter(fun(Id) -> not lists:member(Id, Replicas) end, NewReplicas0),
-    S#state{replicas=Replicas ++ NewReplicas}.
+%% make_ring_next(S=#state{replicas=Replicas}, _V, [_, NewReplicas0]) ->
+%%     %% No duplicate replica ids please!
+%%     NewReplicas = lists:filter(fun(Id) -> not lists:member(Id, Replicas) end, NewReplicas0),
+%%     S#state{replicas=Replicas ++ NewReplicas}.
 
 %% ------ Grouped operator: add
 %% Add a new field
@@ -124,14 +124,18 @@ add_args(#state{replicas=Replicas, replica_data=ReplicaData, counter=Cnt}) ->
 %% will be more action on the fields. Learned this from
 %% crdt_statem_eqc having to large a state space and missing bugs.
 gen_field() ->
-    {oneof(['X,', 'Y', 'Z']),
-     oneof([
-            riak_dt_pncounter,
-            riak_dt_orswot,
-            riak_dt_lwwreg,
-            riak_dt_map,
-            riak_dt_od_flag
-           ])}.
+    {
+      'X',
+      %% oneof(['X,', 'Y', 'Z']),
+      riak_dt_orswot
+     %% oneof([
+     %%        riak_dt_pncounter,
+     %%        riak_dt_orswot,
+     %%        riak_dt_lwwreg,
+     %%        riak_dt_map,
+     %%        riak_dt_od_flag
+     %%       ])
+    }.
 
 gen_field_op({_Name, Type}) ->
     Type:gen_op().
