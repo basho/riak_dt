@@ -250,6 +250,35 @@ replicate_next(S=#state{replica_data=ReplicaData}, Res, _Args) ->
 replicate_post(_S, _Args, Res) ->
     post_all(Res, rep).
 
+%% ------ Grouped operator: ctx_update
+%% Update a Field in the Map, using the Map context
+ctx_update_pre(S) ->
+    replicas_ready(S).
+
+ctx_update_args(#state{replicas=Replicas, replica_data=ReplicaData, counter=Cnt}) ->
+    [
+     ?LET(Field, gen_field(), {Field, gen_field_op(Field)}),
+     elements(Replicas),
+     elements(Replicas),
+     ReplicaData,
+     Cnt
+    ].
+
+ctx_update({Field, Op}, From,  To, ReplicaData, Cnt) ->
+    {CtxMap, CtxModel} = get(From, ReplicaData),
+    {ToMap, ToModel} = get(To, ReplicaData),
+    Ctx = riak_dt_map:precondition_context(CtxMap),
+    ModCtx = model_ctx(CtxModel),
+    {ok, Map} = riak_dt_map:update({update, [{update, Field, Op}]}, To, ToMap, Ctx),
+    {ok, Model} = model_update_field(Field, Op, To, Cnt, ToModel, ModCtx),
+    {To, Map, Model}.
+
+ctx_update_next(S=#state{replica_data=ReplicaData, counter=Cnt}, Res, _Args) ->
+    S#state{replica_data=[Res | ReplicaData], counter=Cnt+1}.
+
+ctx_update_post(_S, _Args, Res) ->
+    post_all(Res, update).
+
 %% ------ Grouped operator: update
 %% Update a Field in the Map
 update_pre(S) ->
@@ -266,7 +295,7 @@ update_args(#state{replicas=Replicas, replica_data=ReplicaData, counter=Cnt}) ->
 update({Field, Op}, Replica, ReplicaData, Cnt) ->
     {Map0, Model0} = get(Replica, ReplicaData),
     {ok, Map} = ignore_precon_error(riak_dt_map:update({update, [{update, Field, Op}]}, Replica, Map0), Map0),
-    {ok, Model} = model_update_field(Field, Op, Replica, Cnt, Model0),
+    {ok, Model} = model_update_field(Field, Op, Replica, Cnt, Model0,  undefined),
     {Replica, Map, Model}.
 
 %% precondition errors don't change the state of a map
@@ -345,7 +374,7 @@ model_add_field({_Name, Type}=Field, Actor, Cnt, Model) ->
     {ok, Model#model{adds=sets:add_element({Field, Type:new(), Cnt}, Adds),
                      clock=riak_dt_vclock:merge([[{Actor, Cnt}], Clock])}}.
 
-model_update_field({_Name, Type}=Field, Op, Actor, Cnt, Model) ->
+model_update_field({_Name, Type}=Field, Op, Actor, Cnt, Model, Ctx) ->
     #model{adds=Adds, removes=Removes, clock=Clock} = Model,
     Clock2 = riak_dt_vclock:merge([[{Actor, Cnt}], Clock]),
     InMap = sets:subtract(Adds, Removes),
@@ -356,7 +385,7 @@ model_update_field({_Name, Type}=Field, Op, Actor, Cnt, Model) ->
                                  {Type:new(), sets:new()},
                                  sets:to_list(InMap)),
     CRDT = Type:parent_clock(Clock2, CRDT0),
-    case Type:update(Op, {Actor, Cnt}, CRDT) of
+    case Type:update(Op, {Actor, Cnt}, CRDT, Ctx) of
         {ok, Updated} ->
             Model2 = Model#model{adds=sets:add_element({Field, Updated, Cnt}, Adds),
                                  removes=sets:union(ToRem, Removes),
@@ -408,5 +437,8 @@ model_value(Model) ->
                 dict:new(),
                 sets:to_list(Remaining)),
     [{K, Type:value(V)} || {{_Name, Type}=K, V} <- dict:to_list(Res)].
+
+model_ctx(#model{clock=Ctx}) ->
+    Ctx.
 
 -endif. % EQC
