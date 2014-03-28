@@ -163,8 +163,8 @@ update({remove_all, Elems}, Actor, ORSet) ->
 update(Op, Actor, ORSet, undefined) ->
     update(Op, Actor, ORSet);
 update({add, Elem}, Actor, ORSet, _Ctx) ->
-    ORSet = add_elem(Actor, ORSet, Elem),
-    {ok, ORSet};
+    ORSet2 = add_elem(Actor, ORSet, Elem),
+    {ok, ORSet2};
 update({remove, Elem}, _Actor, {Clock, Entries, Deferred}, Ctx) ->
     %% Being asked to remove something with a context.  If we
     %% have this element, we can drop any dots it has that the
