@@ -598,7 +598,7 @@ gen_update() ->
                 {update, Field, gen_field_op(Field)}])).
 
 gen_field() ->
-    {non_empty(binary()), oneof([riak_dt_pncounter,
+    {non_empty(binary()), oneof([riak_dt_emcntr,
                                  riak_dt_orswot,
                                  riak_dt_lwwreg,
                                  riak_dt_map,

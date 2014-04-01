@@ -156,15 +156,15 @@ stat(_, _) -> undefined.
 
 
 -include("riak_dt_tags.hrl").
--define(TAG, 900).%%?DT_EMCNTR_TAG).
+-define(TAG, 99).%%?DT_EMCNTR_TAG).
 -define(V1_VERS, 1).
--define(V2_VERS, 2).
 
 to_binary(PNCnt) ->
-    <<?TAG:8/integer, (term_to_binary(PNCnt))/binary>>.
+    Bin = term_to_binary(PNCnt),
+    <<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>.
 
 %% @doc Decode a binary encoded PN-Counter
-from_binary(<<?TAG:8/integer, Bin/binary>>) ->
+from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
     binary_to_term(Bin).
 
 %% ===================================================================
@@ -174,17 +174,21 @@ from_binary(<<?TAG:8/integer, Bin/binary>>) ->
 
 -ifdef(EQC).
 %% EQC generator
-eqc_value_test_() ->
-    crdt_statem_eqc:run(?MODULE, 1000).
-
 generate() ->
-    ?LET(Ops, list(gen_op()),
-         lists:foldl(fun(Op, Cntr) ->
-                             {ok, Cntr2} = riak_dt_emcntr:update(Op, choose(1, 50), Cntr),
-                             Cntr2
-                     end,
-                     riak_dt_emcntr:new(),
-                     Ops)).
+    ?LET({Ops, Actors}, {non_empty(list(gen_op())), non_empty(list(bitstring(16*8)))},
+         begin
+             {Generated, _Evts} = lists:foldl(fun(Op, {Cntr, Evt}) ->
+                                                      Actor = case length(Actors) of
+                                                                  1 -> hd(Actors);
+                                                                  _ -> lists:nth(crypto:rand_uniform(1, length(Actors)+1), Actors)
+                                                              end,
+                                                      {ok, Cntr2} = riak_dt_emcntr:update(Op, {Actor, Evt}, Cntr),
+                                                      {Cntr2, Evt+1}
+                                              end,
+                                              {riak_dt_emcntr:new(), 1},
+                                              Ops),
+             Generated
+         end).
 
 init_state() ->
     0.
@@ -213,117 +217,128 @@ eqc_state_value(S) ->
 -endif.
 
 new_test() ->
-    ?assertEqual([], new()).
+    ?assertEqual(0, value(new())).
+
+make_counter(Ops, Evt) ->
+    lists:foldl(fun({Actor, Op}, {Counter, Event}) ->
+                        E2 = Event+1,
+                        {ok, C2} = update(Op, {Actor, E2}, Counter),
+                        {C2, E2} end,
+                {new(), Evt},
+                Ops).
+
+make_counter(Ops) ->
+    {Cnt, _Evt} = make_counter(Ops, 0),
+    Cnt.
 
 value_test() ->
-    PNCnt1 = [{1,1,0}, {2,13,10}, {3,1,0}, {4,0,1}],
-    PNCnt2 = [],
-    PNCnt3 = [{1,3,3},{2,1,1},{3,1,1}],
+    PNCnt1 = make_counter([{a, increment},
+                           {b, {increment, 13}}, {b, {decrement, 10}},
+                           {c, increment},
+                           {d, decrement}]),
+    PNCnt2 = make_counter([]),
+    PNCnt3 = make_counter([{a, {increment,3}}, {a, {decrement, 3}},
+                           {b, decrement}, {b, increment},
+                           {c, increment}, {c, decrement}]),
     ?assertEqual(4, value(PNCnt1)),
     ?assertEqual(0, value(PNCnt2)),
     ?assertEqual(0, value(PNCnt3)).
 
 update_increment_test() ->
     PNCnt0 = new(),
-    {ok, PNCnt1} = update(increment, 1, PNCnt0),
-    {ok, PNCnt2} = update(increment, 2, PNCnt1),
-    {ok, PNCnt3} = update(increment, 1, PNCnt2),
-    ?assertEqual([{1,2,0}, {2,1,0}], PNCnt3).
+    {ok, PNCnt1} = update(increment, {a, 1}, PNCnt0),
+    {ok, PNCnt2} = update(increment, {b, 1}, PNCnt1),
+    {ok, PNCnt3} = update(increment, {a, 2}, PNCnt2),
+    ?assertEqual(3, value(PNCnt3)).
 
 update_increment_by_test() ->
     PNCnt0 = new(),
-    {ok, PNCnt1} = update({increment, 7}, 1, PNCnt0),
-    ?assertEqual([{1,7,0}], PNCnt1).
+    {ok, PNCnt1} = update({increment, 7}, {a, 1}, PNCnt0),
+    ?assertEqual(7, value(PNCnt1)).
 
 update_decrement_test() ->
     PNCnt0 = new(),
-    {ok, PNCnt1} = update(increment, 1, PNCnt0),
-    {ok, PNCnt2} = update(increment, 2, PNCnt1),
-    {ok, PNCnt3} = update(increment, 1, PNCnt2),
-    {ok, PNCnt4} = update(decrement, 1, PNCnt3),
-    ?assertEqual([{1,2,1}, {2,1,0}], PNCnt4).
+    {ok, PNCnt1} = update(increment, {a, 1}, PNCnt0),
+    {ok, PNCnt2} = update(increment, {b, 1}, PNCnt1),
+    {ok, PNCnt3} = update(increment, {a, 2}, PNCnt2),
+    {ok, PNCnt4} = update(decrement, {a, 3}, PNCnt3),
+    ?assertEqual(2, value(PNCnt4)).
 
 update_decrement_by_test() ->
     PNCnt0 = new(),
-    {ok, PNCnt1} = update({increment, 7}, 1, PNCnt0),
-    {ok, PNCnt2} = update({decrement, 5}, 1, PNCnt1),
-    ?assertEqual([{1,7,5}], PNCnt2).
+    {ok, PNCnt1} = update({increment, 7}, {a, 1}, PNCnt0),
+    {ok, PNCnt2} = update({decrement, 5}, {a, 2}, PNCnt1),
+    ?assertEqual(2, value(PNCnt2)).
 
 merge_test() ->
-    PNCnt1 = [{<<"1">>,1,0},
-              {<<"2">>,2,0},
-              {<<"4">>,4,0}],
-    PNCnt2 = [{<<"3">>,3,0},
-              {<<"4">>,3,0}],
-    ?assertEqual([], merge(new(), new())),
-    ?assertEqual([{<<"1">>,1,0},
-                  {<<"2">>,2,0},
-                  {<<"4">>,4,0},
-                  {<<"3">>,3,0}], merge(PNCnt1, PNCnt2)).
-
-merge_too_test() ->
-    PNCnt1 = [{<<"5">>,5,0},
-              {<<"7">>,0,4}],
-    PNCnt2 = [{<<"5">>,0,2},
-              {<<"6">>,6,0},
-              {<<"7">>,7,0}],
-    ?assertEqual([{<<"5">>,5,2},
-                  {<<"7">>,7,4},
-                  {<<"6">>,6,0}], merge(PNCnt1, PNCnt2)).
+    {PNCnt1, Evt} = make_counter([{<<"1">>, increment},
+                           {<<"2">>, {increment, 2}},
+                           {<<"4">>, {increment, 1}}], 0),
+    {PNCnt2, _Evt2} = make_counter([{<<"3">>, {increment, 3}},
+                           {<<"4">>, {increment, 3}}], Evt),
+    ?assertEqual(new(), merge(new(), new())),
+    ?assertEqual(9, value(merge(PNCnt1, PNCnt2))).
 
 equal_test() ->
-    PNCnt1 = [{1,2,1},{2,1,0},{3,0,1},{4,1,0}],
-    PNCnt2 = [{1,1,0},{2,4,0},{3,1,0}],
-    PNCnt3 = [{4,1,0},{2,1,0},{3,0,1},{1,2,1}],
-    PNCnt4 = [{4,1,0},{1,2,1},{2,1,0},{3,0,1}],
+    PNCnt1 = make_counter([{1, {increment, 2}}, {1, decrement},
+                           {2, increment},
+                           {3, decrement},
+                           {4, increment}]),
+    PNCnt2 = make_counter([{1, increment},
+                           {2, {increment, 4}},
+                           {3, increment}]),
+    PNCnt3 = make_counter([{1, {increment, 2}}, {1, decrement},
+                           {2, increment},
+                           {3, decrement},
+                           {4, increment}]),
     ?assertNot(equal(PNCnt1, PNCnt2)),
-    ?assert(equal(PNCnt3, PNCnt4)),
     ?assert(equal(PNCnt1, PNCnt3)).
 
 usage_test() ->
     PNCnt1 = new(),
     PNCnt2 = new(),
     ?assert(equal(PNCnt1, PNCnt2)),
-    {ok, PNCnt1_1} = update({increment, 2}, a1, PNCnt1),
-    {ok, PNCnt2_1} = update(increment, a2, PNCnt2),
+    {ok, PNCnt1_1} = update({increment, 2}, {a1, 1}, PNCnt1),
+    {ok, PNCnt2_1} = update(increment, {a2, 1}, PNCnt2),
     PNCnt3 = merge(PNCnt1_1, PNCnt2_1),
-    {ok, PNCnt2_2} = update({increment, 3}, a3, PNCnt2_1),
-    {ok, PNCnt3_1} = update(increment, a4, PNCnt3),
-    {ok, PNCnt3_2} = update(increment, a1, PNCnt3_1),
-    {ok, PNCnt3_3} = update({decrement, 2}, a5, PNCnt3_2),
-    {ok, PNCnt2_3} = update(decrement, a2, PNCnt2_2),
-    ?assertEqual([{a5,0,2},
-                  {a1,3,0},
-                  {a4,1,0},
-                  {a2,1,1},
-                  {a3,3,0}], merge(PNCnt3_3, PNCnt2_3)).
+    {ok, PNCnt2_2} = update({increment, 3}, {a3, 1}, PNCnt2_1),
+    {ok, PNCnt3_1} = update(increment, {a4, 1}, PNCnt3),
+    {ok, PNCnt3_2} = update(increment, {a1, 2}, PNCnt3_1),
+    {ok, PNCnt3_3} = update({decrement, 2}, {a5, 1}, PNCnt3_2),
+    {ok, PNCnt2_3} = update(decrement, {a2, 2}, PNCnt2_2),
+    ?assertEqual({[{a1, 2}, {a2, 2}, {a3, 1}, {a4, 1}, {a5, 1}],
+                  [{a1, {2, 3,0}},
+                   {a2, {2, 1, 1}},
+                   {a3, {1, 3,0}},
+                   {a4, {1, 1, 0}},
+                   {a5, {1, 0,2}}]}, merge(PNCnt3_3, PNCnt2_3)).
 
 roundtrip_bin_test() ->
     PN = new(),
-    {ok, PN1} = update({increment, 2}, <<"a1">>, PN),
-    {ok, PN2} = update({decrement, 1000000000000000000000000}, douglas_Actor, PN1),
-    {ok, PN3} = update(increment, [{very, ["Complex"], <<"actor">>}, honest], PN2),
-    {ok, PN4} = update(decrement, "another_acotr", PN3),
+    {ok, PN1} = update({increment, 2}, {<<"a1">>, 1}, PN),
+    {ok, PN2} = update({decrement, 1000000000000000000000000}, {douglas_Actor, 1}, PN1),
+    {ok, PN3} = update(increment, {[{very, ["Complex"], <<"actor">>}, honest], 900987}, PN2),
+    {ok, PN4} = update(decrement, {"another_acotr", 28}, PN3),
     Bin = to_binary(PN4),
     Decoded = from_binary(Bin),
     ?assert(equal(PN4, Decoded)).
 
 query_test() ->
     PN = new(),
-    {ok, PN1} = update({increment, 50}, a1, PN),
-    {ok, PN2} = update({increment, 50}, a2, PN1),
-    {ok, PN3} = update({decrement, 15}, a3, PN2),
-    {ok, PN4} = update({decrement, 10}, a4, PN3),
+    {ok, PN1} = update({increment, 50}, {a1, 1}, PN),
+    {ok, PN2} = update({increment, 50}, {a2, 1}, PN1),
+    {ok, PN3} = update({decrement, 15}, {a3,1},  PN2),
+    {ok, PN4} = update({decrement, 10}, {a4, 1}, PN3),
     ?assertEqual(75, value(PN4)),
     ?assertEqual(100, value(positive, PN4)),
     ?assertEqual(25, value(negative, PN4)).
 
 stat_test() ->
     PN = new(),
-    {ok, PN1} = update({increment, 50}, a1, PN),
-    {ok, PN2} = update({increment, 50}, a2, PN1),
-    {ok, PN3} = update({decrement, 15}, a3, PN2),
-    {ok, PN4} = update({decrement, 10}, a4, PN3),
+    {ok, PN1} = update({increment, 50}, {a1, 1}, PN),
+    {ok, PN2} = update({increment, 50}, {a2, 1}, PN1),
+    {ok, PN3} = update({decrement, 15}, {a3, 1}, PN2),
+    {ok, PN4} = update({decrement, 10}, {a4, 1}, PN3),
     ?assertEqual([{actor_count, 0}], stats(PN)),
     ?assertEqual(4, stat(actor_count, PN4)),
     ?assertEqual(undefined, stat(max_dot_length, PN4)).
