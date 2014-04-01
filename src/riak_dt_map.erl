@@ -79,7 +79,8 @@
 -type binary_map() :: binary(). %% A binary that from_binary/1 will accept
 -type map() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
 -type entries() :: ordsets:ordset(entry()).
--type entry() :: {Field :: field(), CRDT :: crdt(), Tag :: riak_dt:dot()}.
+-type entry() :: {field_tag(), CRDT :: crdt()}.
+-type field_tag() :: {Field :: field(), Tag :: riak_dt:dot()}.
 -type field() :: {Name :: binary(), CRDTModule :: crdt_mod()}.
 %% Only field removals can be deferred. CRDTs stored in the map may
 %% have contexts and deferred operatiosn, but as these are part of the
@@ -125,7 +126,7 @@ parent_clock(Clock, {_MapClock, Values, Deferred}) ->
 %% @doc get the current set of values for this Map
 -spec value(map()) -> values().
 value({_Clock, Values, _Deferred}) ->
-    Res = lists:foldl(fun({{_Name, Type}=Key, Value, _Dot}, Acc) ->
+    Res = lists:foldl(fun({{{_Name, Type}=Key, _Dot}, Value}, Acc) ->
                               %% if key is in Acc merge with it and replace
                               dict:update(Key, fun(V) ->
                                                        Type:merge(V, Value) end,
@@ -193,21 +194,22 @@ update_clock(Actor, Clock) ->
 apply_ops([], _Dot, Map, _Ctx) ->
     {ok, Map};
 apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock, Values, Deferred}, Ctx) ->
-    FieldInMap = [{F, CRDT, Tag} || {F, CRDT, Tag} <- ordsets:to_list(Values), F == Field],
-    {CRDT, TrimmedValues} = lists:foldl(fun({_F, Value, _T}=E, {Acc, ValuesAcc}) ->
-                                                %% remove the tagged
-                                                %% value, as it will
-                                                %% be superseded by
-                                                %% the new update
-                                                {Type:merge(Acc, Value),
-                                                 ordsets:del_element(E, ValuesAcc)}
-                                        end,
-                                        {Type:new(), Values},
-                                        FieldInMap),
+    {CRDT, TrimmedValues} = ordsets:fold(fun({{F, _D}, Value}=E, {Acc, ValuesAcc}) when F == Field ->
+                                                 %% remove the tagged
+                                                 %% value, as it will
+                                                 %% be superseded by
+                                                 %% the new update
+                                                 {Type:merge(Acc, Value),
+                                                  ordsets:del_element(E, ValuesAcc)};
+                                            (_E, Acc) ->
+                                                 Acc
+                                         end,
+                                         {Type:new(), Values},
+                                         Values),
     CRDT1 = Type:parent_clock(Clock, CRDT),
     case Type:update(Op, Dot, CRDT1, Ctx) of
         {ok, Updated} ->
-            NewValues = ordsets:add_element({Field, Updated, Dot}, TrimmedValues),
+            NewValues = ordsets:add_element({{Field, Dot}, Updated}, TrimmedValues),
             apply_ops(Rest, Dot, {Clock, NewValues, Deferred}, Ctx);
         Error ->
             Error
@@ -225,7 +227,7 @@ apply_ops([{add, {_Name, Mod}=Field} | Rest], Dot, {Clock, Values, Deferred}, Ct
     %% which is nice. After an update though, we're back to a mixed,
     %% unknown result. And of course we have a duplicate entry. Adds
     %% are weird.
-    ToAdd = {Field, Mod:new(), Dot},
+    ToAdd = {{Field, Dot}, Mod:new()},
     NewValues = ordsets:add_element(ToAdd, Values),
     apply_ops(Rest, Dot, {Clock, NewValues, Deferred}, Ctx).
 
@@ -244,7 +246,7 @@ apply_ops([{add, {_Name, Mod}=Field} | Rest], Dot, {Clock, Values, Deferred}, Ct
 -spec remove_field(field(), map(), context()) ->
                           {ok, map()} | precondition_error().
 remove_field(Field, {Clock, Values, Deferred}, undefined) ->
-    {Removed, NewValues} = ordsets:fold(fun({F, _Val, _Token}, {_B, AccIn}) when F == Field ->
+    {Removed, NewValues} = ordsets:fold(fun({{F, _Dot}, _Val}, {_B, AccIn}) when F == Field ->
                                                 {true, AccIn};
                                            (Elem, {B, AccIn}) ->
                                                 {B, ordsets:add_element(Elem, AccIn)}
@@ -260,7 +262,7 @@ remove_field(Field, {Clock, Values, Deferred}, undefined) ->
 %% Context removes
 remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
     Deferred = defer_remove(Clock, Ctx, Field, Deferred0),
-    NewValues = ordsets:fold(fun({F, _Val, Dot}=E, AccIn) when F == Field ->
+    NewValues = ordsets:fold(fun({{F, Dot}, _Val}=E, AccIn) when F == Field ->
                                      keep_or_drop(Ctx, Dot, AccIn, E);
                                 (Elem, AccIn) ->
                                      ordsets:add_element(Elem, AccIn)
@@ -316,14 +318,14 @@ merge_deferred(LHS, RHS) ->
 -spec merge_left(entries(), entries(), riak_dt_vclock:vclock()) ->
                         {entries(), entries()}.
 merge_left(LHSEntries, RHSEntries, RHSClock) ->
-    lists:foldl(fun({_F, _CRDT, Tag}=E, {Acc, RHS}) ->
-                        case lists:keytake(Tag, 3, RHS) of
+    lists:foldl(fun({{_F, Dot}=Key, _CRDT}=E, {Acc, RHS}) ->
+                        case lists:keytake(Key, 1, RHS) of
                             {value, E, RHS1} ->
                                 %% same in bolth
                                 {ordsets:add_element(E, Acc), RHS1};
                             false ->
-                                %% RHS does not have this field, should be dropped, or kept?
-                                Acc2 = keep_or_drop(RHSClock, Tag, Acc, E),
+                                %% RHS does not have this field/dot, should be dropped, or kept?
+                                Acc2 = keep_or_drop(RHSClock, Dot, Acc, E),
                                 {Acc2, RHS}
                         end
                 end,
@@ -334,8 +336,8 @@ merge_left(LHSEntries, RHSEntries, RHSClock) ->
 %% side. Returns the subset of entries that should be kept.
 -spec merge_right(riak_dt_vclock:vclock(), entries()) -> entries().
 merge_right(LHSClock, RHSUnique) ->
-    lists:foldl(fun({_F, _CRDT, Tag}=E, Acc) ->
-                        keep_or_drop(LHSClock, Tag, Acc, E)
+    lists:foldl(fun({{_F, Dot}, _CRDT}=E, Acc) ->
+                        keep_or_drop(LHSClock, Dot, Acc, E)
                 end,
                 ordsets:new(),
                 RHSUnique).
@@ -389,7 +391,7 @@ equal({Clock1, Values1, Deferred1}, {Clock2, Values2, Deferred2}) ->
 -spec pairwise_equals(entries(), entries()) -> boolean().
 pairwise_equals([], []) ->
     true;
-pairwise_equals([{{_Name, Type}, CRDT1, Tag}| Rest1], [{{_Name, Type}, CRDT2, Tag}|Rest2]) ->
+pairwise_equals([{{{Name, Type}, Dot}, CRDT1}| Rest1], [{{{Name, Type}, Dot}, CRDT2}|Rest2]) ->
     case Type:equal(CRDT1, CRDT2) of
         true ->
             pairwise_equals(Rest1, Rest2);
@@ -426,7 +428,7 @@ stat(field_count, {_, Fields, _}) ->
     length(Fields);
 stat(duplication, {_, Fields, _}) ->
     %% Number of duplicated fields
-    DeDuped = ordsets:fold(fun({Field, _, _}, Acc) ->
+    DeDuped = ordsets:fold(fun({{Field, _}, _}, Acc) ->
                           ordsets:add_element(Field, Acc) end,
                   ordsets:new(),
                   Fields),
@@ -690,6 +692,17 @@ get_for_key({_N, T}=K, ID, Dict) ->
 
 -endif.
 
+%% found by eqc. Using tag as key in merge left causes a bug like
+%% this: A adds field X, Y at {a, 1} A replicates to b be removes
+%% field X A merges with B Now keytake had a function clause exception
+%% because lists:keytake({a, 1}, 3) is neither the same element nor
+%% notfound
+dot_key_test() ->
+    {ok, A} = update({update, [{add, {'X', riak_dt_orswot}}, {add, {'X', riak_dt_od_flag}}]}, a, new()),
+    B = A,
+    {ok, A2} = update({update, [{remove, {'X', riak_dt_od_flag}}]}, a, A),
+    ?assertEqual([{{'X', riak_dt_orswot}, []}], value(merge(B, A2))).
+
 stat_test() ->
     Map = new(),
     {ok, Map1} = update({update, [{add, {c, riak_dt_pncounter}},
@@ -700,7 +713,6 @@ stat_test() ->
     {ok, Map2} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"foo">>, 1}}]}, a2, Map1),
     {ok, Map3} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"bar">>, 2}}]}, a3, Map1),
     Map4 = merge(Map2, Map3),
-    io:format("map :: ~p~n", [Map4]),
     ?assertEqual([{actor_count, 0}, {field_count, 0}, {duplication, 0}, {deferred_length, 0}], stats(Map)),
     ?assertEqual(3, stat(actor_count, Map4)),
     ?assertEqual(6, stat(field_count, Map4)),
