@@ -698,7 +698,7 @@ get_for_key({_N, T}=K, ID, Dict) ->
 %% fields can be added/updated at the same time. This means they get
 %% the same `dot'. When merging two replicas, it is possible that one
 %% has removed one or more of the fields added at a particular `dot',
-%% which meant to a function clause error in `merge_left/3'. The
+%% which meant a function clause error in `merge_left/3'. The
 %% structure was wrong, it didn't take into account the possibility
 %% that multiple fields could have the same `dot', when clearly, they
 %% can. This test fails with `dot' as the key for a field in
