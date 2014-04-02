@@ -692,11 +692,18 @@ get_for_key({_N, T}=K, ID, Dict) ->
 
 -endif.
 
-%% found by eqc. Using tag as key in merge left causes a bug like
-%% this: A adds field X, Y at {a, 1} A replicates to b be removes
-%% field X A merges with B Now keytake had a function clause exception
-%% because lists:keytake({a, 1}, 3) is neither the same element nor
-%% notfound
+%% This test is a regression test for a counter example found by eqc.
+%% The previous version of riak_dt_map used the `dot' from the field
+%% update/creation event as key in `merge_left/3'. Of course multiple
+%% fields can be added/updated at the same time. This means they get
+%% the same `dot'. When merging two replicas, it is possible that one
+%% has removed one or more of the fields added at a particular `dot',
+%% which meant to a function clause error in `merge_left/3'. The
+%% structure was wrong, it didn't take into account the possibility
+%% that multiple fields could have the same `dot', when clearly, they
+%% can. This test fails with `dot' as the key for a field in
+%% `merge_left/3', but passes with the current structure, of
+%% `{field(), dot()}' as key.
 dot_key_test() ->
     {ok, A} = update({update, [{add, {'X', riak_dt_orswot}}, {add, {'X', riak_dt_od_flag}}]}, a, new()),
     B = A,
