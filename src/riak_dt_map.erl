@@ -70,38 +70,37 @@
 
 %% EQC API
 -ifdef(EQC).
--export([gen_op/0, update_expected/3, eqc_state_value/1,
-         init_state/0, gen_field/0, generate/0, size/1]).
+-export([gen_op/0, gen_field/0, generate/0, size/1]).
 -endif.
 
 -export_type([map/0, binary_map/0, map_op/0]).
 
 -type binary_map() :: binary(). %% A binary that from_binary/1 will accept
 -type map() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
--type entries() :: ordsets:ordset(entry()).
--type entry() :: {field_tag(), CRDT :: crdt()}.
--type field_tag() :: {Field :: field(), Tag :: riak_dt:dot()}.
+-type entries() :: [{field(), {[{riak_dt:dot(), crdt()}],
+                               TS::riak_dt_vclock:vclock()}}]. %% Store a Tombstone clock, GLB?
 -type field() :: {Name :: binary(), CRDTModule :: crdt_mod()}.
+
 %% Only field removals can be deferred. CRDTs stored in the map may
-%% have contexts and deferred operatiosn, but as these are part of the
+%% have contexts and deferred operations, but as these are part of the
 %% state, they are stored under the field as an update like any other.
 -type deferred() :: [{context(), [field()]}].
 
--type crdt_mod() :: riak_dt_pncounter | riak_dt_lwwreg |
+-type crdt_mod() :: riak_dt_emcntr | riak_dt_lwwreg |
                     riak_dt_od_flag |
                     riak_dt_map | riak_dt_orswot.
 
--type crdt()  ::  riak_dt_pncounter:pncounter() | riak_dt_od_flag:od_flag() |
+-type crdt()  ::  riak_dt_emcntr:emcntr() | riak_dt_od_flag:od_flag() |
                   riak_dt_lwwreg:lwwreg() |
                   riak_dt_orswot:orswot() |
                   riak_dt_map:map().
 
 -type map_op() :: {update, [map_field_update() | map_field_op()]}.
 
--type map_field_op() :: {add, field()} | {remove, field()}.
+-type map_field_op() ::  {remove, field()}.
 -type map_field_update() :: {update, field(), crdt_op()}.
 
--type crdt_op() :: riak_dt_pncounter:pncounter_op() |
+-type crdt_op() :: riak_dt_emcntr:emcntr_op() |
                    riak_dt_lwwreg:lwwreg_op() |
                    riak_dt_orswot:orswot_op() | riak_dt_od_flag:od_flag_op() |
                    riak_dt_map:map_op().
@@ -115,7 +114,7 @@
 %% @doc Create a new, empty Map.
 -spec new() -> map().
 new() ->
-    {riak_dt_vclock:fresh(), ordsets:new(), orddict:new()}.
+    {riak_dt_vclock:fresh(), orddict:new(), orddict:new()}.
 
 %% @doc sets the clock in the map to that `Clock'. Used by a
 %% containing Map for sub-CRDTs
@@ -126,14 +125,27 @@ parent_clock(Clock, {_MapClock, Values, Deferred}) ->
 %% @doc get the current set of values for this Map
 -spec value(map()) -> values().
 value({_Clock, Values, _Deferred}) ->
-    Res = lists:foldl(fun({{{_Name, Type}=Key, _Dot}, Value}, Acc) ->
-                              %% if key is in Acc merge with it and replace
-                              dict:update(Key, fun(V) ->
-                                                       Type:merge(V, Value) end,
-                                          Value, Acc) end,
-                      dict:new(),
-                      Values),
-    [{K, Type:value(V)} || {{_Name, Type}=K, V} <- dict:to_list(Res)].
+    orddict:fold(fun({Name, Type}, CRDTs, Acc) ->
+                         Merged = merge_crdts(Type, CRDTs),
+                         [{{Name, Type}, Type:value(Merged)} | Acc] end,
+                 [],
+                 Values).
+
+%% @private merge entry for field, if present, or return new if not
+merge_field({_Name, Type}, error) ->
+    Type:new();
+merge_field({_Name, Type}, {ok, CRDTs}) ->
+    merge_crdts(Type, CRDTs);
+merge_field(Field, Values) ->
+    merge_field(Field, orddict:find(Field, Values)).
+
+%% @private merge the CRDTs of a type
+merge_crdts(Type, {CRDTs, TS}) ->
+    V = orddict:fold(fun(_Dot, CRDT, CRDT0) ->
+                             Type:merge(CRDT0, CRDT) end,
+                     Type:new(),
+                     CRDTs),
+    Type:merge(TS, V).
 
 %% @doc query map (not implemented yet)
 -spec value(term(), map()) -> values().
@@ -150,24 +162,23 @@ value(_, Map) ->
 %% and the result inserted otherwise, the operation is applied to the
 %% local value.
 %%
-%% {add, `field()'}' where field is `{name, type}' results in `field'
-%% being added to the Map, and a new crdt of `type' being its value.
-%% `{remove, `field()'}' where field is `{name, type}', results in the
-%% crdt at `field' and the key and value being removed. A concurrent
-%% `update' | `add' will win over a remove.
+%%  `{remove, `field()'}' where field is `{name, type}', results in
+%%  the crdt at `field' and the key and value being removed. A
+%%  concurrent `update' will "win" over a remove so that the field is
+%%  still present, and it's value will contain the concurrent update.
 %%
-%% Either all of `Ops' are performed successfully, or none are.
-%%
-%% @see riak_dt_orswot for more details.
+%% Atomic, all of `Ops' are performed successfully, or none are.
 -spec update(map_op(), riak_dt:actor() | riak_dt:dot(), map()) ->
                     {ok, map()} | precondition_error().
 update(Op, ActorOrDot, Map) ->
     update(Op, ActorOrDot, Map, undefined).
 
 %% @doc the same as `update/3' except that the context ensures no
-%% unseen field adds are removed, and removal of unseen adds is
-%% deferred. The Context is passed on as the context for any nested
-%% types.
+%% unseen field updates are removed, and removal of unseen updates is
+%% deferred. The Context is passed down as the context for any nested
+%% types. hence the common clock.
+%%
+%% @see parent_clock/2
 -spec update(map_op(), riak_dt:actor() | riak_dt:dot(), map(), riak_dt:context()) ->
                     {ok, map()}.
 update({update, Ops}, ActorOrDot, {Clock0, Values, Deferred}, Ctx) ->
@@ -194,22 +205,13 @@ update_clock(Actor, Clock) ->
 apply_ops([], _Dot, Map, _Ctx) ->
     {ok, Map};
 apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock, Values, Deferred}, Ctx) ->
-    {CRDT, TrimmedValues} = ordsets:fold(fun({{F, _D}, Value}=E, {Acc, ValuesAcc}) when F == Field ->
-                                                 %% remove the tagged
-                                                 %% value, as it will
-                                                 %% be superseded by
-                                                 %% the new update
-                                                 {Type:merge(Acc, Value),
-                                                  ordsets:del_element(E, ValuesAcc)};
-                                            (_E, Acc) ->
-                                                 Acc
-                                         end,
-                                         {Type:new(), Values},
-                                         Values),
+    CRDT = merge_field(Field, Values),
     CRDT1 = Type:parent_clock(Clock, CRDT),
     case Type:update(Op, Dot, CRDT1, Ctx) of
         {ok, Updated} ->
-            NewValues = ordsets:add_element({{Field, Dot}, Updated}, TrimmedValues),
+            NewValues = orddict:store(Field, {orddict:store(Dot, Updated, orddict:new()),
+                                              Type:new()} %% Tombstone is merge now @TODO IS THAT CORRECT??
+                                     , Values),
             apply_ops(Rest, Dot, {Clock, NewValues, Deferred}, Ctx);
         Error ->
             Error
@@ -220,16 +222,7 @@ apply_ops([{remove, Field} | Rest], Dot, Map, Ctx) ->
             apply_ops(Rest, Dot, NewMap, Ctx);
         E ->
             E
-    end;
-apply_ops([{add, {_Name, Mod}=Field} | Rest], Dot, {Clock, Values, Deferred}, Ctx) ->
-    %% @TODO ¿Should an add read and replace, or stand alone? If it
-    %% stands alone, a concurrent remove results in an empty field,
-    %% which is nice. After an update though, we're back to a mixed,
-    %% unknown result. And of course we have a duplicate entry. Adds
-    %% are weird.
-    ToAdd = {{Field, Dot}, Mod:new()},
-    NewValues = ordsets:add_element(ToAdd, Values),
-    apply_ops(Rest, Dot, {Clock, NewValues, Deferred}, Ctx).
+    end.
 
 %% @private when context is undefined, we simply remove all instances
 %% of Field, regardless of their dot. If the field is not present then
@@ -246,48 +239,85 @@ apply_ops([{add, {_Name, Mod}=Field} | Rest], Dot, {Clock, Values, Deferred}, Ct
 -spec remove_field(field(), map(), context()) ->
                           {ok, map()} | precondition_error().
 remove_field(Field, {Clock, Values, Deferred}, undefined) ->
-    {Removed, NewValues} = ordsets:fold(fun({{F, _Dot}, _Val}, {_B, AccIn}) when F == Field ->
-                                                {true, AccIn};
-                                           (Elem, {B, AccIn}) ->
-                                                {B, ordsets:add_element(Elem, AccIn)}
-                                        end,
-                                        {false, ordsets:new()},
-                                        Values),
-    case Removed of
-        false ->
+    case orddict:find(Field, Values) of
+        error ->
             {error, {precondition, {not_present, Field}}};
-        _ ->
-            {ok, {Clock, NewValues, Deferred}}
+        {ok, _Removed} ->
+            {ok, {Clock, orddict:erase(Field, Values), Deferred}}
     end;
 %% Context removes
 remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
     Deferred = defer_remove(Clock, Ctx, Field, Deferred0),
-    NewValues = ordsets:fold(fun({{F, Dot}, _Val}=E, AccIn) when F == Field ->
-                                     keep_or_drop(Ctx, Dot, AccIn, E);
-                                (Elem, AccIn) ->
-                                     ordsets:add_element(Elem, AccIn)
-                             end,
-                             ordsets:new(),
-                             Values),
+    NewValues = case ctx_rem_field(Field, Values, Ctx, Clock) of
+                    empty ->
+                        orddict:erase(Field, Values);
+                    CRDTs ->
+                        orddict:store(Field, CRDTs, Values)
+                end,
     {ok, {Clock, NewValues, Deferred}}.
 
+%% @private drop dominated fields
+ctx_rem_field(_Field, error, _Ctx_, _Clock) ->
+    empty;
+ctx_rem_field({_, Type}, {ok, {CRDTs, TS0}}, Ctx, MapClock) ->
+    %% Create a tombstone CRDT to merge with any dots that survive.
+    %% If the context is removing a field at dot {a, 1} and the
+    %% current field is {a, 2}, it needs to learn that all events from
+    %% {a, 1} are removed. If the ctx remove is at {a, 3} and the
+    %% current field is at {a, 2} then we need to remove all events
+    %% upto {a, 2}. The glb clock enables that.
+    %%
+    %% @TODO this doesn't really work for counters.
+    TombstoneClock = riak_dt_vclock:glb(Ctx, MapClock), %% GLB is events seen by both clocks only
+    TS = Type:parent_clock(TombstoneClock, Type:new()),
+    Remaining = orddict:fold(fun(Dot, CRDT, Keep) ->
+                                   case riak_dt_vclock:descends(Ctx, [Dot]) of
+                                       %% Ctx dominates the dot, don't
+                                       %% keep the field
+                                       true ->
+                                           Keep;
+                                       false ->
+                                           %% Dot concurrent with Ctx,
+                                           %% but still remove Ctx
+                                           %% values from field
+                                           %% @TODO or do we store this GLB??
+                                           %% CRDT2 = Type:merge(CRDT, TS),
+                                           orddict:store(Dot, CRDT, Keep)
+                                   end
+                           end,
+                           orddict:new(),
+                           CRDTs),
+    case orddict:size(Remaining) of
+        0 -> %% Ctx remove removed all dots for field
+            empty;
+        _ -> {Remaining, Type:merge(TS, TS0)}
+    end;
+ctx_rem_field(Field, Values, Ctx, MapClock) ->
+    ctx_rem_field(Field, orddict:find(Field, Values), Ctx, MapClock).
+
 %% @private If we're asked to remove something we don't have (or have,
-%% but maybe not having seen all 'adds' for it), is it because we've
-%% not seen the add|update that we've been asked to remove, or is it
-%% because we already removed it? In the former case, we can "defer"
-%% this operation by storing it, with its context, for later
-%% execution. If the clock for the Map descends the operation clock,
-%% then we don't need to defer the op, its already been done. It is
-%% _very_ important to note, that only _actorless_ operations can be
-%% saved. That is operations that DO NOT increment the clock. In Map
-%% this means field removals. Contexts for update operations do not
-%% result in deferred operations on the parent Map.
+%% but maybe not all 'updates' for it), is it because we've not seen
+%% the some update that we've been asked to remove, or is it because
+%% we already removed it? In the former case, we can "defer" this
+%% operation by storing it, with its context, for later execution. If
+%% the clock for the Map descends the operation clock, then we don't
+%% need to defer the op, its already been done. It is _very_ important
+%% to note, that only _actorless_ operations can be saved. That is
+%% operations that DO NOT need to increment the clock. In a Map this
+%% means field removals only. Contexts for update operations do not
+%% result in deferred operations on the parent Map. This simulates
+%% causal delivery, in that an `update' must be seen before it can be
+%% `removed'.
 -spec defer_remove(riak_dt_vclock:vclock(), riak_dt_vclock:vclock(), field(), deferred()) ->
                           deferred().
 defer_remove(Clock, Ctx, Field, Deferred) ->
     case riak_dt_vclock:descends(Clock, Ctx) of
         %% no need to save this remove, we're done
         true -> Deferred;
+        %% @TODO is there anything to be done with regard to
+        %% reset-remove semantic? Or is the GLB merge in
+        %% ctx_remove_field enough?
+        %% @TODO be more effecient, storeing [{a, 1}] -> F and [{a, 2}] -> F is wasteful, can we just merge contexts for a field?
         false -> orddict:update(Ctx,
                                 fun(Fields) ->
                                         ordsets:add_element(Field, Fields) end,
@@ -295,16 +325,117 @@ defer_remove(Clock, Ctx, Field, Deferred) ->
                                 Deferred)
     end.
 
-%% @doc merge two `map()'s.  and then a pairwise merge on all values
-%% in the value list.  This is the LUB function.
+%% @doc merge two `map()'s.
 -spec merge(map(), map()) -> map().
 merge({LHSClock, LHSEntries, LHSDeferred}, {RHSClock, RHSEntries, RHSDeferred}) ->
     Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
-    {Entries0, RHSUnique} = merge_left(LHSEntries, RHSEntries, RHSClock),
-    Entries1 = merge_right(LHSClock, RHSUnique),
-    Entries2 = ordsets:union(Entries0, Entries1),
-    Deferred = merge_deferred(LHSDeferred, RHSDeferred),
-    apply_deferred(Clock, Entries2, Deferred).
+    GLBClock = riak_dt_vclock:glb(LHSClock, RHSClock),
+    {CommonKeys, LHSUnique, RHSUnique} = key_sets(LHSEntries, RHSEntries),
+    Acc0 = merge_unique(LHSUnique, LHSEntries, RHSClock, GLBClock, orddict:new()),
+    Acc1 = merge_unique(RHSUnique, RHSEntries, LHSClock, GLBClock, Acc0),
+    Entries = merge_common(CommonKeys, LHSEntries, RHSEntries, LHSClock, RHSClock, GLBClock, Acc1),
+    Deferred = merge_deferred(RHSDeferred, LHSDeferred),
+    apply_deferred(Clock, Entries, Deferred).
+
+merge_unique(FieldSet, Entries, Clock, _GLBClock, Acc) ->
+    sets:fold(fun({_Name, Type}=Field, Keep) ->
+                      {Dots, TS} = orddict:fetch(Field, Entries),
+                      KeepDots = orddict:fold(fun(Dot, CRDT, ToKeep) ->
+                                                      case riak_dt_vclock:descends(Clock, [Dot]) of
+                                                          true ->
+                                                              %% Removed by otherside
+                                                              ToKeep;
+                                                          false ->
+                                                              %% %% Not removed this, but maybe some predecessor,
+                                                              %% %% remove any dot that the RHS has seen
+                                                              %% TS = Type:parent_clock(GLBClock, Type:new()),
+                                                              %% Trimmed = Type:merge(CRDT, TS),
+                                                              orddict:store(Dot, CRDT, ToKeep)
+                                                      end
+                                              end,
+                                              orddict:new(),
+                                              Dots),
+                      case orddict:size(KeepDots) of
+                          0 ->
+                              Keep;
+                          _ ->
+                              orddict:store(Field, {KeepDots, Type:merge(TS, Type:parent_clock(Clock, Type:new()))}, Keep)
+                      end
+              end,
+              Acc,
+              FieldSet).
+
+key_set(Orddict) ->
+    sets:from_list(orddict:fetch_keys(Orddict)).
+
+key_sets(LHS, RHS) ->
+    LHSet = key_set(LHS),
+    RHSet = key_set(RHS),
+    {sets:intersection(LHSet, RHSet),
+     sets:subtract(LHSet, RHSet),
+     sets:subtract(RHSet, LHSet)}.
+
+
+merge_side(Type, Fields, Dots, Clock) ->
+    sets:fold(fun(Dot, {Survivors, TS}) ->
+                      CRDT = orddict:fetch(Dot, Dots),
+                      case riak_dt_vclock:descends(Clock, [Dot]) of
+                          true ->
+                              {Survivors, Type:merge(CRDT, TS)};
+                          false ->
+                              {orddict:store(Dot, orddict:fetch(Dot, Dots), Survivors), TS}
+                      end
+              end,
+              {orddict:new(), Type:new()},
+              Fields).
+
+merge_common(FieldSet, LHS, RHS, LHSClock , RHSClock, _GLBClock, Acc) ->
+    sets:fold(fun({_, Type}=Field, Keep) ->
+                      {LHSDots, LHTS} = orddict:fetch(Field, LHS),
+                      {RHSDots, RHTS} = orddict:fetch(Field, RHS),
+                      {CommonDots, LHSUniqe, RHSUnique} = key_sets(LHSDots, RHSDots),
+                      TS = Type:merge(RHTS, LHTS),
+
+                      Acc0 = sets:fold(fun(Dot, Common) ->
+                                               L = orddict:fetch(Dot, LHSDots),
+                                               R = orddict:fetch(Dot, RHSDots),
+                                               orddict:store(Dot, Type:merge(L, R), Common)
+                                       end,
+                                       orddict:new(),
+                                       CommonDots),
+
+                      {LHSSurviving, _} = merge_side(Type, LHSUniqe, LHSDots, RHSClock),
+                      {RHSSurviving, _} = merge_side(Type, RHSUnique, RHSDots, LHSClock),
+
+                      %% TS = Type:parent_clock(GLBClock, Type:new()),
+
+                      case {orddict:size(Acc0), orddict:size(LHSSurviving), orddict:size(RHSSurviving)} of
+                          %% {0, 0, 0} ->
+                          %%     Keep;
+                          %% {0, 0, _} ->
+                          %%     Dots = orddict:fold(fun(Dot, CRDT, Tombstoned) ->
+                          %%                                 orddict:store(Dot, Type:merge(TS, CRDT), Tombstoned) end,
+                          %%                         orddict:new(),
+                          %%                         RHSSurviving),
+                          %%     orddict:store(Field, Dots, Keep);
+                          %% {0, _, 0} ->
+                          %%     Dots = orddict:fold(fun(Dot, CRDT, Tombstoned) ->
+                          %%                                 orddict:store(Dot, Type:merge(TS, CRDT), Tombstoned) end,
+                          %%                         orddict:new(),
+                          %%                         LHSSurviving),
+                          %%     orddict:store(Field, Dots, Keep);
+                          {_, _, _} ->
+                              Dots = orddict:from_list(lists:merge([Acc0, LHSSurviving, RHSSurviving])),
+                              case Dots of
+                                  [] ->
+                                      Keep;
+                                  _ ->
+                                      orddict:store(Field, {Dots, TS}, Keep)
+                              end
+                      end
+              end,
+              Acc,
+              FieldSet).
 
 %% @private
 -spec merge_deferred(deferred(), deferred()) -> deferred().
@@ -312,48 +443,6 @@ merge_deferred(LHS, RHS) ->
     orddict:merge(fun(_K, LH, RH) ->
                           ordsets:union(LH, RH) end,
                   LHS, RHS).
-
-%% @private Merge the common entries, returns the merged common and
-%% those unique to the right hand side.
--spec merge_left(entries(), entries(), riak_dt_vclock:vclock()) ->
-                        {entries(), entries()}.
-merge_left(LHSEntries, RHSEntries, RHSClock) ->
-    lists:foldl(fun({{_F, Dot}=Key, _CRDT}=E, {Acc, RHS}) ->
-                        case lists:keytake(Key, 1, RHS) of
-                            {value, E, RHS1} ->
-                                %% same in bolth
-                                {ordsets:add_element(E, Acc), RHS1};
-                            false ->
-                                %% RHS does not have this field/dot, should be dropped, or kept?
-                                Acc2 = keep_or_drop(RHSClock, Dot, Acc, E),
-                                {Acc2, RHS}
-                        end
-                end,
-                {ordsets:new(), RHSEntries},
-                LHSEntries).
-
-%% @private merge those elements that were unique to the right hand
-%% side. Returns the subset of entries that should be kept.
--spec merge_right(riak_dt_vclock:vclock(), entries()) -> entries().
-merge_right(LHSClock, RHSUnique) ->
-    lists:foldl(fun({{_F, Dot}, _CRDT}=E, Acc) ->
-                        keep_or_drop(LHSClock, Dot, Acc, E)
-                end,
-                ordsets:new(),
-                RHSUnique).
-
-%% @private decide (using `Clock') if the `Field' with `Tag' gets into
-%% `Entries' or not.
--spec keep_or_drop(riak_dt_vclock:vclock(), riak_dt:dot(), entries(), entry()) ->
-                          entries().
-keep_or_drop(Clock, Tag, Entries, Field) ->
-    case riak_dt_vclock:descends(Clock, [Tag]) of
-        true ->
-            Entries;
-        false ->
-            ordsets:add_element(Field, Entries)
-    end.
-
 
 %% @private apply those deferred field removals, if they're
 %% preconditions have been met, that is.
@@ -384,18 +473,16 @@ remove_all(Fields, Map, Ctx) ->
 equal({Clock1, Values1, Deferred1}, {Clock2, Values2, Deferred2}) ->
     riak_dt_vclock:equal(Clock1, Clock2) andalso
         Deferred1 == Deferred2 andalso
-        pairwise_equals(ordsets:to_list(Values1), ordsets:to_list(Values2)).
+        pairwise_equals(Values1, Values2).
 
-%% @Private Note, only called when we know that 2 sets of fields are
-%% equal. Both dicts therefore have the same set of keys.
 -spec pairwise_equals(entries(), entries()) -> boolean().
 pairwise_equals([], []) ->
     true;
-pairwise_equals([{{{Name, Type}, Dot}, CRDT1}| Rest1], [{{{Name, Type}, Dot}, CRDT2}|Rest2]) ->
-    case Type:equal(CRDT1, CRDT2) of
-        true ->
+pairwise_equals([{{Name, Type}, {Dots1, TS1}}| Rest1], [{{Name, Type}, {Dots2, TS2}}|Rest2]) ->
+    case {orddict:fetch_keys(Dots1) == orddict:fetch_keys(Dots2), Type:equal(TS1, TS2)} of
+        {true, true} ->
             pairwise_equals(Rest1, Rest2);
-        false ->
+        _ ->
             false
     end;
 pairwise_equals(_, _) ->
@@ -428,11 +515,12 @@ stat(field_count, {_, Fields, _}) ->
     length(Fields);
 stat(duplication, {_, Fields, _}) ->
     %% Number of duplicated fields
-    DeDuped = ordsets:fold(fun({{Field, _}, _}, Acc) ->
-                          ordsets:add_element(Field, Acc) end,
-                  ordsets:new(),
-                  Fields),
-    length(Fields) - length(DeDuped);
+    {FieldCnt, Duplicates} = orddict:fold(fun(_Field, {Dots ,_}, {FCnt, DCnt}) ->
+                                                  {FCnt+1, DCnt + orddict:size(Dots)}
+                                          end,
+                                          {0, 0},
+                                          Fields),
+    Duplicates - FieldCnt;
 stat(deferred_length, {_, _, Deferred}) ->
     length(Deferred);
 stat(_,_) -> undefined.
@@ -503,19 +591,20 @@ remfield_test() ->
 %% Bug found by EQC, not dropping dots in merge when an element is
 %% present in both Maos leads to removed items remaining after merge.
 present_but_removed_test() ->
+    F = {'X', riak_dt_lwwreg},
     %% Add Z to A
-    {ok, A} = update({update, [{add, {'Z', riak_dt_lwwreg}}]}, a, new()),
+    {ok, A} = update({update, [{update, F, {assign, <<"A">>}}]}, a, new()),
     %% Replicate it to C so A has 'Z'->{a, 1}
     C = A,
     %% Remove Z from A
-    {ok, A2} = update({update, [{remove, {'Z', riak_dt_lwwreg}}]}, a, A),
+    {ok, A2} = update({update, [{remove, F}]}, a, A),
     %% Add Z to B, a new replica
-    {ok, B} = update({update, [{add, {'Z', riak_dt_lwwreg}}]}, b, new()),
+    {ok, B} = update({update, [{update, F, {assign, <<"B">>}}]}, b, new()),
     %%  Replicate B to A, so now A has a Z, the one with a Dot of
     %%  {b,1} and clock of [{a, 1}, {b, 1}]
     A3 = merge(B, A2),
     %% Remove the 'Z' from B replica
-    {ok, B2} = update({update, [{remove, {'Z', riak_dt_lwwreg}}]}, b, B),
+    {ok, B2} = update({update, [{remove, F}]}, b, B),
     %% Both C and A have a 'Z', but when they merge, there should be
     %% no 'Z' as C's has been removed by A and A's has been removed by
     %% C.
@@ -533,14 +622,15 @@ present_but_removed_test() ->
 %% A bug EQC found where dropping the dots in merge was not enough if
 %% you then store the value with an empty clock (derp).
 no_dots_left_test() ->
-    {ok, A} =  update({update, [{add, {'Z', riak_dt_lwwreg}}]}, a, new()),
-    {ok, B} =  update({update, [{add, {'Z', riak_dt_lwwreg}}]}, b, new()),
+    F = {'Z', riak_dt_lwwreg},
+    {ok, A} =  update({update, [{update, F, {assign, <<"A">>}}]}, a, new()),
+    {ok, B} =  update({update, [{update, F, {assign, <<"B">>}}]}, b, new()),
     C = A, %% replicate A to empty C
-    {ok, A2} = update({update, [{remove, {'Z', riak_dt_lwwreg}}]}, a, A),
+    {ok, A2} = update({update, [{remove, F}]}, a, A),
     %% replicate B to A, now A has B's 'Z'
     A3 = merge(A2, B),
     %% Remove B's 'Z'
-    {ok, B2} = update({update, [{remove, {'Z', riak_dt_lwwreg}}]}, b, B),
+    {ok, B2} = update({update, [{remove, F}]}, b, B),
     %% Replicate C to B, now B has A's old 'Z'
     B3 = merge(B2, C),
     %% Merge everytyhing, without the fix You end up with 'Z' present,
@@ -551,15 +641,30 @@ no_dots_left_test() ->
                          [B3, C]),
     ?assertEqual([], value(Merged)).
 
+%% A reset-reove bug eqc found where dropping a superceded dot lost
+%% field remove merge information the dropped dot contained
+transitive_remove_test() ->
+    F = {'X', riak_dt_orswot},
+    A=B=new(),
+    {ok, A1} = update({update, [{update, F, {add, 0}}]}, a, A),
+    %% Replicate!
+    B1 = merge(A1, B),
+    {ok, A2} = update({update, [{remove, F}]}, a, A1),
+    {ok, B2} = update({update, [{update, F, {add, 1}}]}, b, B1),
+    %% Replicate
+    A3 = merge(A2, B2),
+    %% that remove of F from A means remove the 0 A added to F
+    ?assertEqual([{F, [1]}], value(A3)),
+    {ok, B3} = update({update, [{update, F, {add, 2}}]}, b, B2),
+    %% replicate to A
+    A4 = merge(A3, B3),
+    %% final values
+    Final = merge(A4, B3),
+    ?assertEqual([{F, [1,2]}], value(Final)).
+
 
 -ifdef(EQC).
 -define(NUMTESTS, 1000).
-
-bin_roundtrip_test_() ->
-    crdt_statem_eqc:run_binary_rt(?MODULE, ?NUMTESTS).
-
-eqc_value_test_() ->
-    crdt_statem_eqc:run(?MODULE, ?NUMTESTS).
 
 %% ===================================
 %% crdt_statem_eqc callbacks
@@ -589,7 +694,7 @@ gen_op() ->
 
 gen_update() ->
     ?LET(Field, gen_field(),
-         oneof([{add, Field}, {remove, Field},
+         oneof([{remove, Field},
                 {update, Field, gen_field_op(Field)}])).
 
 gen_field() ->
@@ -602,88 +707,6 @@ gen_field() ->
 gen_field_op({_Name, Type}) ->
     Type:gen_op().
 
-init_state() ->
-    {0, dict:new()}.
-
-update_expected(ID, {update, Ops}, State) ->
-    %% Ops are atomic, all pass or all fail
-    %% return original state if any op failed
-    update_all(ID, Ops, State);
-update_expected(ID, {merge, SourceID}, {Cnt, Dict}) ->
-    {FA, FR} = dict:fetch(ID, Dict),
-    {TA, TR} = dict:fetch(SourceID, Dict),
-    MA = sets:union(FA, TA),
-    MR = sets:union(FR, TR),
-    {Cnt, dict:store(ID, {MA, MR}, Dict)};
-update_expected(ID, create, {Cnt, Dict}) ->
-    {Cnt, dict:store(ID, {sets:new(), sets:new()}, Dict)}.
-
-eqc_state_value({_Cnt, Dict}) ->
-    {A, R} = dict:fold(fun(_K, {Add, Rem}, {AAcc, RAcc}) ->
-                               {sets:union(Add, AAcc), sets:union(Rem, RAcc)} end,
-                       {sets:new(), sets:new()},
-                       Dict),
-    Remaining = sets:subtract(A, R),
-    Res = lists:foldl(fun({{_Name, Type}=Key, Value, _X}, Acc) ->
-                        %% if key is in Acc merge with it and replace
-                        dict:update(Key, fun(V) ->
-                                                 Type:merge(V, Value) end,
-                                    Value, Acc) end,
-                dict:new(),
-                sets:to_list(Remaining)),
-    [{K, Type:value(V)} || {{_Name, Type}=K, V} <- dict:to_list(Res)].
-
-%% @private
-%% @doc Apply the list of update operations to the model
-update_all(ID, Ops, OriginalState) ->
-    update_all(ID, Ops, OriginalState, OriginalState).
-
-update_all(_ID, [], _OriginalState, NewState) ->
-    NewState;
-update_all(ID, [{update, {_Name, Type}=Key, Op} | Rest], OriginalState, {Cnt0, Dict}) ->
-    CurrentValue = get_for_key(Key, ID, Dict),
-    %% handle precondition errors any precondition error means the
-    %% state is not changed at all
-    case Type:update(Op, ID, CurrentValue) of
-        {ok, Updated} ->
-            Cnt = Cnt0+1,
-            ToAdd = {Key, Updated, Cnt},
-            {A, R} = dict:fetch(ID, Dict),
-            update_all(ID, Rest, OriginalState, {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)});
-        _Error ->
-            OriginalState
-    end;
-update_all(ID, [{remove, Field} | Rest], OriginalState, {Cnt, Dict}) ->
-    {A, R} = dict:fetch(ID, Dict),
-    In = sets:subtract(A, R),
-    PresentFields = [E ||  {E, _, _X} <- sets:to_list(In)],
-    case lists:member(Field, PresentFields) of
-        true ->
-            ToRem = [{E, V, X} || {E, V, X} <- sets:to_list(A), E == Field],
-            NewState2 = {Cnt, dict:store(ID, {A, sets:union(R, sets:from_list(ToRem))}, Dict)},
-            update_all(ID, Rest, OriginalState, NewState2);
-        false ->
-            OriginalState
-    end;
-update_all(ID, [{add, {_Name, Type}=Field} | Rest], OriginalState, {Cnt0, Dict}) ->
-    Cnt = Cnt0+1,
-    ToAdd = {Field, Type:new(), Cnt},
-    {A, R} = dict:fetch(ID, Dict),
-    NewState = {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)},
-    update_all(ID, Rest, OriginalState, NewState).
-
-
-get_for_key({_N, T}=K, ID, Dict) ->
-    {A, R} = dict:fetch(ID, Dict),
-    Remaining = sets:subtract(A, R),
-    Res = lists:foldl(fun({{_Name, Type}=Key, Value, _X}, Acc) ->
-                        %% if key is in Acc merge with it and replace
-                        dict:update(Key, fun(V) ->
-                                                 Type:merge(V, Value) end,
-                                    Value, Acc) end,
-                dict:new(),
-                sets:to_list(Remaining)),
-    proplists:get_value(K, dict:to_list(Res), T:new()).
 
 -endif.
 
@@ -700,28 +723,35 @@ get_for_key({_N, T}=K, ID, Dict) ->
 %% `merge_left/3', but passes with the current structure, of
 %% `{field(), dot()}' as key.
 dot_key_test() ->
-    {ok, A} = update({update, [{add, {'X', riak_dt_orswot}}, {add, {'X', riak_dt_od_flag}}]}, a, new()),
+    {ok, A} = update({update, [{update, {'X', riak_dt_orswot}, {add, <<"a">>}}, {update, {'X', riak_dt_od_flag}, enable}]}, a, new()),
     B = A,
     {ok, A2} = update({update, [{remove, {'X', riak_dt_od_flag}}]}, a, A),
-    ?assertEqual([{{'X', riak_dt_orswot}, []}], value(merge(B, A2))).
+    ?assertEqual([{{'X', riak_dt_orswot}, [<<"a">>]}], value(merge(B, A2))).
 
 stat_test() ->
     Map = new(),
-    {ok, Map1} = update({update, [{add, {c, riak_dt_pncounter}},
-                                  {add, {s, riak_dt_orswot}},
-                                  {add, {m, riak_dt_map}},
-                                  {add, {l, riak_dt_lwwreg}},
-                                  {add, {l2, riak_dt_lwwreg}}]}, a1, Map),
-    {ok, Map2} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"foo">>, 1}}]}, a2, Map1),
-    {ok, Map3} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"bar">>, 2}}]}, a3, Map1),
+    {ok, Map1} = update({update, [{update, {c, riak_dt_emcntr}, increment},
+                                  {update, {s, riak_dt_orswot}, {add, <<"A">>}},
+                                  {update, {m, riak_dt_map}, {update, [{update, {ss, riak_dt_orswot}, {add, 0}}]}},
+                                  {update, {l, riak_dt_lwwreg}, {assign, <<"a">>, 1}},
+                                  {update, {l2, riak_dt_lwwreg}, {assign, <<"b">>, 2}}]}, a1, Map),
+    {ok, Map2} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"foo">>, 3}}]}, a2, Map1),
+    {ok, Map3} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"bar">>, 4}}]}, a3, Map1),
     Map4 = merge(Map2, Map3),
     ?assertEqual([{actor_count, 0}, {field_count, 0}, {duplication, 0}, {deferred_length, 0}], stats(Map)),
     ?assertEqual(3, stat(actor_count, Map4)),
-    ?assertEqual(6, stat(field_count, Map4)),
+    ?assertEqual(5, stat(field_count, Map4)),
     ?assertEqual(undefined, stat(waste_pct, Map4)),
     ?assertEqual(1, stat(duplication, Map4)),
-    {ok, Map5} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"baz">>, 2}}]}, a3, Map4),
-    ?assertEqual(5, stat(field_count, Map5)),
-    ?assertEqual(0, stat(duplication, Map5)).
+    {ok, Map5} = update({update, [{update, {l3, riak_dt_lwwreg}, {assign, <<"baz">>, 5}}]}, a3, Map4),
+    ?assertEqual(6, stat(field_count, Map5)),
+    ?assertEqual(1, stat(duplication, Map5)),
+    %% Updating field {l, riak_dt_lwwreg} merges the duplicates to a single field
+    %% @see apply_ops
+    {ok, Map6} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"bim">>, 6}}]}, a2, Map5),
+    ?assertEqual(0, stat(duplication, Map6)),
+    {ok, Map7} = update({update, [{remove, {l, riak_dt_lwwreg}}]}, a1, Map6),
+    ?assertEqual(5, stat(field_count, Map7)).
+
 
 -endif.
