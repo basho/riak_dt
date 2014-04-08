@@ -127,7 +127,7 @@ add_args(#state{replicas=Replicas, replica_data=ReplicaData, counter=Cnt}) ->
 %% will be more action on the fields. Learned this from
 %% crdt_statem_eqc having to large a state space and missing bugs.
 gen_field() ->
-    {oneof(['X,', 'Y', 'Z']),
+    {oneof(['X', 'Y', 'Z']),
      oneof([
             riak_dt_pncounter,
             riak_dt_orswot,
@@ -405,9 +405,11 @@ model_merge(Model1, Model2) ->
     #model{adds=Adds2, removes=Removes2, deferred=Deferred2, clock=Clock2} = Model2,
     Clock = riak_dt_vclock:merge([Clock1, Clock2]),
     Adds0 = sets:union(Adds1, Adds2),
+    %% @TODO model the merge with removed dots Any field that is only
+    %% in removes must have a parent clock merge
     Removes0 = sets:union(Removes1, Removes2),
     Deferred0 = sets:union(Deferred1, Deferred2),
-    {Adds, Removes, Deferred} =model_apply_deferred(Adds0, Removes0, Deferred0),
+    {Adds, Removes, Deferred} = model_apply_deferred(Adds0, Removes0, Deferred0),
     #model{adds=Adds, removes=Removes, deferred=Deferred, clock=Clock}.
 
 model_apply_deferred(Adds, Removes, Deferred) ->
