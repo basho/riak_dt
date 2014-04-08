@@ -79,8 +79,6 @@
 -type binary_map() :: binary(). %% A binary that from_binary/1 will accept
 -type map() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
 -type entries() :: [{field(), [{riak_dt:dot(), crdt()}]}].
--type entry() :: {field_tag(), CRDT :: crdt()}.
--type field_tag() :: {Field :: field(), Tag :: riak_dt:dot()}.
 -type field() :: {Name :: binary(), CRDTModule :: crdt_mod()}.
 %% Only field removals can be deferred. CRDTs stored in the map may
 %% have contexts and deferred operatiosn, but as these are part of the
@@ -126,6 +124,7 @@ parent_clock(Clock, {_MapClock, Values, Deferred}) ->
 %% @doc get the current set of values for this Map
 -spec value(map()) -> values().
 value({_Clock, Values, _Deferred}) ->
+<<<<<<< HEAD
     %% Res = lists:foldl(fun({{{_Name, Type}=Key, _Dot}, Value}, Acc) ->
     %%                           %% if key is in Acc merge with it and replace
     %%                           dict:update(Key, fun(V) ->
@@ -519,7 +518,7 @@ merge_deferred(LHS, RHS) ->
 
 %% @private decide (using `Clock') if the `Field' with `Dot' gets into
 %% `Entries' or not.
--spec keep_or_drop(riak_dt_vclock:vclock(), riak_dt:dot(), entries(), entry()) ->
+-spec keep_or_drop(riak_dt_vclock:vclock(), riak_dt:dot(), entries(), field()) ->
                           entries().
 keep_or_drop(Clock, Dot, Entries, Field) ->
     case riak_dt_vclock:descends(Clock, [Dot]) of
@@ -772,7 +771,7 @@ gen_update() ->
                 {update, Field, gen_field_op(Field)}])).
 
 gen_field() ->
-    {non_empty(binary()), oneof([riak_dt_pncounter,
+    {non_empty(binary()), oneof([riak_dt_emcntr,
                                  riak_dt_orswot,
                                  riak_dt_lwwreg,
                                  riak_dt_map,
@@ -866,6 +865,7 @@ get_for_key({_N, T}=K, ID, Dict) ->
 
 -endif.
 
+<<<<<<< HEAD
 %% This test is a regression test for a counter example found by eqc.
 %% The previous version of riak_dt_map used the `dot' from the field
 %% update/creation event as key in `merge_left/3'. Of course multiple
@@ -878,6 +878,13 @@ get_for_key({_N, T}=K, ID, Dict) ->
 %% can. This test fails with `dot' as the key for a field in
 %% `merge_left/3', but passes with the current structure, of
 %% `{field(), dot()}' as key.
+=======
+%% found by eqc. Using tag as key in merge left causes a bug like
+%% this: A adds field X, Y at {a, 1} A replicates to b be removes
+%% field X A merges with B Now keytake had a function clause exception
+%% because lists:keytake({a, 1}, 3) is neither the same element nor
+%% notfound
+>>>>>>> feature/rdb/embedded-cntr
 dot_key_test() ->
     {ok, A} = update({update, [{add, {'X', riak_dt_orswot}}, {add, {'X', riak_dt_od_flag}}]}, a, new()),
     B = A,
