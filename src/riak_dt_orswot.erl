@@ -443,12 +443,7 @@ stat(_,_) -> undefined.
 %% @see `from_binary/1'
 -spec to_binary(orswot()) -> binary_orswot().
 to_binary(S) ->
-    Opts = case application:get_env(riak_dt, binary_compression, true) of
-               true -> [{compressed, 1}];
-               N when N >= 0, N =< 9 -> [{compressed, N}];
-               _ -> []
-           end,
-     <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(S, Opts))/binary>>.
+     <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(S))/binary>>.
 
 %% @doc When the argument is a `binary_orswot()' produced by
 %% `to_binary/1' will return the original `orswot()'.
@@ -456,7 +451,7 @@ to_binary(S) ->
 %% @see `to_binary/1'
 -spec from_binary(binary_orswot()) -> orswot().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
-    binary_to_term(B).
+    riak_dt:from_binary(B).
 
 %% ===================================================================
 %% EUnit tests

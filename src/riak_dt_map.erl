@@ -449,12 +449,7 @@ stat(_,_) -> undefined.
 %% @see `from_binary/1'
 -spec to_binary(map()) -> binary_map().
 to_binary(Map) ->
-    Opts = case application:get_env(riak_dt, binary_compression, 1) of
-               true -> [compressed];
-               N when N >= 0, N =< 9 -> [{compressed, N}];
-               _ -> []
-           end,
-    <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(Map, Opts))/binary>>.
+    <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(Map))/binary>>.
 
 %% @doc When the argument is a `binary_map()' produced by
 %% `to_binary/1' will return the original `map()'.
@@ -462,7 +457,7 @@ to_binary(Map) ->
 %% @see `to_binary/1'
 -spec from_binary(binary_map()) -> map().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
-    binary_to_term(B).
+    riak_dt:from_binary(B).
 
 
 %% ===================================================================
