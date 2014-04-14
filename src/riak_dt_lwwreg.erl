@@ -136,39 +136,13 @@ stat(_, _) -> undefined.
 
 %% @doc Encode an effecient binary representation of an `lwwreg()'
 -spec to_binary(lwwreg()) -> binary().
-to_binary({Val, TS}) ->
-    {ValueLen, ValueBin} = val_to_binary(Val),
-    {TSLen, TSBin} = ts_to_binary(TS),
-    <<?TAG:8/integer, ?V1_VERS:8/integer, ValueLen:8/integer, ValueBin/binary, TSLen:8/integer, TSBin/binary>>.
+to_binary(LWWReg) ->
+    <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(LWWReg))/binary>>.
 
 %% @doc Decode binary `lwwreg()'
 -spec from_binary(binary()) -> lwwreg().
-from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, ValueLen:8/integer, ValueBin:ValueLen/binary,
-              TSLen:8/integer, TSBin:TSLen/binary>>) ->
-    {binary_to_val(ValueBin), binary_to_ts(TSBin)}.
-
-val_to_binary(Val) when is_binary(Val) ->
-    Bin = <<1, Val/binary>>,
-    {byte_size(Bin), Bin};
-val_to_binary(Term) ->
-    Bin = <<0, (term_to_binary(Term))/binary>>,
-    {byte_size(Bin), Bin}.
-
-binary_to_val(<<1, Val/binary>>) ->
-    Val;
-binary_to_val(<<0, Val/binary>>) ->
-    binary_to_term(Val).
-
-binary_to_ts(<<1, TS/binary>>) ->
-    binary:decode_unsigned(TS);
-binary_to_ts(TS) ->
-    binary_to_val(TS).
-
-ts_to_binary(TS) when is_integer(TS) ->
-    Bin = <<1, (binary:encode_unsigned(TS))/binary>>,
-    {byte_size(Bin), Bin};
-ts_to_binary(TS) ->
-    val_to_binary(TS).
+from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
+    riak_dt:from_binary(Bin).
 
 %% ===================================================================
 %% EUnit tests
