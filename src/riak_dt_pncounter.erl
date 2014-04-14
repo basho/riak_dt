@@ -178,8 +178,7 @@ from_binary(Binary = <<?TAG:8/integer, _/binary>>) ->
 to_binary(?V2_VERS, PNCnt) ->
     Version = current_version(PNCnt),
     V2 = change_versions(Version, ?V2_VERS, PNCnt),
-    V2Bin = term_to_binary(V2),
-    <<?TAG:8/integer, ?V2_VERS:8/integer, V2Bin/binary>>;
+    <<?TAG:8/integer, ?V2_VERS:8/integer, (riak_dt:to_binary(V2))/binary>>;
 to_binary(?V1_VERS, PNCnt) ->
     Version = current_version(PNCnt),
     {P,N} = change_versions(Version, ?V1_VERS, PNCnt),
@@ -193,7 +192,7 @@ to_binary(?V1_VERS, PNCnt) ->
 
 -spec from_binary(version(), binary()) -> any_pncounter().
 from_binary(?V2_VERS, <<?TAG:8/integer, ?V2_VERS:8/integer, PNBin/binary>>) ->
-    binary_to_term(PNBin);
+    riak_dt:from_binary(PNBin);
 from_binary(?V1_VERS, <<?TAG:8/integer, ?V1_VERS:8/integer,
                   PBinLen:32/integer, PBin:PBinLen/binary,
                   NBinLen:32/integer, NBin:NBinLen/binary>>) ->
