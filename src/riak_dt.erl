@@ -22,6 +22,7 @@
 
 -module(riak_dt).
 
+-export([to_binary/1, from_binary/1]).
 -export_type([actor/0, dot/0, crdt/0, context/0]).
 
 -type crdt() :: term().
@@ -60,3 +61,16 @@
 -callback init_state() -> model_state().
 
 -endif.
+
+-spec to_binary(crdt()) -> binary().
+to_binary(Term) ->
+    Opts = case application:get_env(riak_dt, binary_compression, 1) of
+               true -> [compressed];
+               N when N >= 0, N =< 9 -> [{compressed, N}];
+               _ -> []
+           end,
+    term_to_binary(Term, Opts).
+
+-spec from_binary(binary()) -> crdt().
+from_binary(Binary) ->
+    binary_to_term(Binary).

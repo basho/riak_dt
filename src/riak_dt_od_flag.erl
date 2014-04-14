@@ -174,12 +174,11 @@ stat(_, _) -> undefined.
 
 -spec from_binary(binary()) -> od_flag().
 from_binary(<<?TAG:8, ?VSN1:8, Bin/binary>>) ->
-    binary_to_term(Bin).
+    riak_dt:from_binary(Bin).
 
 -spec to_binary(od_flag()) -> binary().
 to_binary(Flag) ->
-    Bin = term_to_binary(Flag),
-    <<?TAG:8, ?VSN1:8, Bin/binary>>.
+    <<?TAG:8, ?VSN1:8, (riak_dt:to_binary(Flag))/binary>>.
 
 %% @doc the `precondition_context' is an opaque piece of state that
 %% can be used for context operations to ensure only observed state is
