@@ -35,6 +35,7 @@
           %% can be run (like context ops in the
           %% riak_dt_map)
           deferred=sets:new() ::set(),
+          tombstones=orddict:new() :: orddict:orddict(),
           clock=riak_dt_vclock:fresh() :: riak_dt_vclock:vclock() %% for embedded context operations
          }).
 
@@ -129,11 +130,11 @@ add_args(#state{replicas=Replicas, replica_data=ReplicaData, counter=Cnt}) ->
 gen_field() ->
     {oneof(['X', 'Y', 'Z']),
      oneof([
-            riak_dt_emcntr,
-            riak_dt_orswot,
-            riak_dt_lwwreg,
-            riak_dt_map,
-            riak_dt_od_flag
+            %% riak_dt_emcntr,
+            riak_dt_orswot%% ,
+            %% riak_dt_lwwreg,
+            %% riak_dt_map,
+            %% riak_dt_od_flag
            ])}.
 
 gen_field_op({_Name, Type}) ->
@@ -395,50 +396,64 @@ model_update_field({_Name, Type}=Field, Op, Actor, Cnt, Model, Ctx) ->
             {ok, Model}
     end.
 
-model_remove_field(Field, Model) ->
-    #model{adds=Adds, removes=Removes} = Model,
+model_remove_field({_Name, Type}=Field, Model) ->
+    #model{adds=Adds, removes=Removes, tombstones=Tombstones0, clock=Clock} = Model,
     ToRemove = [{F, Val, Token} || {F, Val, Token} <- sets:to_list(Adds), F == Field],
-    Model#model{removes=sets:union(Removes, sets:from_list(ToRemove))}.
+    TS = Type:parent_clock(Clock, Type:new()),
+    Tombstones = orddict:update(Field, fun(T) -> Type:merge(TS, T) end, TS, Tombstones0),
+    Model#model{removes=sets:union(Removes, sets:from_list(ToRemove)), tombstones=Tombstones}.
 
 model_merge(Model1, Model2) ->
-    #model{adds=Adds1, removes=Removes1, deferred=Deferred1, clock=Clock1} = Model1,
-    #model{adds=Adds2, removes=Removes2, deferred=Deferred2, clock=Clock2} = Model2,
+    #model{adds=Adds1, removes=Removes1, deferred=Deferred1, clock=Clock1, tombstones=TS1} = Model1,
+    #model{adds=Adds2, removes=Removes2, deferred=Deferred2, clock=Clock2, tombstones=TS2} = Model2,
     Clock = riak_dt_vclock:merge([Clock1, Clock2]),
     Adds0 = sets:union(Adds1, Adds2),
-    %% @TODO model the merge with removed dots Any field that is only
-    %% in removes must have a parent clock merge
+    Tombstones = orddict:merge(fun({_Name, Type}, V1, V2) -> Type:merge(V1, V2) end, TS1, TS2),
     Removes0 = sets:union(Removes1, Removes2),
     Deferred0 = sets:union(Deferred1, Deferred2),
     {Adds, Removes, Deferred} = model_apply_deferred(Adds0, Removes0, Deferred0),
-    #model{adds=Adds, removes=Removes, deferred=Deferred, clock=Clock}.
+    #model{adds=Adds, removes=Removes, deferred=Deferred, clock=Clock, tombstones=Tombstones}.
 
 model_apply_deferred(Adds, Removes, Deferred) ->
     D2 = sets:subtract(Deferred, Adds),
     ToRem = sets:subtract(Deferred, D2),
     {Adds, sets:union(ToRem, Removes), D2}.
 
-model_ctx_remove(Field, From, To) ->
+model_ctx_remove({_N, Type}=Field, From, To) ->
     %% get adds for Field, any adds for field in ToAdds that are in
     %% FromAdds should be removed any others, put in deferred
-    #model{adds=FromAdds} = From,
-    #model{adds=ToAdds, removes=ToRemoves, deferred=ToDeferred} = To,
+    #model{adds=FromAdds, clock=FromClock} = From,
+    #model{adds=ToAdds, removes=ToRemoves, deferred=ToDeferred, tombstones=TS} = To,
     ToRemove = sets:filter(fun({F, _Val, _Token}) -> F == Field end, FromAdds),
     Defer = sets:subtract(ToRemove, ToAdds),
     Remove = sets:subtract(ToRemove, Defer),
+    Tombstone = Type:parent_clock(FromClock, Type:new()),
+    TS2 = orddict:update(Field, fun(T) -> Type:merge(T, Tombstone) end, Tombstone, TS),
     To#model{removes=sets:union(Remove, ToRemoves),
-           deferred=sets:union(Defer, ToDeferred)}.
+           deferred=sets:union(Defer, ToDeferred),
+            tombstones=TS2}.
 
 model_value(Model) ->
-    #model{adds=Adds, removes=Removes} = Model,
+    #model{adds=Adds, removes=Removes, tombstones=TS} = Model,
     Remaining = sets:subtract(Adds, Removes),
     Res = lists:foldl(fun({{_Name, Type}=Key, Value, _X}, Acc) ->
-                        %% if key is in Acc merge with it and replace
-                        dict:update(Key, fun(V) ->
-                                                 Type:merge(V, Value) end,
-                                    Value, Acc) end,
-                dict:new(),
-                sets:to_list(Remaining)),
-    [{K, Type:value(V)} || {{_Name, Type}=K, V} <- dict:to_list(Res)].
+                              %% if key is in Acc merge with it and replace
+                              dict:update(Key, fun(V) ->
+                                                       Type:merge(V, Value) end,
+                                          Value, Acc) end,
+                      dict:new(),
+                      sets:to_list(Remaining)),
+    Res2 = dict:fold(fun({_N, Type}=Field, Val, Acc) ->
+                             case orddict:find(Field, TS) of
+                                 error ->
+                                     dict:store(Field, Val, Acc);
+                                 {ok, TSVal} ->
+                                     dict:store(Field, Type:merge(TSVal, Val), Acc)
+                             end
+                     end,
+                     dict:new(),
+                     Res),
+    [{K, Type:value(V)} || {{_Name, Type}=K, V} <- dict:to_list(Res2)].
 
 model_ctx(#model{clock=Ctx}) ->
     Ctx.
