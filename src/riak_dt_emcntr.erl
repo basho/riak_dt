@@ -61,11 +61,17 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
+-export_type([emcntr/0, emcntr_op/0]).
+
 -type emcntr() :: {riak_dt_vclock:vclock(), [entry()]}.
 -type entry() :: {Actor :: riak_dt:actor(), {Event :: pos_integer(),
                                              Inc :: pos_integer(),
                                              Dec :: pos_integer()}
                  }.
+
+
+-type emcntr_op() :: riak_dt_gcounter:gcounter_op() | decrement_op().
+-type decrement_op() :: decrement | {decrement, pos_integer()}.
 
 -spec new() -> emcntr().
 new() ->

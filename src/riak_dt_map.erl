@@ -70,8 +70,7 @@
 
 %% EQC API
 -ifdef(EQC).
--export([gen_op/0, update_expected/3, eqc_state_value/1,
-         init_state/0, gen_field/0, generate/0, size/1]).
+-export([gen_op/0, gen_field/0, generate/0, size/1]).
 -endif.
 
 -export_type([map/0, binary_map/0, map_op/0]).
@@ -479,11 +478,11 @@ equal({Clock1, Values1, Deferred1}, {Clock2, Values2, Deferred2}) ->
 -spec pairwise_equals(entries(), entries()) -> boolean().
 pairwise_equals([], []) ->
     true;
-pairwise_equals([{{Name, Type}, Dots1}| Rest1], [{{Name, Type}, Dots2}|Rest2]) ->
-    case orddict:fetch_keys(Dots1) == orddict:fetch_keys(Dots2) of
-        true ->
+pairwise_equals([{{Name, Type}, {Dots1, TS1}}| Rest1], [{{Name, Type}, {Dots2, TS2}}|Rest2]) ->
+    case {orddict:fetch_keys(Dots1) == orddict:fetch_keys(Dots2), Type:equal(TS1, TS2)} of
+        {true, true} ->
             pairwise_equals(Rest1, Rest2);
-        false ->
+        _ ->
             false
     end;
 pairwise_equals(_, _) ->
@@ -516,7 +515,7 @@ stat(field_count, {_, Fields, _}) ->
     length(Fields);
 stat(duplication, {_, Fields, _}) ->
     %% Number of duplicated fields
-    {FieldCnt, Duplicates} = orddict:fold(fun(_Field, Dots, {FCnt, DCnt}) ->
+    {FieldCnt, Duplicates} = orddict:fold(fun(_Field, {Dots ,_}, {FCnt, DCnt}) ->
                                                   {FCnt+1, DCnt + orddict:size(Dots)}
                                           end,
                                           {0, 0},
@@ -597,19 +596,20 @@ remfield_test() ->
 %% Bug found by EQC, not dropping dots in merge when an element is
 %% present in both Maos leads to removed items remaining after merge.
 present_but_removed_test() ->
+    F = {'X', riak_dt_lwwreg},
     %% Add Z to A
-    {ok, A} = update({update, [{add, {'Z', riak_dt_lwwreg}}]}, a, new()),
+    {ok, A} = update({update, [{update, F, {assign, <<"A">>}}]}, a, new()),
     %% Replicate it to C so A has 'Z'->{a, 1}
     C = A,
     %% Remove Z from A
-    {ok, A2} = update({update, [{remove, {'Z', riak_dt_lwwreg}}]}, a, A),
+    {ok, A2} = update({update, [{remove, F}]}, a, A),
     %% Add Z to B, a new replica
-    {ok, B} = update({update, [{add, {'Z', riak_dt_lwwreg}}]}, b, new()),
+    {ok, B} = update({update, [{update, F, {assign, <<"B">>}}]}, b, new()),
     %%  Replicate B to A, so now A has a Z, the one with a Dot of
     %%  {b,1} and clock of [{a, 1}, {b, 1}]
     A3 = merge(B, A2),
     %% Remove the 'Z' from B replica
-    {ok, B2} = update({update, [{remove, {'Z', riak_dt_lwwreg}}]}, b, B),
+    {ok, B2} = update({update, [{remove, F}]}, b, B),
     %% Both C and A have a 'Z', but when they merge, there should be
     %% no 'Z' as C's has been removed by A and A's has been removed by
     %% C.
@@ -627,14 +627,15 @@ present_but_removed_test() ->
 %% A bug EQC found where dropping the dots in merge was not enough if
 %% you then store the value with an empty clock (derp).
 no_dots_left_test() ->
-    {ok, A} =  update({update, [{add, {'Z', riak_dt_lwwreg}}]}, a, new()),
-    {ok, B} =  update({update, [{add, {'Z', riak_dt_lwwreg}}]}, b, new()),
+    F = {'Z', riak_dt_lwwreg},
+    {ok, A} =  update({update, [{update, F, {assign, <<"A">>}}]}, a, new()),
+    {ok, B} =  update({update, [{update, F, {assign, <<"B">>}}]}, b, new()),
     C = A, %% replicate A to empty C
-    {ok, A2} = update({update, [{remove, {'Z', riak_dt_lwwreg}}]}, a, A),
+    {ok, A2} = update({update, [{remove, F}]}, a, A),
     %% replicate B to A, now A has B's 'Z'
     A3 = merge(A2, B),
     %% Remove B's 'Z'
-    {ok, B2} = update({update, [{remove, {'Z', riak_dt_lwwreg}}]}, b, B),
+    {ok, B2} = update({update, [{remove, F}]}, b, B),
     %% Replicate C to B, now B has A's old 'Z'
     B3 = merge(B2, C),
     %% Merge everytyhing, without the fix You end up with 'Z' present,
@@ -670,12 +671,6 @@ transitive_remove_test() ->
 -ifdef(EQC).
 -define(NUMTESTS, 1000).
 
-bin_roundtrip_test_() ->
-    crdt_statem_eqc:run_binary_rt(?MODULE, ?NUMTESTS).
-
-eqc_value_test_() ->
-    crdt_statem_eqc:run(?MODULE, ?NUMTESTS).
-
 %% ===================================
 %% crdt_statem_eqc callbacks
 %% ===================================
@@ -704,8 +699,7 @@ gen_op() ->
 
 gen_update() ->
     ?LET(Field, gen_field(),
-         oneof([%%{add, Field},
-                {remove, Field},
+         oneof([{remove, Field},
                 {update, Field, gen_field_op(Field)}])).
 
 gen_field() ->
@@ -718,88 +712,6 @@ gen_field() ->
 gen_field_op({_Name, Type}) ->
     Type:gen_op().
 
-init_state() ->
-    {0, dict:new()}.
-
-update_expected(ID, {update, Ops}, State) ->
-    %% Ops are atomic, all pass or all fail
-    %% return original state if any op failed
-    update_all(ID, Ops, State);
-update_expected(ID, {merge, SourceID}, {Cnt, Dict}) ->
-    {FA, FR} = dict:fetch(ID, Dict),
-    {TA, TR} = dict:fetch(SourceID, Dict),
-    MA = sets:union(FA, TA),
-    MR = sets:union(FR, TR),
-    {Cnt, dict:store(ID, {MA, MR}, Dict)};
-update_expected(ID, create, {Cnt, Dict}) ->
-    {Cnt, dict:store(ID, {sets:new(), sets:new()}, Dict)}.
-
-eqc_state_value({_Cnt, Dict}) ->
-    {A, R} = dict:fold(fun(_K, {Add, Rem}, {AAcc, RAcc}) ->
-                               {sets:union(Add, AAcc), sets:union(Rem, RAcc)} end,
-                       {sets:new(), sets:new()},
-                       Dict),
-    Remaining = sets:subtract(A, R),
-    Res = lists:foldl(fun({{_Name, Type}=Key, Value, _X}, Acc) ->
-                        %% if key is in Acc merge with it and replace
-                        dict:update(Key, fun(V) ->
-                                                 Type:merge(V, Value) end,
-                                    Value, Acc) end,
-                dict:new(),
-                sets:to_list(Remaining)),
-    [{K, Type:value(V)} || {{_Name, Type}=K, V} <- dict:to_list(Res)].
-
-%% @private
-%% @doc Apply the list of update operations to the model
-update_all(ID, Ops, OriginalState) ->
-    update_all(ID, Ops, OriginalState, OriginalState).
-
-update_all(_ID, [], _OriginalState, NewState) ->
-    NewState;
-update_all(ID, [{update, {_Name, Type}=Key, Op} | Rest], OriginalState, {Cnt0, Dict}) ->
-    CurrentValue = get_for_key(Key, ID, Dict),
-    %% handle precondition errors any precondition error means the
-    %% state is not changed at all
-    case Type:update(Op, ID, CurrentValue) of
-        {ok, Updated} ->
-            Cnt = Cnt0+1,
-            ToAdd = {Key, Updated, Cnt},
-            {A, R} = dict:fetch(ID, Dict),
-            update_all(ID, Rest, OriginalState, {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)});
-        _Error ->
-            OriginalState
-    end;
-update_all(ID, [{remove, Field} | Rest], OriginalState, {Cnt, Dict}) ->
-    {A, R} = dict:fetch(ID, Dict),
-    In = sets:subtract(A, R),
-    PresentFields = [E ||  {E, _, _X} <- sets:to_list(In)],
-    case lists:member(Field, PresentFields) of
-        true ->
-            ToRem = [{E, V, X} || {E, V, X} <- sets:to_list(A), E == Field],
-            NewState2 = {Cnt, dict:store(ID, {A, sets:union(R, sets:from_list(ToRem))}, Dict)},
-            update_all(ID, Rest, OriginalState, NewState2);
-        false ->
-            OriginalState
-    end;
-update_all(ID, [{add, {_Name, Type}=Field} | Rest], OriginalState, {Cnt0, Dict}) ->
-    Cnt = Cnt0+1,
-    ToAdd = {Field, Type:new(), Cnt},
-    {A, R} = dict:fetch(ID, Dict),
-    NewState = {Cnt, dict:store(ID, {sets:add_element(ToAdd, A), R}, Dict)},
-    update_all(ID, Rest, OriginalState, NewState).
-
-
-get_for_key({_N, T}=K, ID, Dict) ->
-    {A, R} = dict:fetch(ID, Dict),
-    Remaining = sets:subtract(A, R),
-    Res = lists:foldl(fun({{_Name, Type}=Key, Value, _X}, Acc) ->
-                        %% if key is in Acc merge with it and replace
-                        dict:update(Key, fun(V) ->
-                                                 Type:merge(V, Value) end,
-                                    Value, Acc) end,
-                dict:new(),
-                sets:to_list(Remaining)),
-    proplists:get_value(K, dict:to_list(Res), T:new()).
 
 -endif.
 
@@ -816,28 +728,35 @@ get_for_key({_N, T}=K, ID, Dict) ->
 %% `merge_left/3', but passes with the current structure, of
 %% `{field(), dot()}' as key.
 dot_key_test() ->
-    {ok, A} = update({update, [{add, {'X', riak_dt_orswot}}, {add, {'X', riak_dt_od_flag}}]}, a, new()),
+    {ok, A} = update({update, [{update, {'X', riak_dt_orswot}, {add, <<"a">>}}, {update, {'X', riak_dt_od_flag}, enable}]}, a, new()),
     B = A,
     {ok, A2} = update({update, [{remove, {'X', riak_dt_od_flag}}]}, a, A),
-    ?assertEqual([{{'X', riak_dt_orswot}, []}], value(merge(B, A2))).
+    ?assertEqual([{{'X', riak_dt_orswot}, [<<"a">>]}], value(merge(B, A2))).
 
 stat_test() ->
     Map = new(),
-    {ok, Map1} = update({update, [{add, {c, riak_dt_pncounter}},
-                                  {add, {s, riak_dt_orswot}},
-                                  {add, {m, riak_dt_map}},
-                                  {add, {l, riak_dt_lwwreg}},
-                                  {add, {l2, riak_dt_lwwreg}}]}, a1, Map),
-    {ok, Map2} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"foo">>, 1}}]}, a2, Map1),
-    {ok, Map3} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"bar">>, 2}}]}, a3, Map1),
+    {ok, Map1} = update({update, [{update, {c, riak_dt_emcntr}, increment},
+                                  {update, {s, riak_dt_orswot}, {add, <<"A">>}},
+                                  {update, {m, riak_dt_map}, {update, [{update, {ss, riak_dt_orswot}, {add, 0}}]}},
+                                  {update, {l, riak_dt_lwwreg}, {assign, <<"a">>, 1}},
+                                  {update, {l2, riak_dt_lwwreg}, {assign, <<"b">>, 2}}]}, a1, Map),
+    {ok, Map2} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"foo">>, 3}}]}, a2, Map1),
+    {ok, Map3} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"bar">>, 4}}]}, a3, Map1),
     Map4 = merge(Map2, Map3),
     ?assertEqual([{actor_count, 0}, {field_count, 0}, {duplication, 0}, {deferred_length, 0}], stats(Map)),
     ?assertEqual(3, stat(actor_count, Map4)),
-    ?assertEqual(6, stat(field_count, Map4)),
+    ?assertEqual(5, stat(field_count, Map4)),
     ?assertEqual(undefined, stat(waste_pct, Map4)),
     ?assertEqual(1, stat(duplication, Map4)),
-    {ok, Map5} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"baz">>, 2}}]}, a3, Map4),
-    ?assertEqual(5, stat(field_count, Map5)),
-    ?assertEqual(0, stat(duplication, Map5)).
+    {ok, Map5} = update({update, [{update, {l3, riak_dt_lwwreg}, {assign, <<"baz">>, 5}}]}, a3, Map4),
+    ?assertEqual(6, stat(field_count, Map5)),
+    ?assertEqual(1, stat(duplication, Map5)),
+    %% Updating field {l, riak_dt_lwwreg} merges the duplicates to a single field
+    %% @see apply_ops
+    {ok, Map6} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"bim">>, 6}}]}, a2, Map5),
+    ?assertEqual(0, stat(duplication, Map6)),
+    {ok, Map7} = update({update, [{remove, {l, riak_dt_lwwreg}}]}, a1, Map6),
+    ?assertEqual(5, stat(field_count, Map7)).
+
 
 -endif.

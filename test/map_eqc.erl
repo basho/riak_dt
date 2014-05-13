@@ -35,17 +35,20 @@
           %% can be run (like context ops in the
           %% riak_dt_map)
           deferred=sets:new() ::set(),
-          tombstones=orddict:new() :: orddict:orddict(), %% For reset-remove semantic
-          clock=riak_dt_vclock:fresh() :: riak_dt_vclock:vclock() %% for embedded context operations
+          %% For reset-remove semantic, the field+clock at time of
+          %% removal
+          tombstones=orddict:new() :: orddict:orddict(),
+          %% for embedded context operations
+          clock=riak_dt_vclock:fresh() :: riak_dt_vclock:vclock()
          }).
 
 -type map_model() :: #model{}.
 
--record(state,{replicas=[<<"a">>, <<"b">>, <<"c">>, <<"d">>,<<"e">>, <<"f">>, <<"g">>, <<"h">>] :: [binary()], %% Sort of like the ring, upto N*2 ids
+-record(state,{replicas=[],
                replica_data=[] :: [{ActorId :: binary(),
                                   riak_dt_map:map(),
                                   map_model()}],
-               n=8 :: pos_integer(), %% Generated number of replicas
+               n=0 :: pos_integer(), %% Generated number of replicas
                counter=1 :: pos_integer(), %% a unique tag per add
                adds=[] :: [{ActorId :: binary(), atom()}] %% things that have been added
               }).
@@ -56,7 +59,11 @@
                               io:format(user, Str, Args) end, P)).
 
 eqc_test_() ->
-    {timeout, 60, ?_assertEqual(true, eqc:quickcheck(eqc:numtests(1000, ?QC_OUT(prop_merge()))))}.
+    {timeout, 120, ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(100, ?QC_OUT(prop_merge()))))}.
+
+bin_roundtrip_test_() ->
+    {timeout, 60, ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(50, ?QC_OUT(crdt_statem_eqc:prop_bin_roundtrip(riak_dt_map)))))}.
+
 
 run() ->
     run(?NUMTESTS).
@@ -75,39 +82,35 @@ initial_state() ->
 
 %% ------ Grouped operator: set_nr
 %% Only set N if N has not been set (ie run once, as the first command)
-%% set_n_pre(#state{n=N}) ->
-%%      N == 0.
+set_n_pre(#state{n=N}) ->
+     N == 0.
 
-%% %% Choose how many replicas to have in the system
-%% set_n_args(_S) ->
-%%     [choose(2, 10)].
+%% Choose how many replicas to have in the system
+set_n_args(_S) ->
+    [choose(2, 10)].
 
-%% set_n(_) ->
-%%     %% Command args used for next state only
-%%     ok.
+set_n(_) ->
+    %% Command args used for next state only
+    ok.
 
-%% set_n_next(S, _V, [N]) ->
-%%     S#state{n=N}.
+set_n_next(S, _V, [N]) ->
+    S#state{n=N}.
 
-%% %% ------ Grouped operator: make_ring
-%% %%
-%% %% Generate a bunch of replicas, only runs if N is set, and until
-%% %% "enough" are generated (N*2) is more than enough.
-%% make_ring_pre(#state{replicas=Replicas, n=N}) ->
-%%     N > 0 andalso length(Replicas) < N * 2.
+%% ------ Grouped operator: make_ring
+%%
+%% Generate a bunch of replicas, only runs if N is set, and until
+%% "enough" are generated (N*2) is more than enough.
+make_ring_pre(#state{replicas=Replicas, n=N}) ->
+    N > 0 andalso length(Replicas) < N * 2.
 
-%% make_ring_args(#state{replicas=Replicas, n=N}) ->
-%%     [Replicas, vector(N, binary(8))].
+make_ring_args(#state{n=N}) ->
+    [vector(N, binary(8))].
 
-%% make_ring(Replicas, NewReplicas) ->
-%%     %% Command args used for next state only
-%%     lists:umerge(Replicas, NewReplicas).
+make_ring(_NewReplicas) ->
+    ok.
 
-%% make_ring_next(S=#state{replicas=_Replicas}, V, [_R, _NewReplicas0]) ->
-%%     %% No duplicate replica ids please!
-%%     %%NewReplicas = lists:filter(fun(Id) -> not lists:member(Id, Replicas) end, NewReplicas0),
-%%     %%    R1 = lists:umerge(R, NewReplicas0),
-%%     S#state{replicas=V}.%%Replicas ++ NewReplicas}.
+make_ring_next(S=#state{replicas=Replicas}, _V, [NewReplicas]) ->
+    S#state{replicas=lists:umerge(Replicas, NewReplicas)}.
 
 %% ------ Grouped operator: add
 %% Add a new field
@@ -326,64 +329,86 @@ prop_merge() ->
             begin
                 {_H, _S=#state{replicas=Replicas, replica_data=ReplicaData}, Res} = run_commands(?MODULE,Cmds),
                 %% Check that collapsing all values leads to the same results for Map and the Model
-                {MapValue, ModelValue}=OMG = case Replicas of
+                {MapValue, ModelValue}=FinalValues = case Replicas of
                                                  [] ->
                                                      {[], []};
                                                  _L ->
                                                      %% Get ALL actor's values
                                                      {Map, Model} = lists:foldl(fun(Actor, {M, Mo}) ->
-                                                                                        case lists:keyfind(Actor, 1, ReplicaData) of
-                                                                                            false ->
-                                                                                                %% This actor never stored anything
-                                                                                                {M, Mo};
-                                                                                            {Actor, M1, Mo1} ->
-                                                                                                {riak_dt_map:merge(M, M1),
-                                                                                                 model_merge(Mo, Mo1)} end
+                                                                                        {M1, Mo1} = get(Actor, ReplicaData),
+                                                                                        {riak_dt_map:merge(M, M1),
+                                                                                         model_merge(Mo, Mo1)}
                                                                                 end,
                                                                                 {riak_dt_map:new(), model_new()},
                                                                                 lists:usort(Replicas)),
                                                      {riak_dt_map:value(Map), model_value(Model)}
                                              end,
-                aggregate(command_names(Cmds),
-                          ?WHENFAIL(dump_it_all(Replicas, OMG, ReplicaData),
+                Actors = lists:foldl(fun({Actor, _Map, _Model}, Acc) ->
+                                 ordsets:add_element(Actor, Acc) end,
+                         ordsets:new(),
+                         ReplicaData),
+                collect(length(Actors), aggregate(command_names(Cmds),
+                          ?WHENFAIL(dump_state(Replicas, FinalValues, ReplicaData),
                                     conjunction([{results, equals(Res, ok)},
-                                                 {value, equals(lists:sort(MapValue), lists:sort(ModelValue))}])
+                                                 {value, equals(lists:sort(MapValue), lists:sort(ModelValue))},
+                                                 {actors, sets:is_subset(sets:from_list(Actors), sets:from_list(Replicas))}])
                                    )
-                         )
-
-                %% aggregate(command_names(Cmds),
-                %%           pretty_commands(?MODULE,Cmds, {H,S,Res},
-                %%                           conjunction([{result,  equals(Res, ok)},
-                %%                                        {values1, equals(lists:sort(MapValue), lists:sort(ModelValue))}])%%,
-                %%                                        %% {values2, equals(lists:sort(MapValue), lists:sort(MV))},
-                %%                                        %% {values3, equals(lists:sort(ModelValue), lists:sort(MoV))},
-                %%                                        %% {values, equals(lists:sort(MV), lists:sort(MoV))}])
-                %%                          ))
+                         ))
             end).
 
 %% -----------
 %% Helpers
 %% ----------
-dump_it_all(Replicas, OMG, ReplicaData) ->
-    {halp, Actors, _, _, {_MV, _MoV}=V, _} = halp:halp(ReplicaData),
-    io:format("HALPPPPPP!!!!!! ~p~n", [V]),
-    io:format("OMG!!!!!! ~p~n", [OMG]),
-    io:format("ACTORRRS!!! ~p ~p~n", [ordsets:to_list(Actors), lists:sort(Replicas)]),
-    io:format("Final State ~p~n", [ReplicaData]).
+dump_state(Replicas, FinalValues, ReplicaData) ->
+    %% Determine the set of actors (that acted) from the replica data
+    Actors = lists:foldl(fun({Actor, _Map, _Model}, Acc) ->
+                                 ordsets:add_element(Actor, Acc) end,
+                         ordsets:new(),
+                         ReplicaData),
+
+    %% Get the last entry per actor
+    FinalReplicaState = lists:foldl(fun(Actor, Acc) ->
+                                            [lists:keyfind(Actor, 1, ReplicaData) | Acc] end,
+                                    [],
+                                    ordsets:to_list(Actors)),
+
+    %% Get a value for each replica
+    ReplicaValues = lists:foldl(fun({Actor, Map, Model}, Acc) ->
+                                        [{Actor,
+                                          riak_dt_map:value(Map),
+                                          model_value(Model)} | Acc] end,
+                                [],
+                                FinalReplicaState),
+
+    %% Get a CRDT for the actors
+    Merged={MMap, MModel} = lists:foldl(fun({_Actor, Map, Model}, {MM, MMo}) ->
+                                                {riak_dt_map:merge(Map, MM), model_merge(Model, MMo)}
+                                        end,
+                                        {riak_dt_map:new(), model_new()},
+                                        FinalReplicaState),
+
+    %% Get a final merged value to compare to the property's final
+    %% values
+    MergedValues = {riak_dt_map:value(MMap), model_value(MModel)},
+
+    io:format("Helper Values ~p~n", [MergedValues]),
+    io:format("Statem Values ~p~n", [FinalValues]),
+    io:format("Actors ~p ~p~n", [ordsets:to_list(Actors), lists:sort(Replicas)]),
+    io:format("Final State ~p~n", [ReplicaData]),
+    io:format("Replica values~p~n", [ReplicaValues]),
+    io:format("Merged final CRDTs ~p~n", [Merged]).
 
 replicas_ready(#state{replicas=Replicas, n=N}) ->
     length(Replicas) >= N andalso N > 0.
 
-post_all({_, _Map, _Model}, _Cmd) ->
+post_all({_, Map, Model}, Cmd) ->
     %% What matters is that both types have the exact same results.
-    %% case lists:sort(riak_dt_map:value(Map)) == lists:sort(model_value(Model)) of
-    %%     true ->
-    %%         true;
-    %%     _ ->
-    %%         {postcondition_failed, "Map and Model don't match", Cmd, Map, Model, riak_dt_map:value(Map), model_value(Model)}
-    %% end.
-    true.
-
+    case lists:sort(riak_dt_map:value(Map)) == lists:sort(model_value(Model)) of
+        true ->
+            true;
+        _ ->
+            {postcondition_failed, "Map and Model don't match", Cmd, Map, Model, riak_dt_map:value(Map), model_value(Model)}
+    end.
 
 %% if a replica does not yet have replica data, return `new()` for the
 %% Map and Model
@@ -393,7 +418,6 @@ get(Replica, ReplicaData) ->
             {Map, Model};
         false -> {riak_dt_map:new(), model_new()}
     end.
-
 
 %% -----------
 %% Model

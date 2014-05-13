@@ -52,11 +52,7 @@
 
 -ifdef(EQC).
 % Extra callbacks for any crdt_statem_eqc tests
--type model_state() :: term().
 
 -callback gen_op() -> eqc_gen:gen(operation()).
--callback update_expected(actor(), operation(), model_state()) -> model_state().
--callback eqc_state_value(model_state()) -> term().
--callback init_state() -> model_state().
 
 -endif.
