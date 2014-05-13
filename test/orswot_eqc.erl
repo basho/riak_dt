@@ -98,10 +98,10 @@ make_ring(_,_) ->
     %% Command args used for next state only
     ok.
 
-make_ring_next(S=#state{replicas=Replicas}, _V, [_, NewReplicas0]) ->
+make_ring_next(S, _V, [Replicas, NewReplicas0]) ->
     %% No duplicate replica ids please!
-    NewReplicas = lists:filter(fun(Id) -> not lists:member(Id, Replicas) end, NewReplicas0),
-    S#state{replicas=Replicas ++ NewReplicas}.
+    R1 = lists:umerge(Replicas, NewReplicas0),
+    S#state{replicas=R1}.
 
 %% ------ Grouped operator: add
 %% Store a new value

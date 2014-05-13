@@ -35,17 +35,17 @@
           %% can be run (like context ops in the
           %% riak_dt_map)
           deferred=sets:new() ::set(),
-          tombstones=orddict:new() :: orddict:orddict(),
+          tombstones=orddict:new() :: orddict:orddict(), %% For reset-remove semantic
           clock=riak_dt_vclock:fresh() :: riak_dt_vclock:vclock() %% for embedded context operations
          }).
 
 -type map_model() :: #model{}.
 
--record(state,{replicas=[] :: [binary()], %% Sort of like the ring, upto N*2 ids
+-record(state,{replicas=[<<"a">>, <<"b">>, <<"c">>, <<"d">>,<<"e">>, <<"f">>, <<"g">>, <<"h">>] :: [binary()], %% Sort of like the ring, upto N*2 ids
                replica_data=[] :: [{ActorId :: binary(),
                                   riak_dt_map:map(),
                                   map_model()}],
-               n=0 :: pos_integer(), %% Generated number of replicas
+               n=8 :: pos_integer(), %% Generated number of replicas
                counter=1 :: pos_integer(), %% a unique tag per add
                adds=[] :: [{ActorId :: binary(), atom()}] %% things that have been added
               }).
@@ -75,44 +75,45 @@ initial_state() ->
 
 %% ------ Grouped operator: set_nr
 %% Only set N if N has not been set (ie run once, as the first command)
-set_n_pre(#state{n=N}) ->
-     N == 0.
+%% set_n_pre(#state{n=N}) ->
+%%      N == 0.
 
-%% Choose how many replicas to have in the system
-set_n_args(_S) ->
-    [choose(2, 10)].
+%% %% Choose how many replicas to have in the system
+%% set_n_args(_S) ->
+%%     [choose(2, 10)].
 
-set_n(_) ->
-    %% Command args used for next state only
-    ok.
+%% set_n(_) ->
+%%     %% Command args used for next state only
+%%     ok.
 
-set_n_next(S, _V, [N]) ->
-    S#state{n=N}.
+%% set_n_next(S, _V, [N]) ->
+%%     S#state{n=N}.
 
-%% ------ Grouped operator: make_ring
-%%
-%% Generate a bunch of replicas, only runs if N is set, and until
-%% "enough" are generated (N*2) is more than enough.
-make_ring_pre(#state{replicas=Replicas, n=N}) ->
-    N > 0 andalso length(Replicas) < N * 2.
+%% %% ------ Grouped operator: make_ring
+%% %%
+%% %% Generate a bunch of replicas, only runs if N is set, and until
+%% %% "enough" are generated (N*2) is more than enough.
+%% make_ring_pre(#state{replicas=Replicas, n=N}) ->
+%%     N > 0 andalso length(Replicas) < N * 2.
 
-make_ring_args(#state{replicas=Replicas, n=N}) ->
-    [Replicas, vector(N, binary(8))].
+%% make_ring_args(#state{replicas=Replicas, n=N}) ->
+%%     [Replicas, vector(N, binary(8))].
 
-make_ring(_,_) ->
-    %% Command args used for next state only
-    ok.
+%% make_ring(Replicas, NewReplicas) ->
+%%     %% Command args used for next state only
+%%     lists:umerge(Replicas, NewReplicas).
 
-make_ring_next(S=#state{replicas=Replicas}, _V, [_, NewReplicas0]) ->
-    %% No duplicate replica ids please!
-    NewReplicas = lists:filter(fun(Id) -> not lists:member(Id, Replicas) end, NewReplicas0),
-    S#state{replicas=Replicas ++ NewReplicas}.
+%% make_ring_next(S=#state{replicas=_Replicas}, V, [_R, _NewReplicas0]) ->
+%%     %% No duplicate replica ids please!
+%%     %%NewReplicas = lists:filter(fun(Id) -> not lists:member(Id, Replicas) end, NewReplicas0),
+%%     %%    R1 = lists:umerge(R, NewReplicas0),
+%%     S#state{replicas=V}.%%Replicas ++ NewReplicas}.
 
 %% ------ Grouped operator: add
 %% Add a new field
 
 add_pre(S) ->
-    replicas_ready(S).
+    false andalso replicas_ready(S).
 
 add_args(#state{replicas=Replicas, replica_data=ReplicaData, counter=Cnt}) ->
     [
@@ -130,15 +131,18 @@ add_args(#state{replicas=Replicas, replica_data=ReplicaData, counter=Cnt}) ->
 gen_field() ->
     {oneof(['X', 'Y', 'Z']),
      oneof([
-            %% riak_dt_emcntr,
-            riak_dt_orswot%% ,
-            %% riak_dt_lwwreg,
-            %% riak_dt_map,
-            %% riak_dt_od_flag
+            riak_dt_orswot,
+            riak_dt_emcntr,
+            riak_dt_lwwreg,
+            riak_dt_map,
+            riak_dt_od_flag
            ])}.
 
 gen_field_op({_Name, Type}) ->
     Type:gen_op().
+
+gen_field_and_op() ->
+    ?LET(Field, gen_field(), {Field, gen_field_op(Field)}).
 
 %% Add a Field to the Map
 add(Field, Actor, Cnt, ReplicaData) ->
@@ -257,15 +261,17 @@ ctx_update_pre(S) ->
     replicas_ready(S).
 
 ctx_update_args(#state{replicas=Replicas, replica_data=ReplicaData, counter=Cnt}) ->
-    [
-     ?LET(Field, gen_field(), {Field, gen_field_op(Field)}),
-     elements(Replicas),
-     elements(Replicas),
-     ReplicaData,
-     Cnt
-    ].
+    ?LET({Field, Op}, gen_field_and_op(),
+         [
+          Field,
+          Op,
+          elements(Replicas),
+          elements(Replicas),
+          ReplicaData,
+          Cnt
+         ]).
 
-ctx_update({Field, Op}, From,  To, ReplicaData, Cnt) ->
+ctx_update(Field, Op, From, To, ReplicaData, Cnt) ->
     {CtxMap, CtxModel} = get(From, ReplicaData),
     {ToMap, ToModel} = get(To, ReplicaData),
     Ctx = riak_dt_map:precondition_context(CtxMap),
@@ -274,8 +280,8 @@ ctx_update({Field, Op}, From,  To, ReplicaData, Cnt) ->
     {ok, Model} = model_update_field(Field, Op, To, Cnt, ToModel, ModCtx),
     {To, Map, Model}.
 
-ctx_update_next(S=#state{replica_data=ReplicaData, counter=Cnt}, Res, _Args) ->
-    S#state{replica_data=[Res | ReplicaData], counter=Cnt+1}.
+ctx_update_next(S=#state{replica_data=ReplicaData, counter=Cnt, adds=Adds}, Res, [Field, _Op, _From, To, _, _]) ->
+    S#state{replica_data=[Res | ReplicaData], adds=[{To, Field} | Adds], counter=Cnt+1}.
 
 ctx_update_post(_S, _Args, Res) ->
     post_all(Res, update).
@@ -286,14 +292,16 @@ update_pre(S) ->
     replicas_ready(S).
 
 update_args(#state{replicas=Replicas, replica_data=ReplicaData, counter=Cnt}) ->
-    [
-     ?LET(Field, gen_field(), {Field, gen_field_op(Field)}),
-     elements(Replicas),
-     ReplicaData,
-     Cnt
-    ].
+    ?LET({Field, Op}, gen_field_and_op(),
+         [
+          Field,
+          Op,
+          elements(Replicas),
+          ReplicaData,
+          Cnt
+         ]).
 
-update({Field, Op}, Replica, ReplicaData, Cnt) ->
+update(Field, Op, Replica, ReplicaData, Cnt) ->
     {Map0, Model0} = get(Replica, ReplicaData),
     {ok, Map} = ignore_precon_error(riak_dt_map:update({update, [{update, Field, Op}]}, Replica, Map0), Map0),
     {ok, Model} = model_update_field(Field, Op, Replica, Cnt, Model0,  undefined),
@@ -306,8 +314,8 @@ ignore_precon_error(_, Map) ->
     {ok, Map}.
 
 
-update_next(S=#state{replica_data=ReplicaData, counter=Cnt}, Res, _Args) ->
-    S#state{replica_data=[Res | ReplicaData], counter=Cnt+1}.
+update_next(S=#state{replica_data=ReplicaData, counter=Cnt, adds=Adds}, Res, [Field, _, Actor, _, _]) ->
+    S#state{replica_data=[Res | ReplicaData], adds=[{Actor, Field} | Adds], counter=Cnt+1}.
 
 update_post(_S, _Args, Res) ->
     post_all(Res, update).
@@ -316,42 +324,65 @@ update_post(_S, _Args, Res) ->
 prop_merge() ->
     ?FORALL(Cmds, commands(?MODULE),
             begin
-                {H, S=#state{replicas=Replicas, replica_data=ReplicaData}, Res} = run_commands(?MODULE,Cmds),
+                {_H, _S=#state{replicas=Replicas, replica_data=ReplicaData}, Res} = run_commands(?MODULE,Cmds),
                 %% Check that collapsing all values leads to the same results for Map and the Model
-                {MapValue, ModelValue} = case Replicas of
-                                             [] ->
-                                                 {[], []};
-                                             _L ->
-                                                 %% Get ALL actor's values
-                                                 {Map, Model} = lists:foldl(fun(Actor, {M, Mo}) ->
-                                                                                    {M1, Mo1} = get(Actor, ReplicaData),
-                                                                                    {riak_dt_map:merge(M, M1),
-                                                                                     model_merge(Mo, Mo1)} end,
-                                                                            {riak_dt_map:new(), model_new()},
-                                                                            Replicas),
-                                                 {riak_dt_map:value(Map), model_value(Model)}
-                                         end,
+                {MapValue, ModelValue}=OMG = case Replicas of
+                                                 [] ->
+                                                     {[], []};
+                                                 _L ->
+                                                     %% Get ALL actor's values
+                                                     {Map, Model} = lists:foldl(fun(Actor, {M, Mo}) ->
+                                                                                        case lists:keyfind(Actor, 1, ReplicaData) of
+                                                                                            false ->
+                                                                                                %% This actor never stored anything
+                                                                                                {M, Mo};
+                                                                                            {Actor, M1, Mo1} ->
+                                                                                                {riak_dt_map:merge(M, M1),
+                                                                                                 model_merge(Mo, Mo1)} end
+                                                                                end,
+                                                                                {riak_dt_map:new(), model_new()},
+                                                                                lists:usort(Replicas)),
+                                                     {riak_dt_map:value(Map), model_value(Model)}
+                                             end,
                 aggregate(command_names(Cmds),
-                          pretty_commands(?MODULE,Cmds, {H,S,Res},
-                                          conjunction([{result,  equals(Res, ok)},
-                                                       {values, equals(lists:sort(MapValue), lists:sort(ModelValue))}])
-                                         ))
+                          ?WHENFAIL(dump_it_all(Replicas, OMG, ReplicaData),
+                                    conjunction([{results, equals(Res, ok)},
+                                                 {value, equals(lists:sort(MapValue), lists:sort(ModelValue))}])
+                                   )
+                         )
+
+                %% aggregate(command_names(Cmds),
+                %%           pretty_commands(?MODULE,Cmds, {H,S,Res},
+                %%                           conjunction([{result,  equals(Res, ok)},
+                %%                                        {values1, equals(lists:sort(MapValue), lists:sort(ModelValue))}])%%,
+                %%                                        %% {values2, equals(lists:sort(MapValue), lists:sort(MV))},
+                %%                                        %% {values3, equals(lists:sort(ModelValue), lists:sort(MoV))},
+                %%                                        %% {values, equals(lists:sort(MV), lists:sort(MoV))}])
+                %%                          ))
             end).
 
 %% -----------
 %% Helpers
 %% ----------
+dump_it_all(Replicas, OMG, ReplicaData) ->
+    {halp, Actors, _, _, {_MV, _MoV}=V, _} = halp:halp(ReplicaData),
+    io:format("HALPPPPPP!!!!!! ~p~n", [V]),
+    io:format("OMG!!!!!! ~p~n", [OMG]),
+    io:format("ACTORRRS!!! ~p ~p~n", [ordsets:to_list(Actors), lists:sort(Replicas)]),
+    io:format("Final State ~p~n", [ReplicaData]).
+
 replicas_ready(#state{replicas=Replicas, n=N}) ->
     length(Replicas) >= N andalso N > 0.
 
-post_all({_, Map, Model}, Cmd) ->
+post_all({_, _Map, _Model}, _Cmd) ->
     %% What matters is that both types have the exact same results.
-    case lists:sort(riak_dt_map:value(Map)) == lists:sort(model_value(Model)) of
-        true ->
-            true;
-        _ ->
-            {postcondition_failed, "Map and Model don't match", Cmd, Map, Model}
-    end.
+    %% case lists:sort(riak_dt_map:value(Map)) == lists:sort(model_value(Model)) of
+    %%     true ->
+    %%         true;
+    %%     _ ->
+    %%         {postcondition_failed, "Map and Model don't match", Cmd, Map, Model, riak_dt_map:value(Map), model_value(Model)}
+    %% end.
+    true.
 
 
 %% if a replica does not yet have replica data, return `new()` for the
@@ -376,7 +407,7 @@ model_add_field({_Name, Type}=Field, Actor, Cnt, Model) ->
                      clock=riak_dt_vclock:merge([[{Actor, Cnt}], Clock])}}.
 
 model_update_field({_Name, Type}=Field, Op, Actor, Cnt, Model, Ctx) ->
-    #model{adds=Adds, removes=Removes, clock=Clock} = Model,
+    #model{adds=Adds, removes=Removes, clock=Clock, tombstones=TS} = Model,
     Clock2 = riak_dt_vclock:merge([[{Actor, Cnt}], Clock]),
     InMap = sets:subtract(Adds, Removes),
     {CRDT0, ToRem} = lists:foldl(fun({F, Value, _X}=E, {CAcc, RAcc}) when F == Field ->
@@ -385,7 +416,14 @@ model_update_field({_Name, Type}=Field, Op, Actor, Cnt, Model, Ctx) ->
                                  end,
                                  {Type:new(), sets:new()},
                                  sets:to_list(InMap)),
-    CRDT = Type:parent_clock(Clock2, CRDT0),
+    CRDT1 = case orddict:find(Field, TS) of
+                error ->
+                    CRDT0;
+                {ok, TSVal} ->
+                    Type:merge(CRDT0, TSVal)
+            end,
+
+    CRDT = Type:parent_clock(Clock2, CRDT1),
     case Type:update(Op, {Actor, Cnt}, CRDT, Ctx) of
         {ok, Updated} ->
             Model2 = Model#model{adds=sets:add_element({Field, Updated, Cnt}, Adds),
