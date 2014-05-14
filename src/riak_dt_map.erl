@@ -407,7 +407,7 @@ key_sets(LHS, RHS) ->
 
 %% @private for a set of dots (that are unique to one side) decide
 %% whether to keep, or drop each.
--spec filter_dots(entries(), orddict:orddict(), riak_dt_vclock:vclock()) -> entries().
+-spec filter_dots(set(), orddict:orddict(), riak_dt_vclock:vclock()) -> entries().
 filter_dots(Dots, CRDTs, Clock) ->
     DotsToKeep = sets:filter(fun(Dot) ->
                                      is_dot_unseen(Dot, Clock)
@@ -734,6 +734,15 @@ stat_test() ->
     ?assertEqual(0, stat(duplication, Map6)),
     {ok, Map7} = update({update, [{remove, {l, riak_dt_lwwreg}}]}, a1, Map6),
     ?assertEqual(5, stat(field_count, Map7)).
+
+equals_test() ->
+    {ok, A} = update({update, [{update, {'X', riak_dt_orswot}, {add, <<"a">>}}, {update, {'X', riak_dt_od_flag}, enable}]}, a, new()),
+    {ok, B} = update({update, [{update, {'Y', riak_dt_orswot}, {add, <<"a">>}}, {update, {'Z', riak_dt_od_flag}, enable}]}, b, new()),
+    ?assert(not equal(A, B)),
+    C = merge(A, B),
+    D = merge(B, A),
+    ?assert(equal(C, D)),
+    ?assert(equal(A, A)).
 
 -ifdef(EQC).
 -define(NUMTESTS, 1000).
