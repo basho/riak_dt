@@ -330,30 +330,33 @@ prop_merge() ->
                 {_H, _S=#state{replicas=Replicas, replica_data=ReplicaData}, Res} = run_commands(?MODULE,Cmds),
                 %% Check that collapsing all values leads to the same results for Map and the Model
                 {MapValue, ModelValue}=FinalValues = case Replicas of
-                                                 [] ->
-                                                     {[], []};
-                                                 _L ->
-                                                     %% Get ALL actor's values
-                                                     {Map, Model} = lists:foldl(fun(Actor, {M, Mo}) ->
-                                                                                        {M1, Mo1} = get(Actor, ReplicaData),
-                                                                                        {riak_dt_map:merge(M, M1),
-                                                                                         model_merge(Mo, Mo1)}
-                                                                                end,
-                                                                                {riak_dt_map:new(), model_new()},
-                                                                                lists:usort(Replicas)),
-                                                     {riak_dt_map:value(Map), model_value(Model)}
-                                             end,
+                                                         [] ->
+                                                             {[], []};
+                                                         _L ->
+                                                             %% Get ALL actor's values
+                                                             {Map, Model} = lists:foldl(fun(Actor, {M, Mo}) ->
+                                                                                                {M1, Mo1} = get(Actor, ReplicaData),
+                                                                                                {riak_dt_map:merge(M, M1),
+                                                                                                 model_merge(Mo, Mo1)}
+                                                                                        end,
+                                                                                        {riak_dt_map:new(), model_new()},
+                                                                                        lists:usort(Replicas)),
+                                                             {riak_dt_map:value(Map),
+                                                              model_value(Model)}
+                                                     end,
+
                 Actors = lists:foldl(fun({Actor, _Map, _Model}, Acc) ->
-                                 ordsets:add_element(Actor, Acc) end,
-                         ordsets:new(),
-                         ReplicaData),
+                                             ordsets:add_element(Actor, Acc) end,
+                                     ordsets:new(),
+                                     ReplicaData),
+
                 collect(length(Actors), aggregate(command_names(Cmds),
-                          ?WHENFAIL(dump_state(Replicas, FinalValues, ReplicaData),
-                                    conjunction([{results, equals(Res, ok)},
-                                                 {value, equals(lists:sort(MapValue), lists:sort(ModelValue))},
-                                                 {actors, sets:is_subset(sets:from_list(Actors), sets:from_list(Replicas))}])
-                                   )
-                         ))
+                                                  ?WHENFAIL(dump_state(Replicas, FinalValues, ReplicaData),
+                                                            conjunction([{results, equals(Res, ok)},
+                                                                         {value, equals(lists:sort(MapValue), lists:sort(ModelValue))},
+                                                                         {actors, sets:is_subset(sets:from_list(Actors), sets:from_list(Replicas))}])
+                                                           )
+                                                 ))
             end).
 
 %% -----------
