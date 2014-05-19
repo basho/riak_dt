@@ -102,7 +102,7 @@ value(_, Cntr) ->
 %% Note: the second argument must be a `riak_dt:dot()', that is a
 %% 2-tuple of `{Actor :: term(), Event :: pos_integer()}' as this is
 %% for embedding in a `riak_dt_map'
--spec update(emcntr_op(), riak_dt:dot(), emcntr()) -> emcntr().
+-spec update(emcntr_op(), riak_dt:dot(), emcntr()) -> {ok, emcntr()}.
 update(Op, {Actor, Evt}=Dot, {Clock, PNCnt}) when is_tuple(Dot) ->
     Clock2 = riak_dt_vclock:merge([[Dot], Clock]),
     Entry = orddict:find(Actor, PNCnt),
@@ -112,14 +112,14 @@ update(Op, {Actor, Evt}=Dot, {Clock, PNCnt}) when is_tuple(Dot) ->
 %% @doc update with a context. Contexts have no effect. Same as
 %% `update/3'
 -spec update(emcntr_op(), riak_dt:dot(), emcntr(), riak_dt_vclock:vclock()) ->
-                    emcntr().
+                    {ok, emcntr()}.
 update(Op, Dot, Cntr, _Ctx) ->
     update(Op, Dot, Cntr).
 
 %% @private perform the operation `Op' on the {positive, negative}
 %% pair for an actor.
--spec op(emcntr_op(), error | {ok, entry()} | {P::pos_integer(), N::pos_integer()}) ->
-                {P::pos_integer(), N::pos_integer()}.
+-spec op(emcntr_op(), error | {ok, entry()} | {P::non_neg_integer(), N::non_neg_integer()}) ->
+                {P::non_neg_integer(), N::non_neg_integer()}.
 op(Op, error) ->
     op(Op, {0, 0});
 op(Op, {ok, {_Evt, P, N}}) ->
