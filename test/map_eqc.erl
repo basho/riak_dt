@@ -59,10 +59,10 @@
                               io:format(user, Str, Args) end, P)).
 
 eqc_test_() ->
-    {timeout, 120, ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(100, ?QC_OUT(prop_merge()))))}.
+    {timeout, 200, ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(100, ?QC_OUT(prop_merge()))))}.
 
 bin_roundtrip_test_() ->
-    {timeout, 60, ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(50, ?QC_OUT(crdt_statem_eqc:prop_bin_roundtrip(riak_dt_map)))))}.
+    {timeout, 100, ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(50, ?QC_OUT(crdt_statem_eqc:prop_bin_roundtrip(riak_dt_map)))))}.
 
 
 run() ->
