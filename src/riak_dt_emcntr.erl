@@ -77,26 +77,49 @@
 new() ->
     {riak_dt_vclock:fresh(), orddict:new()}.
 
+%% @doc embedded CRDTs most share a causal context with their parent
+%% Map, setting the internal clock to the parent clock ensures this
+-spec parent_clock(riak_dt_vclock:vclock(), emcntr()) -> emcntr().
 parent_clock(Clock, {_, Cntr}) ->
     {Clock, Cntr}.
 
+%% @doc the current integer value of the counter
+-spec value(emcntr()) -> integer().
 value({_Clock, PNCnt}) ->
     lists:sum([Inc - Dec || {_Act, {_Event, Inc, Dec}} <- PNCnt]).
 
-value(positive, {_Clock, PNCnt}) ->
-    lists:sum([Inc || {_Act, {_Evt, Inc, _Dec}} <- PNCnt]);
-value(negative, {_Clock, PNCnt}) ->
-    lists:sum([Dec || {_Act, {_Evt, _Inc, Dec}} <- PNCnt]).
+%% @doc query value, not implemented. Just returns result of `value/1'
+-spec value(term(), emcntr()) -> integer().
+value(_, Cntr) ->
+    value(Cntr).
 
-update(Op, {Actor, Cnt}=Dot, {Clock, PNCnt}) when is_tuple(Dot) ->
+%% @doc increment/decrement the counter. Op is either a two tuple of
+%% `{increment, By}', `{decrement, By}' where `By' is a positive
+%% integer. Or simply the atoms `increment' or `decrement', which are
+%% equivalent to `{increment | decrement, 1}' Returns the updated
+%% counter.
+%%
+%% Note: the second argument must be a `riak_dt:dot()', that is a
+%% 2-tuple of `{Actor :: term(), Event :: pos_integer()}' as this is
+%% for embedding in a `riak_dt_map'
+-spec update(emcntr_op(), riak_dt:dot(), emcntr()) -> emcntr().
+update(Op, {Actor, Evt}=Dot, {Clock, PNCnt}) when is_tuple(Dot) ->
     Clock2 = riak_dt_vclock:merge([[Dot], Clock]),
     Entry = orddict:find(Actor, PNCnt),
     {Inc, Dec} = op(Op, Entry),
-    {ok, {Clock2, orddict:store(Actor, {Cnt, Inc, Dec}, PNCnt)}}.
+    {ok, {Clock2, orddict:store(Actor, {Evt, Inc, Dec}, PNCnt)}}.
 
-update(Op, Actor, Cntr, _Ctx) ->
-    update(Op, Actor, Cntr).
+%% @doc update with a context. Contexts have no effect. Same as
+%% `update/3'
+-spec update(emcntr_op(), riak_dt:dot(), emcntr(), riak_dt_vclock:vclock()) ->
+                    emcntr().
+update(Op, Dot, Cntr, _Ctx) ->
+    update(Op, Dot, Cntr).
 
+%% @private perform the operation `Op' on the {positive, negative}
+%% pair for an actor.
+-spec op(emcntr_op(), error | {ok, entry()} | {P::pos_integer(), N::pos_integer()}) ->
+                {P::pos_integer(), N::pos_integer()}.
 op(Op, error) ->
     op(Op, {0, 0});
 op(Op, {ok, {_Evt, P, N}}) ->
@@ -110,6 +133,12 @@ op({increment, By}, {P, N}) ->
 op({decrement, By}, {P, N}) ->
     {P, N+By}.
 
+%% @doc takes two `emcntr()'s and merges them into a single
+%% `emcntr()'. This is the Least Upper Bound of the Semi-Lattice/CRDT
+%% literature. The semantics of the `emnctr()' merge are explained in
+%% the module docs. In a nutshell, merges version vectors, and keeps
+%% only dots that are present on both sides, or concurrent.
+-spec merge(emcntr(), emcntr()) -> emcntr().
 merge(Cnt, Cnt) ->
     Cnt;
 merge({ClockA, CntA}, {ClockB, CntB}) ->
@@ -118,28 +147,38 @@ merge({ClockA, CntA}, {ClockB, CntB}) ->
     Cnt = merge_right(ClockA, BUnique, Cnt0),
     {Clock, Cnt}.
 
-merge_left(ClockB, A, B) ->
-    orddict:fold(fun(Actor, {Evt, _Inc, _Dec}=Cnt, {Keep, BUnique}) ->
-                         case orddict:find(Actor, B) of
+%% @private merge the left handside counter (A) by filtering out the
+%% dots that are unique to it, and dominated. Returns `[entry()]' as
+%% an accumulator, and the dots that are unique to the right hand side
+%% (B).
+-spec merge_left(riak_dt_vclock:vclock(), [entry()], [entry()]) -> {[entry()], [entry()]}.
+merge_left(RHSClock, LHS, RHS) ->
+    orddict:fold(fun(Actor, {Evt, _Inc, _Dec}=Cnt, {Keep, RHSUnique}) ->
+                         case orddict:find(Actor, RHS) of
                              error ->
-                                 case riak_dt_vclock:descends(ClockB, [{Actor, Evt}]) of
+                                 case riak_dt_vclock:descends(RHSClock, [{Actor, Evt}]) of
                                      true ->
-                                         {Keep, BUnique};
+                                         {Keep, RHSUnique};
                                      false ->
-                                         {orddict:store(Actor, Cnt, Keep), BUnique}
+                                         {orddict:store(Actor, Cnt, Keep), RHSUnique}
                                  end;
+                             %% RHS has this actor, with a greater dot
                              {ok, {E2, I, D}} when E2 > Evt ->
-                                 {orddict:store(Actor, {E2, I, D}, Keep), orddict:erase(Actor, BUnique)};
+                                 {orddict:store(Actor, {E2, I, D}, Keep), orddict:erase(Actor, RHSUnique)};
+                             %% RHS has this actor, but a lesser or equal dot
                              {ok, _} ->
-                                 {orddict:store(Actor, Cnt, Keep), orddict:erase(Actor, BUnique)}
+                                 {orddict:store(Actor, Cnt, Keep), orddict:erase(Actor, RHSUnique)}
                          end
                  end,
-                 {orddict:new(), B},
-                 A).
+                 {orddict:new(), RHS},
+                 LHS).
 
-merge_right(ClockA, BUnique, Acc) ->
+%% @private merge the unique actor entries from the right hand side,
+%% keeping the concurrent ones, and dropping the dominated.
+-spec merge_right(riak_dt_vclock:vclock(), [entry()], [entry()]) -> [entry()].
+merge_right(LHSClock, RHSUnique, Acc) ->
     orddict:fold(fun(Actor, {Evt, _Inc, _Dec}=Cnt, Keep) ->
-                         case riak_dt_vclock:descends(ClockA, [{Actor, Evt}]) of
+                         case riak_dt_vclock:descends(LHSClock, [{Actor, Evt}]) of
                              true ->
                                  Keep;
                              false ->
@@ -147,29 +186,45 @@ merge_right(ClockA, BUnique, Acc) ->
                          end
                  end,
                  Acc,
-                 BUnique).
+                 RHSUnique).
 
+%% @doc equality of two counters internal structure, not the `value/1'
+%% they produce.
+-spec equal(emcntr(), emcntr()) -> boolean().
 equal({ClockA, PNCntA}, {ClockB, PNCntB}) ->
     riak_dt_vclock:equal(ClockA, ClockB) andalso
         PNCntA =:= PNCntB.
 
+%% @doc generate stats for this counter. Only `actor_count' is
+%% produced at present.
+-spec stats(emcntr()) -> [{actor_count, pos_integer()}].
 stats(Emcntr) ->
     [{actor_count, stat(actor_count, Emcntr)}].
 
+%% @doc generate stat for requested stat type at first argument. Only
+%% `actor_count' is supported at present.  Return a `pos_integer()' for
+%% the stat requested, or `undefined' if stat type is unsupported.
+-spec stat(atom(), emcntr()) -> pos_integer() | undefined.
 stat(actor_count, {Clock, _Emcntr}) ->
     length(Clock);
 stat(_, _) -> undefined.
 
-
 -include("riak_dt_tags.hrl").
--define(TAG, 99).%%?DT_EMCNTR_TAG).
+-define(TAG, ?DT_EMCNTR_TAG).
 -define(V1_VERS, 1).
 
-to_binary(PNCnt) ->
-    Bin = term_to_binary(PNCnt),
+%% @doc produce a compact binary representation of the counter.
+%%
+%% @see from_binary/1
+-spec to_binary(emcntr()) -> binary().
+to_binary(Cntr) ->
+    Bin = term_to_binary(Cntr),
     <<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>.
 
-%% @doc Decode a binary encoded PN-Counter
+%% @doc Decode a binary encoded riak_dt_emcntr.
+%%
+%% @see to_binary/1
+-spec from_binary(binary()) -> emcntr().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
     binary_to_term(Bin).
 
@@ -328,16 +383,6 @@ roundtrip_bin_test() ->
     Bin = to_binary(PN4),
     Decoded = from_binary(Bin),
     ?assert(equal(PN4, Decoded)).
-
-query_test() ->
-    PN = new(),
-    {ok, PN1} = update({increment, 50}, {a1, 1}, PN),
-    {ok, PN2} = update({increment, 50}, {a2, 1}, PN1),
-    {ok, PN3} = update({decrement, 15}, {a3,1},  PN2),
-    {ok, PN4} = update({decrement, 10}, {a4, 1}, PN3),
-    ?assertEqual(75, value(PN4)),
-    ?assertEqual(100, value(positive, PN4)),
-    ?assertEqual(25, value(negative, PN4)).
 
 stat_test() ->
     PN = new(),
