@@ -84,7 +84,7 @@
 
 %% EQC API
 -ifdef(EQC).
--export([gen_op/0, gen_field/0, generate/0, size/1]).
+-export([gen_op/0, gen_op/1, gen_field/0, gen_field/1,  generate/0, size/1]).
 -endif.
 
 -export_type([map/0, binary_map/0, map_op/0]).
@@ -770,23 +770,32 @@ generate() ->
                      new(),
                      Ops)).
 
+%% Add depth parameter
 gen_op() ->
-    ?LET(Ops, non_empty(list(gen_update())), {update, Ops}).
+    ?SIZED(Size, gen_op(Size)).
 
-gen_update() ->
-    ?LET(Field, gen_field(),
+gen_op(Size) ->
+    ?LET(Ops, non_empty(list(gen_update(Size))), {update, Ops}).
+
+gen_update(Size) ->
+    ?LET(Field, gen_field(Size),
          oneof([{remove, Field},
-                {update, Field, gen_field_op(Field)}])).
+                {update, Field, gen_field_op(Field, Size div 2)}])).
 
 gen_field() ->
-    {non_empty(binary()), oneof([riak_dt_emcntr,
-                                 riak_dt_orswot,
-                                 riak_dt_lwwreg,
-                                 riak_dt_map,
-                                 riak_dt_od_flag])}.
+    ?SIZED(Size, gen_field(Size)).
 
-gen_field_op({_Name, Type}) ->
-    Type:gen_op().
+gen_field(Size) ->
+    {growingelements(['A', 'B', 'C', 'X', 'Y', 'Z']) %% Macro? Bigger?
+    , elements([
+                riak_dt_emcntr,
+                riak_dt_orswot,
+                riak_dt_lwwreg,
+                riak_dt_od_flag
+               ] ++ [riak_dt_map || Size > 0])}.
+
+gen_field_op({_Name, Type}, Size) ->
+    Type:gen_op(Size).
 
 
 -endif.

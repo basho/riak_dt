@@ -33,7 +33,7 @@
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
--export([gen_op/0, init_state/0, update_expected/3, eqc_state_value/1, generate/0, size/1]).
+-export([gen_op/0, gen_op/1, init_state/0, update_expected/3, eqc_state_value/1, generate/0, size/1]).
 -define(NUMTESTS, 1000).
 -endif.
 
@@ -203,8 +203,11 @@ bin_roundtrip_test_() ->
     crdt_statem_eqc:run_binary_rt(?MODULE, ?NUMTESTS).
 
 % EQC generator
+gen_op(_Size) ->
+    gen_op().
+
 gen_op() ->
-    oneof([disable,enable]).
+    elements([disable,enable]).
 
 size({Clock,_}) ->
     length(Clock).

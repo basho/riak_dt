@@ -80,10 +80,11 @@
 -export([to_binary/1, from_binary/1]).
 -export([precondition_context/1, stats/1, stat/2]).
 -export([parent_clock/2]).
+-export([prop_measure/0]).
 
 %% EQC API
 -ifdef(EQC).
--export([gen_op/0, update_expected/3, eqc_state_value/1]).
+-export([gen_op/0, gen_op/1, update_expected/3, eqc_state_value/1]).
 -export([init_state/0, generate/0, size/1]).
 
 -endif.
@@ -585,20 +586,29 @@ generate() ->
                      riak_dt_orswot:new(),
                      Ops)).
 
+prop_measure() ->
+    ?FORALL(Op, gen_op(), measure(size, byte_size(term_to_binary(Op)), true)).
+
 %% EQC generator
 gen_op() ->
-    gen_op(fun() -> int() end).
+    ?SIZED(Size, gen_op(Size)).
 
-gen_op(Gen) ->
+gen_op(_Size) ->
+    gen_op2(int()).
+
+gen_op2(Gen) ->
     oneof([gen_updates(Gen), gen_update(Gen)]).
 
 gen_updates(Gen) ->
     {update, non_empty(list(gen_update(Gen)))}.
 
 gen_update(Gen) ->
-    oneof([{add, Gen()}, {remove, Gen()},
-           {add_all, non_empty(list(Gen()))},
-           {remove_all, non_empty(list(Gen()))}]).
+    oneof([{add, Gen}, {remove, Gen},
+           {add_all, non_empty(short_list(Gen))},
+           {remove_all, non_empty(short_list(Gen))}]).
+
+short_list(Gen) ->
+    ?SIZED(Size, resize(Size div 2, list(resize(Size, Gen)))).
 
 init_state() ->
     {0, dict:new()}.
