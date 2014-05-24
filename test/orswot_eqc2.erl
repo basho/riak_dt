@@ -206,6 +206,8 @@ context_remove_next(S=#state{contents=Contents}, _Value, [_From, _To, Element]) 
 
 weight(S, create_replica) when length(S#state.replicas) > 2 ->
     1;
+weight(S, create_replica) when length(S#state.replicas) < 5 ->
+    4;
 weight(_S, remove) ->
     3;
 weight(_S, context_remove) ->
