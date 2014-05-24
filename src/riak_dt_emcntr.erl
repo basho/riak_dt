@@ -54,7 +54,7 @@
 %% EQC API
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
--export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0, generate/0]).
+-export([gen_op/0, gen_op/1, update_expected/3, eqc_state_value/1, init_state/0, generate/0]).
 -endif.
 
 -ifdef(TEST).
@@ -253,6 +253,9 @@ generate() ->
 
 init_state() ->
     0.
+
+gen_op(_Size) ->
+    gen_op().
 
 gen_op() ->
     oneof([increment,
