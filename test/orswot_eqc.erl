@@ -2,8 +2,7 @@
 %%
 %% orswot_eqc: Try and catch bugs crdt_statem could not.
 %%
-%% TODO DVV disabled? Get, interleave writes, Put
-%% Copyright (c) 2007-2012 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2014 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -22,30 +21,18 @@
 
 -module(orswot_eqc).
 
--ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eqc/include/eqc_statem.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -compile(export_all).
 
--record(state,{replicas=[] :: [binary()], %% Sort of like the ring, upto N*2 ids
-               replica_data=[] :: [{ActorId :: binary(),
-                                  riak_dt_orswot:orswot(),
-                                  model()}],
-               %% The data, duplicated values for replicas
-               %% Newest at the head of the list.
-               %% Prepend only data 'cos symbolic / dynamic state.
-               n=0 :: integer(), %% Generated number of replicas
-               adds=[] :: [{ActorId :: binary(), atom()}] %% things that have been added
-              }).
+-record(state, {replicas=[], %% Actor Ids for replicas in the system
+                adds=[]      %% Elements that have been added to the set
+               }).
 
--type model() :: {riak_dt_orset:orset(), deferred()}.
-%% orset remove entries that cannot be added to an orset yet, as the
-%% add entry is unseen. A way of modelling the context operations of
-%% orswot, without adding the same thing to the ORSet implementation
-%% (where it has no real meaning)
--type deferred() :: riak_dt_orset:orset().
+%% The set of possible elements in the set
+-define(ELEMENTS, ['A', 'B', 'C', 'D', 'X', 'Y', 'Z']).
 
 -define(NUMTESTS, 1000).
 -define(QC_OUT(P),
@@ -53,7 +40,7 @@
                               io:format(user, Str, Args) end, P)).
 
 eqc_test_() ->
-    {timeout, 60, ?_assertEqual(true, eqc:quickcheck(eqc:numtests(1000, ?QC_OUT(prop_merge()))))}.
+    {timeout, 60, ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(50, ?QC_OUT(prop_merge()))))}.
 
 run() ->
     run(?NUMTESTS).
@@ -64,97 +51,242 @@ run(Count) ->
 check() ->
     eqc:check(prop_merge()).
 
-%% Initialize the state
--spec initial_state() -> eqc_statem:symbolic_state().
+
 initial_state() ->
     #state{}.
 
+%% ------ Grouped operator: create_replica
+create_replica_pre(#state{replicas=Replicas}) ->
+    length(Replicas) < 10.
 
-%% ------ Grouped operator: set_nr
-%% Only set N if N has not been set (ie run once, as the first command)
-set_nr_pre(#state{n=N}) ->
-     N == 0.
+%% @doc create_replica_command - Command generator
+create_replica_args(_S) ->
+    %% Don't waste time shrinking the replicas ID binaries, they 8
+    %% byte binaris as that is riak-esque.
+    [noshrink(binary(8))].
 
-set_nr_args(_S) ->
-    [choose(2, 10)].
+%% @doc create_replica_pre - don't create a replica that already
+%% exists
+-spec create_replica_pre(S :: eqc_statem:symbolic_state(),
+                         Args :: [term()]) -> boolean().
+create_replica_pre(#state{replicas=Replicas}, [Id]) ->
+    not lists:member(Id, Replicas).
 
-set_nr(_) ->
-    %% Command args used for next state only
-    ok.
+%% @doc create a new replica, and store a bottom orswot/orset+deferred
+%% in ets
+create_replica(Id) ->
+    ets:insert(orswot_eqc, {Id, riak_dt_orswot:new(), {riak_dt_orset:new(), riak_dt_orset:new()}}).
 
-set_nr_next(S, _V, [N]) ->
-    S#state{n=N}.
-
-%% ------ Grouped operator: make_ring
-%% Generate a bunch of replicas,
-%% only runs until enough are generated
-make_ring_pre(#state{replicas=Replicas, n=N}) ->
-    N > 0 andalso length(Replicas) < N * 2.
-
-make_ring_args(#state{replicas=Replicas, n=N}) ->
-    [Replicas, vector(N, binary(8))].
-
-make_ring(_,_) ->
-    %% Command args used for next state only
-    ok.
-
-make_ring_next(S, _V, [Replicas, NewReplicas0]) ->
-    %% No duplicate replica ids please!
-    R1 = lists:umerge(Replicas, NewReplicas0),
-    S#state{replicas=R1}.
+%% @doc create_replica_next - Add the new replica ID to state
+-spec create_replica_next(S :: eqc_statem:symbolic_state(),
+                          V :: eqc_statem:var(),
+                          Args :: [term()]) -> eqc_statem:symbolic_state().
+create_replica_next(S=#state{replicas=R0}, _Value, [Id]) ->
+    S#state{replicas=R0++[Id]}.
 
 %% ------ Grouped operator: add
-%% Store a new value
-add_pre(S) ->
-    replicas_ready(S).
+add_args(#state{replicas=Replicas}) ->
+    [elements(Replicas),
+     %% Start of with earlier/fewer elements
+     growingelements(?ELEMENTS)].
 
-add_args(#state{replicas=Replicas, replica_data=ReplicaData}) ->
-    [
-     oneof(['X', 'Y', 'Z']), %% a new value
-     elements(Replicas), % The replica
-     ReplicaData %% The existing replica data
-    ].
+%% @doc add_pre - Don't add to a set until we have a replica
+-spec add_pre(S :: eqc_statem:symbolic_state()) -> boolean().
+add_pre(#state{replicas=Replicas}) ->
+    Replicas /= [].
 
-%% Add a value to the set
-add(Value, Actor, ReplicaData) ->
-    {ORSWOT, {ORSet, Deferred}} = get(Actor, ReplicaData),
-    {ok, ORSWOT2} = riak_dt_orswot:update({add, Value}, Actor, ORSWOT),
-    {ok, ORSet2} = riak_dt_orset:update({add, Value}, Actor, ORSet),
-    {Actor, ORSWOT2, {ORSet2, Deferred}}.
+%% @doc add_pre - Ensure correct shrinking, only select a replica that
+%% is in the state
+-spec add_pre(S :: eqc_statem:symbolic_state(),
+              Args :: [term()]) -> boolean().
+add_pre(#state{replicas=Replicas}, [Replica, _]) ->
+    lists:member(Replica, Replicas).
 
-add_next(S=#state{replica_data=ReplicaData, adds=Adds}, Res, [Value, Coord, _]) ->
-    %% The state data is prepend only, it grows and grows, but it's based on older state
-    %% Newest at the front.
-    S#state{replica_data=[Res | ReplicaData], adds=[{Coord, Value} | Adds]}.
+%% @doc add the `Element' to the sets at `Replica'
+add(Replica, Element) ->
+    [{Replica, ORSWOT, {ORSet, Def}}] = ets:lookup(orswot_eqc, Replica),
+    {ok, ORSWOT2} = riak_dt_orswot:update({add, Element}, Replica, ORSWOT),
+    {ok, ORSet2} = riak_dt_orset:update({add, Element}, Replica, ORSet),
+    ets:insert(orswot_eqc, {Replica, ORSWOT2, {ORSet2, Def}}),
+    {ORSWOT2, ORSet2}.
 
-add_post(_S, _Args, Res) ->
-    post_all(Res, add).
+%% @doc add_next - Add the `Element' to the `adds' list so we can
+%% select from it when we come to remove. This increases the liklihood
+%% of a remove actuallybeing meaningful.
+-spec add_next(S :: eqc_statem:symbolic_state(),
+               V :: eqc_statem:var(),
+               Args :: [term()]) -> eqc_statem:symbolic_state().
+add_next(S=#state{adds=Adds}, _Value, [_, Element]) ->
+    S#state{adds=lists:umerge(Adds, [Element])}.
+
+%% @doc add_post - The specification and implementation should be
+%% equal in intermediate states as well as at the end.
+-spec add_post(S :: eqc_statem:dynamic_state(),
+               Args :: [term()], R :: term()) -> true | term().
+add_post(_S, _Args, {ORSWOT, ORSet}) ->
+    sets_equal(ORSWOT, ORSet).
 
 %% ------ Grouped operator: remove
-%% remove, but only something that has been added already
-remove_pre(S=#state{adds=Adds}) ->
-    %% Only do an update if you already did a get
-    replicas_ready(S) andalso Adds /= [].
+%% @doc remove_command - Command generator
 
-remove_args(#state{adds=Adds, replica_data=ReplicaData}) ->
-    [
-     elements(Adds), %% Something that has been added
-     ReplicaData %% All the vnode data
-    ].
+%% @doc remove_pre - Only remove if there are replicas and elements
+%% added already.
+-spec remove_pre(S :: eqc_statem:symbolic_state()) -> boolean().
+remove_pre(#state{replicas=Replicas, adds=Adds}) ->
+    Replicas /= [] andalso Adds /= [].
 
-remove_pre(#state{adds=Adds}, [Add, _]) ->
-    lists:member(Add, Adds).
+remove_args(#state{replicas=Replicas, adds=Adds}) ->
+    [elements(Replicas), elements(Adds)].
 
-remove({Replica, Value}, ReplicaData) ->
-    {ORSWOT, {ORSet, Deferred}} = get(Replica, ReplicaData),
+%% @doc ensure correct shrinking
+remove_pre(#state{replicas=Replicas}, [Replica, _]) ->
+    lists:member(Replica, Replicas).
+
+%% @doc perform an element remove.
+remove(Replica, Value) ->
+    [{Replica, ORSWOT, {ORSet, Def}}] = ets:lookup(orswot_eqc, Replica),
     %% even though we only remove what has been added, there is no
     %% guarantee a merge from another replica hasn't led to the
     %% element being removed already, so ignore precon errors (they
     %% don't change state)
-    ORSWOT2 = ignore_preconerror_remove(Value, ReplicaData, ORSWOT, riak_dt_orswot),
-    ORSet2 = ignore_preconerror_remove(Value, ReplicaData, ORSet, riak_dt_orset),
-    {Replica, ORSWOT2, {ORSet2, Deferred}}.
+    ORSWOT2 = ignore_preconerror_remove(Value, Replica, ORSWOT, riak_dt_orswot),
+    ORSet2 = ignore_preconerror_remove(Value, Replica, ORSet, riak_dt_orset),
+    ets:insert(orswot_eqc, {Replica, ORSWOT2, {ORSet2, Def}}),
+    {ORSWOT2, ORSet2}.
 
+%% @doc in a non-context remove, not only must the spec and impl be
+%% equal, but the `Element' MUST be absent from the set
+remove_post(_S, [_, Element], {ORSWOT2, ORSet2}) ->
+    eqc_statem:conj([sets_not_member(Element, ORSWOT2),
+          sets_equal(ORSWOT2, ORSet2)]).
+
+%% ------ Grouped operator: replicate
+%% @doc replicate_args - Choose a From and To for replication
+replicate_args(#state{replicas=Replicas}) ->
+    [elements(Replicas), elements(Replicas)].
+
+%% @doc replicate_pre - There must be at least on replica to replicate
+-spec replicate_pre(S :: eqc_statem:symbolic_state()) -> boolean().
+replicate_pre(#state{replicas=Replicas}) ->
+    Replicas /= [].
+
+%% @doc replicate_pre - Ensure correct shrinking
+-spec replicate_pre(S :: eqc_statem:symbolic_state(),
+                    Args :: [term()]) -> boolean().
+replicate_pre(#state{replicas=Replicas}, [From, To]) ->
+    lists:member(From, Replicas) andalso lists:member(To, Replicas).
+
+%% @doc simulate replication by merging state at `To' with state from `From'
+replicate(From, To) ->
+    [{From, FromORSWOT, {FromORSet, FromDef}}] = ets:lookup(orswot_eqc, From),
+    [{To, ToORSWOT, {ToORSet, ToDef}}] = ets:lookup(orswot_eqc, To),
+
+    ORSWOT = riak_dt_orswot:merge(FromORSWOT, ToORSWOT),
+    ORSet0 = riak_dt_orset:merge(FromORSet, ToORSet),
+    Def0 = riak_dt_orset:merge(FromDef, ToDef),
+
+    {ORSet, Def} = model_apply_deferred(ORSet0, Def0),
+
+    ets:insert(orswot_eqc, {To, ORSWOT, {ORSet, Def}}),
+    {ORSWOT, ORSet}.
+
+%% @doc replicate_post - ORSet and ORSWOT must be equal throughout.
+-spec replicate_post(S :: eqc_statem:dynamic_state(),
+                     Args :: [term()], R :: term()) -> true | term().
+replicate_post(_S, [_From, _To], {SWOT, Set}) ->
+    sets_equal(SWOT, Set).
+
+
+%% ------ Grouped operator: context_remove
+context_remove_args(#state{replicas=Replicas, adds=Adds}) ->
+    [elements(Replicas),
+     elements(Replicas),
+     elements(Adds)].
+
+%% @doc context_remove_pre - As for `remove/1'
+-spec context_remove_pre(S :: eqc_statem:symbolic_state()) -> boolean().
+context_remove_pre(#state{replicas=Replicas, adds=Adds}) ->
+    Replicas /= [] andalso Adds /= [].
+
+%% @doc context_remove_pre - Ensure correct shrinking
+-spec context_remove_pre(S :: eqc_statem:symbolic_state(),
+                         Args :: [term()]) -> boolean().
+context_remove_pre(#state{replicas=Replicas, adds=Adds}, [From, To, Element]) ->
+    lists:member(From, Replicas) andalso lists:member(To, Replicas)
+        andalso lists:member(Element, Adds).
+
+%% @doc a dynamic precondition uses concrete state, check that the
+%% `From' set contains `Element'
+context_remove_dynamicpre(_S, [From, _To, Element]) ->
+    [{From, SWOT, _FromORSet}] = ets:lookup(orswot_eqc, From),
+    lists:member(Element, riak_dt_orswot:value(SWOT)).
+
+%% @doc perform a context remove using the context+element at `From'
+%% and removing from `To'
+context_remove(From, To, Element) ->
+    [{From, FromORSWOT, {FromORSet, _FromDef}}] = ets:lookup(orswot_eqc, From),
+    [{To, ToORSWOT, {ToORSet, ToDef}}] = ets:lookup(orswot_eqc, To),
+
+    Ctx = riak_dt_orswot:precondition_context(FromORSWOT),
+    Fragment = riak_dt_orset:value({fragment, Element}, FromORSet),
+    {ok, ToORSWOT2} = riak_dt_orswot:update({remove, Element}, To, ToORSWOT, Ctx),
+
+    {ToORSet2, ToDef2} = context_remove_model(Element, Fragment, ToORSet, ToDef),
+
+    ets:insert(orswot_eqc, {To, ToORSWOT2, {ToORSet2, ToDef2}}),
+    {ToORSWOT2, ToORSet2}.
+
+%% @doc weights for commands. Don't create too many replicas, but
+%% prejudice in favour of creating more than 1. Try and balance
+%% removes with adds. But favour adds so we have something to
+%% remove. See the aggregation output.
+weight(S, create_replica) when length(S#state.replicas) > 2 ->
+    1;
+weight(S, create_replica) when length(S#state.replicas) < 5 ->
+    4;
+weight(_S, remove) ->
+    3;
+weight(_S, context_remove) ->
+    3;
+weight(_S, add) ->
+    8;
+weight(_S, _) ->
+    1.
+
+%% @doc check that the implementation of the ORSWOT is equivalent to
+%% the OR-Set impl.
+-spec prop_merge() -> eqc:property().
+prop_merge() ->
+    ?FORALL(Cmds, commands(?MODULE),
+            begin
+                %% Store the state external to the statem for correct
+                %% shrinking. This is best practice.
+                ets:new(orswot_eqc, [named_table, set]),
+                {H, S, Res} = run_commands(?MODULE,Cmds),
+                {MergedSwot, {MergedSet, ModelDeferred}} = lists:foldl(fun({_Id, ORSWOT, ORSetAndDef}, {MO, MOS}) ->
+                                                                               {riak_dt_orswot:merge(ORSWOT, MO),
+                                                                                model_merge(MOS, ORSetAndDef)}
+                                                                       end,
+                                                                       {riak_dt_orswot:new(), {riak_dt_orset:new(), riak_dt_orset:new()}},
+                                                                       ets:tab2list(orswot_eqc)),
+                SwotDeferred = proplists:get_value(deferred_length, riak_dt_orswot:stats(MergedSwot)),
+
+                ets:delete(orswot_eqc),
+                pretty_commands(?MODULE, Cmds, {H, S, Res},
+                                aggregate(command_names(Cmds),
+                                          measure(replicas, length(S#state.replicas),
+                                                  measure(elements, riak_dt_orswot:stat(element_count, MergedSwot),
+                                                          conjunction([{result, Res == ok},
+                                                                       {equal, sets_equal(MergedSwot, MergedSet)},
+                                                                       {m_ec, equals(length(ModelDeferred), 0)},
+                                                                       {ec, equals(SwotDeferred, 0)}
+                                                                      ])))))
+
+            end).
+
+%% Helpers @doc a non-context remove of an absent element generates a
+%% precondition error, but does not mutate the state, so just ignore
+%% and return original state.
 ignore_preconerror_remove(Value, Actor, Set, Mod) ->
     case Mod:update({remove, Value}, Actor, Set) of
         {ok, Set2} ->
@@ -163,46 +295,30 @@ ignore_preconerror_remove(Value, Actor, Set, Mod) ->
             Set
     end.
 
-remove_next(S=#state{replica_data=ReplicaData, adds=Adds}, Res, [Add, _]) ->
-    S#state{replica_data=[Res | ReplicaData], adds=lists:delete(Add, Adds)}.
+%% @doc common precondition and property, do SWOT and Set have the
+%% same elements?
+sets_equal(ORSWOT, ORSet) ->
+    %% What matters is that both types have the exact same results.
+    case lists:sort(riak_dt_orswot:value(ORSWOT)) ==
+        lists:sort(riak_dt_orset:value(ORSet)) of
+        true ->
+            true;
+        _ ->
+            {ORSWOT, '/=', ORSet}
+    end.
 
-remove_post(_S, _Args, Res) ->
-    post_all(Res, remove).
+%% @doc `true' if `Element' is not in `ORSWOT', error tuple otherwise.
+sets_not_member(Element, ORSWOT) ->
+    case lists:member(Element, riak_dt_orswot:value(ORSWOT)) of
+        false ->
+            true;
+        _ ->
+            {Element, member, ORSWOT}
+    end.
 
-%% ------ Grouped operator: replicate
-%% Merge two replicas' values
-replicate_pre(S=#state{replica_data=ReplicaData}) ->
-    replicas_ready(S) andalso ReplicaData /= [].
-
-replicate_args(#state{replicas=Replicas, replica_data=ReplicaData}) ->
-    [
-     elements(Replicas), %% Replicate from
-     elements(Replicas), %% replicate too
-     ReplicaData
-    ].
-
-%% Don't replicate to oneself
-replicate_pre(_S, [VN, VN, _]) ->
-    false;
-replicate_pre(_S, [_VN1, _VN2, _]) ->
-    true.
-
-%% Mutating multiple elements in replica_data in place is bad idea
-%% (symbolic vs dynamic state), so instead of treating add/remove and
-%% replicate as the same action, this command handles the replicate
-%% part. Data from some random replica (From) is replicated to some
-%% random replica (To)
-replicate(From, To, ReplicaData) ->
-    {FromORSWOT, {FromORSet, FromDeferred}} = get(From, ReplicaData),
-    {ToORSWOT, {ToORSet, ToDeferred}} = get(To, ReplicaData),
-    ORSWOT = riak_dt_orswot:merge(FromORSWOT, ToORSWOT),
-    ORSet0 = riak_dt_orset:merge(FromORSet, ToORSet),
-    Deferred0 = riak_dt_orset:merge(FromDeferred, ToDeferred),
-    {ORSet, Deferred} = model_apply_deferred(ORSet0, Deferred0),
-    {To, ORSWOT, {ORSet, Deferred}}.
-
-%% After merging the sets and the deferred list, see if any deferred
-%% removes are now relevant
+%% @doc Since OR-Set does not support deferred operations (yet!) After
+%% merging the sets and the deferred list, see if any deferred removes
+%% are now relevant.
 model_apply_deferred(ORSet, Deferred) ->
     Elems = riak_dt_orset:value(removed, Deferred),
     lists:foldl(fun(E, {OIn, DIn}) ->
@@ -214,64 +330,8 @@ model_apply_deferred(ORSet, Deferred) ->
                 {ORSet, riak_dt_orset:new()},
                 Elems).
 
-replicate_next(S=#state{replica_data=ReplicaData}, Res, _Args) ->
-    S#state{replica_data=[Res | ReplicaData]}.
-
-replicate_post(_S, _Args, Res) ->
-    post_all(Res, rep).
-
-%% ------ Grouped operator: context_remove
-%% Removal operation with a context
-context_remove_pre(S=#state{replica_data=ReplicaData}) ->
-    replicas_ready(S) andalso ReplicaData /= [].
-
-context_remove_args(#state{replicas=Replicas, replica_data=ReplicaData}) ->
-    [
-     elements(Replicas), %% read from
-     elements(Replicas), %% send op too
-     ReplicaData
-    ].
-
-%% Don't send ctx ops to oneself
-context_remove_pre(_S, [VN, VN, _]) ->
-    false;
-context_remove_pre(_S, [_VN1, _VN2, _]) ->
-    true.
-
-%% checks that a context remove is equivalent to performing a remove
-%% on some state and merging it with some other state (eventually) For
-%% the model we chose an element, and send it, them remove it, from
-%% the target replica (like a partial merge.) If we did a full merge
-%% post conditions would not hold.
-context_remove(From, To, ReplicaData) ->
-    {FromORSWOT, {FromORSet, FromDeferred}} = get(From, ReplicaData),
-    {ToORSWOT, {ToORSet, ToDeferred}} = get(To, ReplicaData),
-    case choose_element(FromORSWOT, FromORSet) of
-        empty ->
-            %% No-op
-            {From, FromORSWOT, {FromORSet, FromDeferred}};
-        {{Ctx, Element}, Fragment} ->
-            {ok, ORSWOT} = riak_dt_orswot:update({remove, Element}, To, ToORSWOT, Ctx),
-            {ORSet, Deferred} = context_remove_model(Element, Fragment, ToORSet, ToDeferred),
-            {To, ORSWOT, {ORSet, Deferred}}
-    end.
-
-%% Don't know how to make this a quickcheck generated thing
-choose_element(ORSWOT, ORSet) ->
-    Elems = riak_dt_orswot:value(ORSWOT),
-    %% any element in ORSWOT must be ORSet (see post conditions)
-    case Elems of
-        [] ->
-            empty;
-        _->
-            Elem = lists:nth(crypto:rand_uniform(1, length(Elems) + 1), Elems),
-            Ctx = riak_dt_orswot:precondition_context(ORSWOT),
-            Fragment = riak_dt_orset:value({fragment, Elem}, ORSet),
-            {{Ctx, Elem}, Fragment}
-    end.
-
-%% @TODO Knows about the internal working of riak_dt_orset, maybe
-%% model should be a re-impl of that module instead. Also, this is
+%% @TODO Knows about the internal working of riak_dt_orset,
+%% riak_dt_osret should provide deferred operations. Also, this is
 %% heinously ugly and hard to read.
 context_remove_model(Elem, RemoveContext, ORSet, Deferred) ->
     Present = riak_dt_orset:value({tokens, Elem}, ORSet),
@@ -301,73 +361,13 @@ context_remove_model(Elem, RemoveContext, ORSet, Deferred) ->
                                                  orddict:store(Token, true, orddict:new()),
                                                  Defer)}
                          end
+
                  end,
                  {ORSet, Deferred},
                  Removing).
 
-context_remove_next(S=#state{replica_data=ReplicaData}, Res, _Args) ->
-    S#state{replica_data=[Res | ReplicaData]}.
-
-context_remove_post(_S, _Args, Res) ->
-    post_all(Res, ctx_rem).
-
-%% Tests the property that an ORSWOT is equivalent to an ORSet
-prop_merge() ->
-    ?FORALL(Cmds, commands(?MODULE),
-            begin
-                {H, S=#state{replicas=Replicas, replica_data=ReplicaData}, Res} = run_commands(?MODULE,Cmds),
-                %% Check that collapsing all values leads to the same results for ORSWOT and ORSet
-                {{OV, DeferredLength}, {ORV, Def}} = case Replicas of
-                                                         [] ->
-                                                             {{[], 0}, {[], []}};
-                                                         _L ->
-                                                             %% Get ALL actor's values
-                                                             {OS, {ORSet, Deferred}} = lists:foldl(fun(Actor, {O, {OR, D}}) ->
-                                                                                                 {O1, {OR1, D1}} = get(Actor, ReplicaData),
-                                                                                                 {riak_dt_orswot:merge(O, O1),
-                                                                                                  model_merge({OR, D}, {OR1, D1})} end,
-                                                                                         {riak_dt_orswot:new(), {riak_dt_orset:new(), riak_dt_orset:new()}},
-                                                                                         Replicas),
-                                                             DL = proplists:get_value(deferred_length, riak_dt_orswot:stats(OS)),
-                                                             {{riak_dt_orswot:value(OS), DL}, {riak_dt_orset:value(ORSet), Deferred}}
-                                                     end,
-                aggregate(command_names(Cmds),
-                          pretty_commands(?MODULE,Cmds, {H,S,Res},
-                                          conjunction([{result,  equals(Res, ok)},
-                                                       {values, equals(lists:sort(OV), lists:sort(ORV))},
-                                                       {m_ec, equals(length(Def), 0)},
-                                                       {ec, equals(DeferredLength, 0)}])
-                                         ))
-            end).
-
-%% -----------
-%% Helpers
-%% ----------
+%% @doc merge both orset and deferred operations
 model_merge({S1, D1}, {S2, D2}) ->
     S = riak_dt_orset:merge(S1, S2),
     D = riak_dt_orset:merge(D1, D2),
     model_apply_deferred(S, D).
-
-replicas_ready(#state{replicas=Replicas, n=N}) ->
-    length(Replicas) >= N andalso N > 0.
-
-post_all({_, ORSWOT, {ORSet, _D}}, Cmd) ->
-    %% What matters is that both types have the exact same results.
-    case lists:sort(riak_dt_orswot:value(ORSWOT)) == lists:sort(riak_dt_orset:value(ORSet)) of
-        true ->
-            true;
-        _ ->
-            {postcondition_failed, "SWOT and Set don't match", Cmd, ORSWOT, ORSet}
-    end.
-
-
-%% if a replica does not yet have replica data, return `new()` for the
-%% ORSWOT and ORSet
-get(Replica, ReplicaData) ->
-    case lists:keyfind(Replica, 1, ReplicaData) of
-        {Replica, ORSWOT, ORSet} ->
-            {ORSWOT, ORSet};
-        false -> {riak_dt_orswot:new(), {riak_dt_orset:new(), riak_dt_orset:new()}}
-    end.
-
--endif. % EQC
