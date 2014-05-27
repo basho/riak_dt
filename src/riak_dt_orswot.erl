@@ -80,7 +80,6 @@
 -export([to_binary/1, from_binary/1]).
 -export([precondition_context/1, stats/1, stat/2]).
 -export([parent_clock/2]).
--export([prop_measure/0]).
 
 %% EQC API
 -ifdef(EQC).
@@ -585,9 +584,6 @@ generate() ->
                      end,
                      riak_dt_orswot:new(),
                      Ops)).
-
-prop_measure() ->
-    ?FORALL(Op, gen_op(), measure(size, byte_size(term_to_binary(Op)), true)).
 
 %% EQC generator
 gen_op() ->
