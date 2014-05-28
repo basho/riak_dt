@@ -281,6 +281,127 @@ update_next(S=#state{counter=Cnt, adds=Adds}, _Res, [Field, _, _, _]) ->
 update_post(_S, _Args, Res) ->
     post_all(Res, update).
 
+%% ------ Grouped operator: idempotent
+
+idempotent_args(#state{replicas=Replicas}) ->
+    [elements(Replicas)].
+
+%% @doc idempotent_pre - Precondition for generation
+-spec idempotent_pre(S :: eqc_statem:symbolic_state()) -> boolean().
+idempotent_pre(#state{replicas=Replicas}) ->
+    Replicas /= [].
+
+%% @doc idempotent_pre - Precondition for idempotent
+-spec idempotent_pre(S :: eqc_statem:symbolic_state(),
+                     Args :: [term()]) -> boolean().
+idempotent_pre(#state{replicas=Replicas}, [Replica]) ->
+    lists:member(Replica, Replicas).
+
+%% @doc idempotent - Merge replica with itself, result used for post condition only
+idempotent(Replica) ->
+    [{Replica, Map, _Model}] = ets:lookup(map_eqc, Replica),
+    {Map, riak_dt_map:merge(Map, Map)}.
+
+%% @doc idempotent_post - Postcondition for idempotent
+-spec idempotent_post(S :: eqc_statem:dynamic_state(),
+                      Args :: [term()], R :: term()) -> true | term().
+idempotent_post(_S, [_Replica], {Map, MergedSelfMap}) ->
+    riak_dt_map:equal(Map, MergedSelfMap).
+
+%% ------ Grouped operator: commutative
+
+commutative_args(#state{replicas=Replicas}) ->
+    [elements(Replicas), elements(Replicas)].
+
+%% @doc commutative_pre - Precondition for generation
+-spec commutative_pre(S :: eqc_statem:symbolic_state()) -> boolean().
+commutative_pre(#state{replicas=Replicas}) ->
+    Replicas /= [].
+
+%% @doc commutative_pre - Precondition for commutative
+-spec commutative_pre(S :: eqc_statem:symbolic_state(),
+                     Args :: [term()]) -> boolean().
+commutative_pre(#state{replicas=Replicas}, [Replica, Replica2]) ->
+    lists:member(Replica, Replicas) andalso lists:member(Replica2, Replicas).
+
+%% @doc commutative - Merge maps both ways (result used for post condition)
+commutative(Replica1, Replica2) ->
+    [{Replica1, Map1, _Model1}] = ets:lookup(map_eqc, Replica1),
+    [{Replica2, Map2, _Model2}] = ets:lookup(map_eqc, Replica2),
+    {riak_dt_map:merge(Map1, Map2), riak_dt_map:merge(Map2, Map1)}.
+
+%% @doc commutative_post - Postcondition for commutative
+-spec commutative_post(S :: eqc_statem:dynamic_state(),
+                      Args :: [term()], R :: term()) -> true | term().
+commutative_post(_S, [_Replica1, _Replica2], {OneMergeTwo, TwoMergeOne}) ->
+    riak_dt_map:equal(OneMergeTwo, TwoMergeOne).
+
+%% ------ Grouped operator: associative
+
+associative_args(#state{replicas=Replicas}) ->
+    [elements(Replicas), elements(Replicas), elements(Replicas)].
+
+%% @doc associative_pre - Precondition for generation
+-spec associative_pre(S :: eqc_statem:symbolic_state()) -> boolean().
+associative_pre(#state{replicas=Replicas}) ->
+    Replicas /= [].
+
+%% @doc associative_pre - Precondition for associative
+-spec associative_pre(S :: eqc_statem:symbolic_state(),
+                     Args :: [term()]) -> boolean().
+associative_pre(#state{replicas=Replicas}, [Replica, Replica2, Replica3]) ->
+    lists:member(Replica, Replicas)
+        andalso lists:member(Replica2, Replicas)
+        andalso lists:member(Replica3, Replicas).
+
+%% @doc associative - Merge maps three ways (result used for post condition)
+associative(Replica1, Replica2, Replica3) ->
+    [{Replica1, Map1, _Model1}] = ets:lookup(map_eqc, Replica1),
+    [{Replica2, Map2, _Model2}] = ets:lookup(map_eqc, Replica2),
+    [{Replica3, Map3, _Model3}] = ets:lookup(map_eqc, Replica3),
+    {riak_dt_map:merge(riak_dt_map:merge(Map1, Map2), Map3),
+     riak_dt_map:merge(riak_dt_map:merge(Map1, Map3), Map2),
+     riak_dt_map:merge(riak_dt_map:merge(Map2, Map3), Map1)}.
+
+%% @doc associative_post - Postcondition for associative
+-spec associative_post(S :: eqc_statem:dynamic_state(),
+                      Args :: [term()], R :: term()) -> true | term().
+associative_post(_S, [_Replica1, _Replica2, _Replica3], {ABC, ACB, BCA}) ->
+%%    case {riak_dt_map:equal(ABC, ACB),  riak_dt_map:equal(ACB, BCA)} of
+    case {map_values_equal(ABC, ACB), map_values_equal(ACB, BCA)} of
+        {true, true} ->
+            true;
+        {false, true} ->
+            {postcondition_failed, {ACB, not_associative, ABC}};
+        {true, false} ->
+            {postcondition_failed, {ACB, not_associative, BCA}};
+        {false, false} ->
+            {postcondition_failed, {{ACB, not_associative, ABC}, '&&', {ACB, not_associative, BCA}}}
+    end.
+
+map_values_equal(Map1, Map2) ->
+    lists:sort(riak_dt_map:value(Map1)) == lists:sort(riak_dt_map:value(Map2)).
+
+%% @Doc Weights for commands. Don't create too many replicas, but
+%% prejudice in favour of creating more than 1. Try and balance
+%% removes with adds. But favour adds so we have something to
+%% remove. See the aggregation output.
+weight(S, create_replica) when length(S#state.replicas) > 2 ->
+    1;
+weight(S, create_replica) when length(S#state.replicas) < 5 ->
+    4;
+weight(_S, remove) ->
+    2;
+weight(_S, context_remove) ->
+    5;
+weight(_S, update) ->
+    3;
+weight(_S, ctx_update) ->
+    3;
+weight(_S, _) ->
+    1.
+
+
 %% @doc Tests the property that a riak_dt_map is equivalent to the Map
 %% Model. The Map Model is based roughly on an or-set design. Inspired
 %% by a draft spec in sent in private email by Carlos Baquero. The

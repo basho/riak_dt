@@ -371,7 +371,7 @@ filter_unique(FieldSet, Entries, Clock, Acc) ->
                               %% create a tombstone since the
                               %% otherside does not have this field,
                               %% it either removed it, or never had
-                              %% it.  If it never had it, the removing
+                              %% it. If it never had it, the removing
                               %% dots in the tombstone will have no
                               %% impact on the value, if the otherside
                               %% removed it, then the removed dots
@@ -494,6 +494,14 @@ equal({Clock1, Values1, Deferred1}, {Clock2, Values2, Deferred2}) ->
 pairwise_equals([], []) ->
     true;
 pairwise_equals([{{Name, Type}, {Dots1, TS1}}| Rest1], [{{Name, Type}, {Dots2, TS2}}|Rest2]) ->
+    %% Tombstones don't need to be equal. When we merge with a map
+    %% where one side is absent, we take the absent sides clock, when
+    %% we merge where both sides have a field, we merge the
+    %% tombstones, and apply deferred. The deferred remove uses a glb
+    %% of the context and the clock, meaning we get a smaller
+    %% tombstone. Both are correct when it comes to determining the
+    %% final value. As long as tombstones are not conflicting (that is
+    %% A == B | A > B | B > A)
     case {orddict:fetch_keys(Dots1) == orddict:fetch_keys(Dots2), Type:equal(TS1, TS2)} of
         {true, true} ->
             pairwise_equals(Rest1, Rest2);

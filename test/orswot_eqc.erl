@@ -236,6 +236,104 @@ context_remove(From, To, Element) ->
     ets:insert(orswot_eqc, {To, ToORSWOT2, {ToORSet2, ToDef2}}),
     {ToORSWOT2, ToORSet2}.
 
+
+%% ------ Grouped operator: idempotent
+
+idempotent_args(#state{replicas=Replicas}) ->
+    [elements(Replicas)].
+
+%% @doc idempotent_pre - Precondition for generation
+-spec idempotent_pre(S :: eqc_statem:symbolic_state()) -> boolean().
+idempotent_pre(#state{replicas=Replicas}) ->
+    Replicas /= [].
+
+%% @doc idempotent_pre - Precondition for idempotent
+-spec idempotent_pre(S :: eqc_statem:symbolic_state(),
+                     Args :: [term()]) -> boolean().
+idempotent_pre(#state{replicas=Replicas}, [Replica]) ->
+    lists:member(Replica, Replicas).
+
+%% @doc idempotent - Merge replica with itself, result used for post condition only
+idempotent(Replica) ->
+    [{Replica, Swot, _Model}] = ets:lookup(orswot_eqc, Replica),
+    {Swot, riak_dt_orswot:merge(Swot, Swot)}.
+
+%% @doc idempotent_post - Postcondition for idempotent
+-spec idempotent_post(S :: eqc_statem:dynamic_state(),
+                      Args :: [term()], R :: term()) -> true | term().
+idempotent_post(_S, [_Replica], {Swot, MergedSelfSwot}) ->
+    riak_dt_orswot:equal(Swot, MergedSelfSwot).
+
+%% ------ Grouped operator: commutative
+
+commutative_args(#state{replicas=Replicas}) ->
+    [elements(Replicas), elements(Replicas)].
+
+%% @doc commutative_pre - Precondition for generation
+-spec commutative_pre(S :: eqc_statem:symbolic_state()) -> boolean().
+commutative_pre(#state{replicas=Replicas}) ->
+    Replicas /= [].
+
+%% @doc commutative_pre - Precondition for commutative
+-spec commutative_pre(S :: eqc_statem:symbolic_state(),
+                     Args :: [term()]) -> boolean().
+commutative_pre(#state{replicas=Replicas}, [Replica, Replica2]) ->
+    lists:member(Replica, Replicas) andalso lists:member(Replica2, Replicas).
+
+%% @doc commutative - Merge maps both ways (result used for post condition)
+commutative(Replica1, Replica2) ->
+    [{Replica1, Swot1, _Model1}] = ets:lookup(orswot_eqc, Replica1),
+    [{Replica2, Swot2, _Model2}] = ets:lookup(orswot_eqc, Replica2),
+    {riak_dt_orswot:merge(Swot1, Swot2), riak_dt_orswot:merge(Swot2, Swot1)}.
+
+%% @doc commutative_post - Postcondition for commutative
+-spec commutative_post(S :: eqc_statem:dynamic_state(),
+                      Args :: [term()], R :: term()) -> true | term().
+commutative_post(_S, [_Replica1, _Replica2], {OneMergeTwo, TwoMergeOne}) ->
+    riak_dt_orswot:equal(OneMergeTwo, TwoMergeOne).
+
+%% ------ Grouped operator: associative
+
+associative_args(#state{replicas=Replicas}) ->
+    [elements(Replicas), elements(Replicas), elements(Replicas)].
+
+%% @doc associative_pre - Precondition for generation
+-spec associative_pre(S :: eqc_statem:symbolic_state()) -> boolean().
+associative_pre(#state{replicas=Replicas}) ->
+    Replicas /= [].
+
+%% @doc associative_pre - Precondition for associative
+-spec associative_pre(S :: eqc_statem:symbolic_state(),
+                     Args :: [term()]) -> boolean().
+associative_pre(#state{replicas=Replicas}, [Replica, Replica2, Replica3]) ->
+    lists:member(Replica, Replicas)
+        andalso lists:member(Replica2, Replicas)
+        andalso lists:member(Replica3, Replicas).
+
+%% @doc associative - Merge maps three ways (result used for post condition)
+associative(Replica1, Replica2, Replica3) ->
+    [{Replica1, Swot1, _Model1}] = ets:lookup(orswot_eqc, Replica1),
+    [{Replica2, Swot2, _Model2}] = ets:lookup(orswot_eqc, Replica2),
+    [{Replica3, Swot3, _Model3}] = ets:lookup(orswot_eqc, Replica3),
+    {riak_dt_orswot:merge(riak_dt_orswot:merge(Swot1, Swot2), Swot3),
+     riak_dt_orswot:merge(riak_dt_orswot:merge(Swot1, Swot3), Swot2),
+     riak_dt_orswot:merge(riak_dt_orswot:merge(Swot2, Swot3), Swot1)}.
+
+%% @doc associative_post - Postcondition for associative
+-spec associative_post(S :: eqc_statem:dynamic_state(),
+                      Args :: [term()], R :: term()) -> true | term().
+associative_post(_S, [_Replica1, _Replica2, _Replica3], {ABC, ACB, BCA}) ->
+  case {riak_dt_orswot:equal(ABC, ACB),  riak_dt_orswot:equal(ACB, BCA)} of
+        {true, true} ->
+            true;
+        {false, true} ->
+            {postcondition_failed, {ACB, not_associative, ABC}};
+        {true, false} ->
+            {postcondition_failed, {ACB, not_associative, BCA}};
+        {false, false} ->
+            {postcondition_failed, {{ACB, not_associative, ABC}, '&&', {ACB, not_associative, BCA}}}
+    end.
+
 %% @doc weights for commands. Don't create too many replicas, but
 %% prejudice in favour of creating more than 1. Try and balance
 %% removes with adds. But favour adds so we have something to
