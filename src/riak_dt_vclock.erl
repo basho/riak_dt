@@ -32,8 +32,8 @@
 -module(riak_dt_vclock).
 
 -export([fresh/0,descends/2,merge/1,get_counter/2, subtract_dots/2,
-	increment/2,all_nodes/1, equal/2, replace_actors/2, replace_actors/3,
-         to_binary/1, from_binary/1, dominates/2]).
+         increment/2,all_nodes/1, equal/2,
+         to_binary/1, from_binary/1, dominates/2, glb/2]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -169,30 +169,23 @@ to_binary(Clock) ->
 from_binary(Bin) ->
     sort(binary_to_term(Bin)).
 
-%% @doc replace actors in the vclock with those in the provided
-%% 2 tuple list, the first element in the
-%% actor map is present in the clock, and the second will
-%% replace it.
--spec replace_actors([{vclock_node(), vclock_node()}], vclock()) -> vclock().
-replace_actors(ActorMap, Vclock) ->
-    replace_actors(ActorMap, Vclock, 1).
-
-%% @doc replace the actors in the vclock with the actors
-%% in the provided actor map list.
-%% The element at `KeyPos` is the actor in the vclock
-%% the other element in the actor map 2 tuple replaces it.
--spec replace_actors([{vclock_node(), vclock_node()}], vclock(), 1 | 2) -> vclock().
-replace_actors(ActorMap, Vclock, KeyPos) ->
-    lists:foldl(fun({CurrActor, Cntr}, NewClock) ->
-                        Map = lists:keyfind(CurrActor, KeyPos, ActorMap),
-                        [{new_key(Map, KeyPos), Cntr} | NewClock] end,
-                [],
-                Vclock).
-
-new_key({_Old, New}, 1) ->
-    New;
-new_key({New, _Old}, 2) ->
-    New.
+%% @doc take two vclocks and return a vclock that summerizes only the
+%% events both have seen.
+-spec glb(vclock(), vclock()) -> vclock().
+glb(Clock1, Clock2) ->
+    Clock = lists:foldl(fun({Actor, Cnt}, GLB) ->
+                                case lists:keyfind(Actor, 1, Clock2) of
+                                    false ->
+                                        GLB;
+                                    {Actor, Cnt2} when Cnt2 >= Cnt ->
+                                        [{Actor, Cnt} | GLB];
+                                    {Actor, Cnt2} ->
+                                        [{Actor, Cnt2} | GLB]
+                                end
+                        end,
+                        fresh(),
+                        Clock1),
+    lists:sort(Clock).
 
 %% ===================================================================
 %% EUnit tests
