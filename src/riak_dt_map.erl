@@ -132,12 +132,12 @@
 %%
 %% <h3>Lagging replicas, deferred operations</h3>
 %%
-%% In a system like Riak, a replica is not up-to-date (including,
+%% In a system like Riak, a replica that is not up-to-date (including,
 %% never seen any state for a CRDT) maybe asked to perform an
 %% operation. If no context is given, and the operation is a field
 %% remove, or a "remove" like operation on an embedded CRDT, the
 %% operation may fail with a precondition error (for example, remove a
-%% field that is not present) or succeed and remove for state than
+%% field that is not present) or succeed and remove more state than
 %% intended (a field remove with no context may remove updates unseen
 %% by the client.) When a context is provided, and the Field to be
 %% removed is absent, the Map state stores the context, and Field
@@ -151,7 +151,7 @@
 %% There is a bug with embedded types and deferred operations. Imagine
 %% a client has seen a Map with a Set field, and the set contains {a,
 %% b, c}. The client sends an operation to remove {a} from the set. A
-%% replica that is new takes the operation. It well create a new Map,
+%% replica that is new takes the operation. It will create a new Map,
 %% a Field for the Set, and store the `remove` operation as part of
 %% the Set's state. A client reads this new state, and sends a field
 %% remove operation, that is executed by same replica. Now the
