@@ -25,12 +25,12 @@
 %% A Map is set of `Field's a `Field' is a two-tuple of:
 %% `{Name::binary(), CRDTModule::module()}' where the second element
 %% is the name of a crdt module that may be embedded. CRDTs stored
-%% inside the Map will have their `update/3' function called, but the
+%% inside the Map will have their `update/3/4' function called, but the
 %% second argument will be a `riak_dt:dot()', so that they share the
 %% causal context of the map, even when fields are removed, and
 %% subsequently re-added.
 %%
-%% The contents of the Map are modelled as a dictionary of
+%% The contents of the Map are modeled as a dictionary of
 %% `field_name()' to `field_value()' mappings. Where `field_ name()'
 %% is a two tuple of an opaque `binary()' name, and one of the
 %% embeddable crdt types (currently `riak_dt_orswot',
@@ -44,24 +44,123 @@
 %% are currently in the map, removing a field also removes its
 %% tombstone.
 %%
-%%  <<-- New docs @TODO update the docs to reflect the -----%% >> old
-%% docs current impl better (and describe the semantic fully!)
+%% To use the Map create a `new()' Map. When you call `update/3' or
+%% `update/4' you pass a list of operations and an optional causal
+%% context. @See `update/3' or `update/4' for more details. The list
+%% of operations is applied atomically in full, and new state
+%% returned, or not at all, and an error is returned.
 %%
-%% merging fields of the same name, but different `dot' are _not_
-%% merged. On updating a field, all the elements in the set for that
-%% field are merged, updated, and replaced with a new `dot' for the
-%% update event. This means that in a divergent Map with many
-%% concurrent updates, a merged map will have duplicate entries for
-%% any updated fields until an update event occurs for that field,
-%% unifying the divergent field into a single field.
+%% <h2>Semantics</h2>
 %%
-%% Attempting to remove a `field' that is not present in the map will
-%% lead to a precondition error. An operation on a field value that
-%% generates a precondition error will cause the Map operation to
-%% return a precondition error. See `update/3' for details on
-%% operations the Map accepts.
+%% The semantics of this Map are Observed-Remove-Reset-Remove. What
+%% this means is practice is, if a field is removed, and concurrently
+%% that same field is updated, the field is _in_ the Map (only
+%% observed updates are removed) but those removes propagate, so only
+%% the concurrent update survives. A concrete example helps: If a Map
+%% contains a field that is a set, and the set has 5 elements in it,
+%% and concurrently the replica at A removes the field that contains
+%% the set, while the replica at B adds an item to the set, on merge
+%% there is a field for the set, but it contains only the one item B
+%% added. The removal of the field is semantically equivalent to
+%% removing all elements in the set, and removing the field. The same
+%% goes for an embedded Map. If concurrently a Map field is removed,
+%% while a new sub-field is updated, only the updated field(s) survive
+%% the reset-remove.
+%%
+%% There is an anomaly for embedded counters that does not fully
+%% support reset remove. Embedded counters (@see riak_dt_emcntr) are
+%% different to a normal `pn-counter'. Embedded counters map `dot's to
+%% {P, N} pairs. When a counter is incremented a new dot is created,
+%% that replaces the old dot with the new value. `pn-counter' usually
+%% merges by taking the `max' of any `P' or `N' entry for an
+%% actor. This does not work in an embedded context. When a counter
+%% field is removed, and then _re_-added, the new `P' and `N' entries
+%% may be lower than the old, and merging loses the remove
+%% information. However, if a `dot' is stored with the value, and the
+%% max of the `dot' is used in merge, new updates win over removed
+%% updates. So far so good. Here is the problem. If Replica B removes
+%% a counter field, and does not re-add it, and replica A concurrently
+%% updates it's entry for that field, then the reset-remove does not
+%% occur. All new dots are not `observed' by Replica B, so not
+%% removed. The new `dots' contain the updates from the previous
+%% `dots', and the old `dot' is discarded. To achieve reset-remove all
+%% increments would need a dot, and need to be retained, which would
+%% be very costly in terms of space. One way to accept this anomaly is
+%% to think of a Map like a file system: removing a directory and
+%% concurrently adding a file means that the directory is present and
+%% only the file remains in it. Updating a counter and concurrently
+%% removing it, means the counter remains, with the updated value,
+%% much like appending to a file in the file system analogy: you don't
+%% expect only the diff to survive, but the whole updated file.
+%%
+%% <h2>Merging/Size</h2>
+%%
+%% When any pair of Maps are merged, the embedded CRDTs are _not_
+%% merged, instead each concurrent `dot'->`field()' entry is
+%% kept. This leads to a greater size for Maps that are highly
+%% divergent. Updating a field in the map, however, leads to all
+%% entries for that field being merged to a single CRDT that is stored
+%% against the new `dot'. As mentioned above, there is also a
+%% `tombstone' entry per present field. This is bottom CRDT for the
+%% field type with a clock that contains all seen and removed
+%% `dots'. There tombstones are merged at merge time, so only one is
+%% present per field. Clearly the repetition of actor information (the
+%% clock, each embedded CRDT, the field `dots', the tombstones) is a
+%% serious issue with regard to size/bloat of this data type. We use
+%% erlang's `to_binary/2' function, which compresses the data, to get
+%% around this at present.
+%%
+%% <h2>Context and Deferred operations</h2>
+%%
+%% For CRDTs that use version vectors and dots (this `Map' and all
+%% CRDTs that may be embedded in it), the size of the CRDT is
+%% influenced by the number of actors updating it. In some systems
+%% (like Riak!) we attempt to minimize the number of actors by only
+%% having the database update CRDTs. This leads to a kind of "action
+%% at a distance", where a client sends operations to the database,
+%% and an actor in the database system performs the operations. The
+%% purpose is to ship minimal state between database and client, and
+%% to limit the number of actors in the system. There is a problem
+%% with action at a distance and the OR semantic. The client _must_ be
+%% able to tell the database what has been observed when it sends a
+%% remove operation. There is a further problem. A replica that
+%% handles an operation may not have all the state the client
+%% observed. We solve these two problems by asking the client to
+%% provide a causal context for operations (@see `update/4'.) Context
+%% operations solve the OR problem, but they don't solve the problem
+%% of lagging replicas handling operations.
+%%
+%% <h3>Lagging replicas, deferred operations</h3>
+%%
+%% In a system like Riak, a replica is not up-to-date (including,
+%% never seen any state for a CRDT) maybe asked to perform an
+%% operation. If no context is given, and the operation is a field
+%% remove, or a "remove" like operation on an embedded CRDT, the
+%% operation may fail with a precondition error (for example, remove a
+%% field that is not present) or succeed and remove for state than
+%% intended (a field remove with no context may remove updates unseen
+%% by the client.) When a context is provided, and the Field to be
+%% removed is absent, the Map state stores the context, and Field
+%% name, in a list of deferred operations. When, eventually, through
+%% propagation and merging, the Map's clock descends the context for
+%% the operation, the operation is executed. It is important to note
+%% that _only_ actorless (field remove) operations can occur this way.
+%%
+%% <h4>Embedded CRDTs Deferred Operations</h4>
+%%
+%% There is a bug with embedded types and deferred operations. Imagine
+%% a client has seen a Map with a Set field, and the set contains {a,
+%% b, c}. The client sends an operation to remove {a} from the set. A
+%% replica that is new takes the operation. It well create a new Map,
+%% a Field for the Set, and store the `remove` operation as part of
+%% the Set's state. A client reads this new state, and sends a field
+%% remove operation, that is executed by same replica. Now the
+%% deferred operation is lost, since the field is removed. We're
+%% working on ways to fix this. One idea is to not remove a field with
+%% "undelivered" operations, but instead to "hide" it.
 %%
 %% @see riak_dt_orswot for more on the OR semantic
+%% @see riak_dt_emcntr for the embedded counter.
 %% @end
 
 -module(riak_dt_map).
@@ -296,7 +395,6 @@ ctx_rem_field({_, Type}, {ok, {CRDTs, TS0}}, Ctx, MapClock) ->
     %% is at {a, 3} and the current field is at {a, 2} then we need to
     %% remove only events upto {a, 2}. The glb clock enables that.
     %%
-    %% @TODO document how this doesn't really work for counters.
     TombstoneClock = riak_dt_vclock:glb(Ctx, MapClock), %% GLB is events seen by both clocks only
     TS = Type:parent_clock(TombstoneClock, Type:new()),
     Remaining = orddict:filter(fun(Dot, _CRDT) ->

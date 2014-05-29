@@ -128,9 +128,11 @@ op(increment, {P, N}) ->
     {P+1, N};
 op(decrement, {P, N}) ->
     {P, N+1};
-op({increment, By}, {P, N}) ->
+op({_Op, 0}, {P, N}) ->
+    {P, N};
+op({increment, By}, {P, N}) when is_integer(By), By > 0 ->
     {P+By, N};
-op({decrement, By}, {P, N}) ->
+op({decrement, By}, {P, N}) when is_integer(By), By > 0 ->
     {P, N+By}.
 
 %% @doc takes two `emcntr()'s and merges them into a single
@@ -261,8 +263,7 @@ gen_op() ->
     oneof([increment,
            {increment, nat()},
            decrement,
-           {decrement, nat()},
-           {increment, ?LET(X, nat(), -X)}
+           {decrement, nat()}
           ]).
 
 update_expected(_ID, increment, Prev) ->
