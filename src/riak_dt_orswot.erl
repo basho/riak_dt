@@ -377,19 +377,11 @@ clocks_equal([{Elem, Clock1} | Rest], Entries2) ->
 %% Private
 -spec add_elem(actor() | dot(), orswot(), member()) -> orswot().
 add_elem(Dot, {Clock, Entries, Deferred}, Elem) when is_tuple(Dot) ->
-    {riak_dt_vclock:merge([Clock, [Dot]]), update_entry(Elem, Entries, [Dot]), Deferred};
+    {riak_dt_vclock:merge([Clock, [Dot]]), orddict:store(Elem, [Dot], Entries), Deferred};
 add_elem(Actor, {Clock, Entries, Deferred}, Elem) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
     Dot = [{Actor, riak_dt_vclock:get_counter(Actor, NewClock)}],
-    {NewClock, update_entry(Elem, Entries, Dot), Deferred}.
-
--spec update_entry(member(), orddict:orddict(), riak_dt_vclock:vclock()) ->
-                          orddict:orddict().
-update_entry(Elem, Entries, Dot) ->
-    orddict:update(Elem, fun(Clock) ->
-                                 riak_dt_vclock:merge([Clock, Dot]) end,
-                   Dot,
-                   Entries).
+    {NewClock, orddict:store(Elem, Dot, Entries), Deferred}.
 
 -spec remove_elem({ok, riak_dt_vclock:vclock()} | error,
                   member(), {riak_dt_vclock:vclock(), orddict:orddict(), deferred()}) ->
