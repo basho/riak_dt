@@ -141,7 +141,7 @@ value({contains, Elem}, ORset) ->
 -spec update(orswot_op(), actor() | dot(), orswot()) -> {ok, orswot()} |
                                                 precondition_error().
 update({update, Ops}, Actor, ORSet) ->
-    apply_ops(lists:sort(Ops), Actor, ORSet);
+    apply_ops(Ops, Actor, ORSet);
 update({add, Elem}, Actor, ORSet) ->
     {ok, add_elem(Actor, ORSet, Elem)};
 update({remove, Elem}, _Actor, ORSet) ->
@@ -545,6 +545,18 @@ dead_node_update_test() ->
     {ok, A2} = update({remove, 'A'}, a, A, BCtx),
     ?assertEqual([], value(A2)).
 
+%% Batching should not re-order ops
+batch_order_test() ->
+    {ok, Set} = update({add_all, [<<"bar">>, <<"baz">>]}, a, new()),
+    Context  = precondition_context(Set),
+    {ok, Set2} = update({update, [{remove, <<"baz">>}, {add, <<"baz">>}]}, a, Set, Context),
+    ?assertEqual([<<"bar">>, <<"baz">>], value(Set2)),
+    {ok, Set3} = update({update, [{remove, <<"baz">>}, {add, <<"baz">>}]}, a, Set),
+    ?assertEqual([<<"bar">>, <<"baz">>], value(Set3)),
+    {ok, Set4} = update({remove, <<"baz">>}, a, Set),
+    {ok, Set5} = update({add, <<"baz">>}, a, Set4),
+    ?assertEqual([<<"bar">>, <<"baz">>], value(Set5)).
+
 -ifdef(EQC).
 
 bin_roundtrip_test_() ->
@@ -608,7 +620,7 @@ do_updates(ID, [Update | Rest], OldState, NewState) ->
     end.
 
 update_expected(ID, {update, Updates}, State) ->
-    do_updates(ID, lists:sort(Updates), State, State);
+    do_updates(ID, Updates, State, State);
 update_expected(ID, {add, Elem}, {Cnt0, Dict}) ->
     Cnt = Cnt0+1,
     ToAdd = {Elem, Cnt},

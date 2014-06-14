@@ -106,7 +106,7 @@ update({remove,Elem}, _Actor, ORDict) ->
 update({remove_all,Elems}, _Actor, ORDict0) ->
     remove_elems(Elems, ORDict0);
 update({update, Ops}, Actor, ORDict) ->
-    apply_ops(lists:sort(Ops), Actor, ORDict).
+    apply_ops(Ops, Actor, ORDict).
 
 -spec update(orset_op(), actor(), orset(), riak_dt:context()) ->
                     {ok, orset()} | {error, {precondition ,{not_present, member()}}}.
@@ -313,7 +313,7 @@ member(Arg, L) ->
     lists:member(Arg, L).
 
 update_expected(ID, {update, Updates}, State) ->
-    do_updates(ID, lists:sort(Updates), State, State);
+    do_updates(ID, Updates, State, State);
 update_expected(ID, {add, Elem}, {Cnt0, Dict}) ->
     Cnt = Cnt0+1,
     ToAdd = {Elem, Cnt},
