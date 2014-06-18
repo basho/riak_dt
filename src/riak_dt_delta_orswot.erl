@@ -134,7 +134,7 @@ merge_disjoint_keys(Keys, Entries, SetClock, SetSeen, Accumulator) ->
               Keys).
 
 %% @doc merges the minimal clocks for the common entries in both sets.
-merge_common_keys(CommonKeys, {LHSClock, LHSEntries, _}, {RHSClock, RHSEntries, _}) ->
+merge_common_keys(CommonKeys, {LHSClock, LHSEntries, LHSeen}, {RHSClock, RHSEntries, RHSeen}) ->
 
     %% If both sides have the same values, some dots may still need to
     %% be shed.  If LHS has dots for 'X' that RHS does _not_ have, and
@@ -150,8 +150,8 @@ merge_common_keys(CommonKeys, {LHSClock, LHSEntries, _}, {RHSClock, RHSEntries, 
                       CommonDots = sets:intersection(sets:from_list(V1), sets:from_list(V2)),
                       LHSUnique = sets:to_list(sets:subtract(sets:from_list(V1), CommonDots)),
                       RHSUnique = sets:to_list(sets:subtract(sets:from_list(V2), CommonDots)),
-                      LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, RHSClock),
-                      RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, LHSClock),
+                      LHSKeep = lists:subtract(riak_dt_vclock:subtract_dots(LHSUnique, RHSClock), RHSeen),
+                      RHSKeep = lists:subtract(riak_dt_vclock:subtract_dots(RHSUnique, LHSClock), LHSeen),
                       V = riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]),
                       %% Perfectly possible that an item in both sets should be dropped
                       case V of
