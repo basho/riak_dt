@@ -125,15 +125,19 @@ op(Op, error) ->
 op(Op, {ok, {_Evt, P, N}}) ->
     op(Op, {P, N});
 op(increment, {P, N}) ->
-    {P+1, N};
+    op({increment, 1}, {P, N});
 op(decrement, {P, N}) ->
-    {P, N+1};
+    op({decrement, 1}, {P, N});
 op({_Op, 0}, {P, N}) ->
     {P, N};
 op({increment, By}, {P, N}) when is_integer(By), By > 0 ->
     {P+By, N};
+op({increment, By}, {P, N}) when is_integer(By), By < 0 ->
+    op({decrement, -By}, {P, N});
 op({decrement, By}, {P, N}) when is_integer(By), By > 0 ->
-    {P, N+By}.
+    {P, N+By};
+op({decrement, By}, {P, N}) when is_integer(By), By < 0 ->
+    op({increment, -By}, {P, N}).
 
 %% @doc takes two `emcntr()'s and merges them into a single
 %% `emcntr()'. This is the Least Upper Bound of the Semi-Lattice/CRDT
