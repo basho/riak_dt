@@ -70,8 +70,9 @@
                  }.
 
 
--type emcntr_op() :: riak_dt_gcounter:gcounter_op() | decrement_op().
--type decrement_op() :: decrement | {decrement, pos_integer()}.
+-type emcntr_op() :: increment_op() | decrement_op().
+-type increment_op() :: increment | {increment, integer()}.
+-type decrement_op() :: decrement | {decrement, integer()}.
 
 -spec new() -> emcntr().
 new() ->
@@ -125,15 +126,19 @@ op(Op, error) ->
 op(Op, {ok, {_Evt, P, N}}) ->
     op(Op, {P, N});
 op(increment, {P, N}) ->
-    {P+1, N};
+    op({increment, 1}, {P, N});
 op(decrement, {P, N}) ->
-    {P, N+1};
+    op({decrement, 1}, {P, N});
 op({_Op, 0}, {P, N}) ->
     {P, N};
 op({increment, By}, {P, N}) when is_integer(By), By > 0 ->
     {P+By, N};
+op({increment, By}, {P, N}) when is_integer(By), By < 0 ->
+    op({decrement, -By}, {P, N});
 op({decrement, By}, {P, N}) when is_integer(By), By > 0 ->
-    {P, N+By}.
+    {P, N+By};
+op({decrement, By}, {P, N}) when is_integer(By), By < 0 ->
+    op({increment, -By}, {P, N}).
 
 %% @doc takes two `emcntr()'s and merges them into a single
 %% `emcntr()'. This is the Least Upper Bound of the Semi-Lattice/CRDT
@@ -334,6 +339,12 @@ update_decrement_by_test() ->
     {ok, PNCnt1} = update({increment, 7}, {a, 1}, PNCnt0),
     {ok, PNCnt2} = update({decrement, 5}, {a, 2}, PNCnt1),
     ?assertEqual(2, value(PNCnt2)).
+
+update_neg_increment_by_test() ->
+    PNCnt0 = new(),
+    {ok, PNCnt1} = update({increment, -8}, {a, 1}, PNCnt0),
+    {ok, PNCnt2} = update({decrement, -7}, {a, 2}, PNCnt1),
+    ?assertEqual(-1, value(PNCnt2)).
 
 merge_test() ->
     {PNCnt1, Evt} = make_counter([{<<"1">>, increment},
