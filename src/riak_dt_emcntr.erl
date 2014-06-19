@@ -70,8 +70,9 @@
                  }.
 
 
--type emcntr_op() :: riak_dt_gcounter:gcounter_op() | decrement_op().
--type decrement_op() :: decrement | {decrement, pos_integer()}.
+-type emcntr_op() :: increment_op() | decrement_op().
+-type increment_op() :: increment | {increment, integer()}.
+-type decrement_op() :: decrement | {decrement, integer()}.
 
 -spec new() -> emcntr().
 new() ->
