@@ -339,6 +339,12 @@ update_decrement_by_test() ->
     {ok, PNCnt2} = update({decrement, 5}, {a, 2}, PNCnt1),
     ?assertEqual(2, value(PNCnt2)).
 
+update_neg_increment_by_test() ->
+    PNCnt0 = new(),
+    {ok, PNCnt1} = update({increment, -8}, {a, 1}, PNCnt0),
+    {ok, PNCnt2} = update({decrement, -7}, {a, 2}, PNCnt1),
+    ?assertEqual(-1, value(PNCnt2)).
+
 merge_test() ->
     {PNCnt1, Evt} = make_counter([{<<"1">>, increment},
                            {<<"2">>, {increment, 2}},
