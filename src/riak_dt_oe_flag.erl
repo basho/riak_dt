@@ -25,8 +25,11 @@
 
 -behaviour(riak_dt).
 
--export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1, stats/1, stat/2]).
--export([update/4, parent_clock/2]).
+-export([new/0, value/1, value/2, update/3, update/4]).
+-export([merge/2, equal/2, from_binary/1]).
+-export([to_binary/1, stats/1, stat/2]).
+-export([precondition_context/1]).
+-export([parent_clock/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -40,96 +43,153 @@
 
 -export_type([oe_flag/0, oe_flag_op/0]).
 
--opaque oe_flag() :: {riak_dt_vclock:vclock(), boolean()}.
+-opaque oe_flag() :: {riak_dt_vclock:vclock(), [riak_dt:dot()], deferred()}.
 -type oe_flag_op() :: enable | disable.
+-type deferred() :: ordsets:ordset(riak_dt:context()).
 
 -spec new() -> oe_flag().
 new() ->
-    {riak_dt_vclock:fresh(), true}.
+    {riak_dt_vclock:fresh(), [], []}.
+
+%% @doc sets the clock in the flag to that `Clock'. Used by a
+%% containing Map for sub-CRDTs
+-spec parent_clock(riak_dt_vclock:vclock(), oe_flag()) -> oe_flag().
+parent_clock(Clock, {_SetClock, Flag, Deferred}) ->
+    {Clock, Flag, Deferred}.
 
 -spec value(oe_flag()) -> boolean().
-value({_,F}) -> F.
+value({_, [], _}) -> true;
+value({_, _, _}) -> false.
 
 -spec value(term(), oe_flag()) -> boolean().
 value(_, Flag) ->
     value(Flag).
 
 -spec update(oe_flag_op(), riak_dt:actor(), oe_flag()) -> {ok, oe_flag()}.
-update(disable, Actor, {Clock,_}) ->
+update(disable, Dot, {Clock, Dots, Deferred}) when is_tuple(Dot) ->
+    NewClock = riak_dt_vclock:merge([[Dot], Clock]),
+    {ok, {NewClock, riak_dt_vclock:merge([[Dot], Dots]), Deferred}};
+update(disable, Actor, {Clock, Dots, Deferred}) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
-    {ok, {NewClock, false}};
-update(enable, _Actor, {Clock,_}) ->
-    {ok, {Clock, true}}.
+    Dot = [{Actor, riak_dt_vclock:get_counter(Actor, NewClock)}],
+    {ok, {NewClock, riak_dt_vclock:merge([Dot, Dots]), Deferred}};
+update(enable, _Actor, Flag) ->
+    enable(Flag, undefined).
 
-%% @fixme this needs ot use the context
--spec update(oe_flag_op(), riak_dt:actor(), oe_flag(), _Ctx) ->
+
+-spec enable(oe_flag(), riak_dt:context()) ->
+    {ok, oe_flag()}.
+enable({Clock, _, Deferred}, undefined) ->
+    {ok, {Clock, [], Deferred}};
+enable({Clock, Dots, Deferred}, Ctx) ->
+    NewDots = riak_dt_vclock:subtract_dots(Dots, Ctx),
+    NewDeferred = defer_enable(Clock, Ctx, Deferred),
+    {ok, {Clock, NewDots, NewDeferred}}.
+
+%% @doc `update/4' is similar to `update/3' except that it takes a
+%% `context' (obtained from calling `precondition_context/1'). This
+%% context ensure that an `enable' operation does not `enable' a flag
+%% that is has not been `seen` enabled by the caller. For example, the
+%% flag has been disabled by `a', `b', and `c'. The user has a copy of
+%% the flag obtained by reading `a'. Subsequently all replicas merge,
+%% and the user sends an `enable' operation. The have only seen the
+%% disable of `a', yet they enable the concurrecnt `b' and `c'
+%% operations, unless they send a context obtained from `a'.
+-spec update(oe_flag_op(), riak_dt:actor() | riak_dt:dot(),
+             oe_flag(), riak_dt:context()) ->
                     {ok, oe_flag()}.
-update(Op, Actor, Flag, _Ctx) ->
-    update(Op, Actor, Flag).
+update(Op, Actor, Flag, undefined) ->
+    update(Op, Actor, Flag);
+update(disable, Actor, Flag, _Ctx) ->
+    update(disable, Actor, Flag);
+update(enable, _Actor, Flag, Ctx) ->
+    enable(Flag, Ctx).
 
--spec parent_clock(riak_dt_vclock:vclock(), oe_flag()) -> oe_flag().
-parent_clock(_Clock, Flag) ->
-    Flag.
-
--spec merge(oe_flag(), oe_flag()) -> oe_flag().
-merge({C1, F}, {C2,F}) ->
-    %% When they are the same result (true or false), just merge the
-    %% vclock.
-    {riak_dt_vclock:merge([C1, C2]), F};
-merge({C1, _}=ODF1, {C2, _}=ODF2) ->
-    %% When the flag disagrees:
-    case {riak_dt_vclock:equal(C1, C2),
-          riak_dt_vclock:descends(C1, C2),
-          riak_dt_vclock:descends(C2, C1)} of
-    %% 1) If the clocks are equal, the result is 'true' (observed
-    %% enable).
-        {true, _, _} ->
-            {riak_dt_vclock:merge([C1, C2]), true};
-    %% 2) If they are sibling/divergent clocks, the result is 'false'.
-        {_, false, false} ->
-            {riak_dt_vclock:merge([C1, C2]), false};
-    %% 3) If one clock dominates the other, its value should be
-    %% chosen.
-        {_, true, false} ->
-            ODF1;
-        {_, false, true} ->
-            ODF2
+%% @private Determine if an `enable' operation needs to be deferred,
+%% or if it is complete.
+-spec defer_enable(riak_dt_vclock:vclock(), riak_dt_vclock:vclock(), deferred()) ->
+                           deferred().
+defer_enable(Clock, Ctx, Deferred) ->
+    case riak_dt_vclock:descends(Clock, Ctx) of
+        true ->
+            Deferred;
+        false ->
+            ordsets:add_element(Ctx, Deferred)
     end.
 
+-spec merge(oe_flag(), oe_flag()) -> oe_flag().
+merge({Clock, Entries, Deferred}, {Clock, Entries, Deferred}) ->
+    %% When they are the same result why merge?
+    {Clock, Entries, Deferred};
+merge({LHSClock, LHSDots, LHSDeferred}, {RHSClock, RHSDots, RHSDeferred}) ->
+    NewClock = riak_dt_vclock:merge([LHSClock, RHSClock]),
+    %% drop all the LHS dots that are dominated by the rhs clock
+    %% drop all the RHS dots that dominated by the LHS clock
+    %% keep all the dots that are in both
+    %% save value as value of flag
+    CommonDots = sets:intersection(sets:from_list(LHSDots), sets:from_list(RHSDots)),
+    LHSUnique = sets:to_list(sets:subtract(sets:from_list(LHSDots), CommonDots)),
+    RHSUnique = sets:to_list(sets:subtract(sets:from_list(RHSDots), CommonDots)),
+    LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, RHSClock),
+    RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, LHSClock),
+    Flag = riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]),
+    Deferred = ordsets:union(LHSDeferred, RHSDeferred),
+
+    apply_deferred(NewClock, Flag, Deferred).
+
+apply_deferred(Clock, Flag, Deferred) ->
+    lists:foldl(fun(Ctx, OEFlag) ->
+                        {ok, OEFlag2} = enable(OEFlag, Ctx),
+                        OEFlag2
+                end,
+                %% start with an empty deferred list, those
+                %% non-descended ctx operations will be re-added to
+                %% the deferred if they still cannot be executed.
+                {Clock, Flag, []},
+                Deferred).
+
 -spec equal(oe_flag(), oe_flag()) -> boolean().
-equal({C1,F},{C2,F}) ->
-    riak_dt_vclock:equal(C1,C2);
-equal(_,_) -> false.
+equal({C1,D1, Def1},{C2,D2, Def2}) ->
+    riak_dt_vclock:equal(C1,C2) andalso
+        riak_dt_vclock:equal(D1, D2) andalso
+        Def1 == Def2.
+        
+-spec stats(oe_flag()) -> [{atom(), integer()}].
+stats(OEF) ->
+    [{actor_count, stat(actor_count, OEF)},
+     {dot_length, stat(dot_length, OEF)},
+     {deferred_length, stat(deferred_length, OEF)}].
+
+-spec stat(atom(), oe_flag()) -> number() | undefined.
+stat(actor_count, {C, _, _}) ->
+    length(C);
+stat(dot_length, {_, D, _}) ->
+    length(D);
+stat(deferred_length, {_Clock, _Dots, Deferred}) ->
+    length(Deferred);
+stat(_, _) -> undefined.
 
 -include("riak_dt_tags.hrl").
 -define(TAG, ?DT_OE_FLAG_TAG).
 -define(VSN1, 1).
-
+    
 -spec from_binary(binary()) -> oe_flag().
-from_binary(<<?TAG:8, ?VSN1:8, BFlag:8, VClock/binary>>) ->
-    Flag = case BFlag of
-               1 -> true;
-               0 -> false
-           end,
-    {riak_dt_vclock:from_binary(VClock), Flag}.
+from_binary(<<?TAG:8, ?VSN1:8, Bin/binary>>) ->
+    binary_to_term(Bin).
 
 -spec to_binary(oe_flag()) -> binary().
-to_binary({Clock, Flag}) ->
-    BFlag = case Flag of
-                true -> 1;
-                false -> 0
-            end,
-    VCBin = riak_dt_vclock:to_binary(Clock),
-    <<?TAG:8, ?VSN1:8, BFlag:8, VCBin/binary>>.
+to_binary(Flag) ->
+    Bin = term_to_binary(Flag),
+    <<?TAG:8, ?VSN1:8, Bin/binary>>.
 
--spec stats(oe_flag()) -> [{atom(), integer()}].
-stats(OEF) ->
-    [{actor_count, stat(actor_count, OEF)}].
-
--spec stat(atom(), oe_flag()) -> number() | undefined.
-stat(actor_count, {C, _}) ->
-    length(C);
-stat(_, _) -> undefined.
+%% @doc the `precondition_context' is an opaque piece of state that
+%% can be used for context operations to ensure only observed state is
+%% affected.
+%%
+%% @see update/4
+-spec precondition_context(oe_flag()) -> riak_dt:context().
+precondition_context({Clock, _Flag, _Deferred}) ->
+    Clock.
 
 
 %% ===================================================================
@@ -139,7 +199,7 @@ stat(_, _) -> undefined.
 
 -ifdef(EQC).
 eqc_value_test_() ->
-    crdt_statem_eqc:run(?MODULE, 1000).
+    crdt_statem_eqc:run(?MODULE, ?NUMTESTS).
 
 bin_roundtrip_test_() ->
     crdt_statem_eqc:run_binary_rt(?MODULE, ?NUMTESTS).
@@ -216,13 +276,21 @@ merge_concurrent_test() ->
     ?assertEqual(true, value(merge(F1,F2))),
     ?assertEqual(false, value(merge(F2,F3))).
 
-stat_test() ->
+binary_roundtrip_test() ->
     F0 = new(),
+    {ok, F1} = update(disable, 1, F0),
+    {ok, F2} = update(enable, 1, F1),
+    {ok, F3} = update(disable, 2, F2),
+    ?assert(equal(from_binary(to_binary(F3)), F3)).
+
+stat_test() ->
+    {ok, F0} = update(disable, 1, new()),
     {ok, F1} = update(disable, 1, F0),
     {ok, F2} = update(disable, 2, F1),
     {ok, F3} = update(disable, 3, F2),
+    ?assertEqual([{actor_count, 3}, {dot_length, 3}, {deferred_length, 0}], stats(F3)),
     {ok, F4} = update(enable, 4, F3), %% Observed-enable doesn't add an actor
-    ?assertEqual([{actor_count, 3}], stats(F4)),
+    ?assertEqual([{actor_count, 3}, {dot_length, 0}, {deferred_length, 0}], stats(F4)),
     ?assertEqual(3, stat(actor_count, F4)),
-    ?assertEqual(undefined, stat(element_count, F4)).
+    ?assertEqual(undefined, stat(max_dot_length, F4)).
 -endif.
