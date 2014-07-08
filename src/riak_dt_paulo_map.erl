@@ -32,6 +32,8 @@
 
 -compile(export_all).
 
+-define(FRESH_CLOCK, riak_dt_vclock:fresh()).
+
 new() ->
     {riak_dt_vclock:new(), orddict:new()}.
 
@@ -49,18 +51,29 @@ get({_Name, Type}=Field, Fields, Clock) ->
             Type:parent_clock(Clock, Type:new())
     end.
 
+update
+
+is_bottom(Type, Merged) ->
+    Type:equal(Type:new(), Merged).
+
 merge({Clock1, Fields1}, {Clock2, Fields2}) ->
     Clock = riak_dt_vclock:merge([Clock1, Clock2]),
-    {Merged0, RHSUnique} = orddict:fold(fun({_Name, Type}=Field, CRDT, Acc) ->
-                                                LHS = get(Field, Fields1),
-                                                RHS = get(Field, Fields2),
-                                                Merged = Type:merge(LHS, RHS),
-                                                {orddict:store(Field, Merged),
-                                                 orddict:erase(Field, Fields2)}
-                                        end,
-                                        orddict:new(),
-                                        Fields1),
-    Merged = orddict:fold(fun({_Name, Type}=Field, 
+    Fields = lists:umerge(orddict:fetch_keys(Fields1), orddict:fetch_keys(Fields2)),
+    Merged = lists:foldl(fun({_Name, Type}=Field, Acc) ->
+                                 LHS = get(Field, Fields1, Clock1),
+                                 RHS = get(Field, Fields2, Clock2),
+                                 %% return the clock to empty
+                                 Merged = Type:parent_clock(?FRESH_CLOCK, Type:merge(LHS, RHS)),
+                                 case is_bottom(Type, Merged) of
+                                     false ->
+                                         orddict:store(Field, Merged, Acc);
+                                     true ->
+                                         Acc
+                                 end
+                         end,
+                         orddict:new(),
+                         Fields),
+    {Clock, Merged}.
 
 
 
