@@ -112,12 +112,12 @@ equal(Val1, Val2) ->
 %% @doc Encode an effecient binary representation of an `maxreg()'
 -spec to_binary(maxreg()) -> binary().
 to_binary(MaxReg) ->
-    <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(MaxReg))/binary>>.
+    <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(MaxReg))/binary>>.
 
 %% @doc Decode binary `maxreg()'
 -spec from_binary(binary()) -> maxreg().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
-    riak_dt:from_binary(Bin).
+    binary_to_term(Bin).
 
 
 %% @doc No Stats because it's just an integer

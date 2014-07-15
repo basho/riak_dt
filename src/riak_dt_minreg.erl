@@ -111,12 +111,12 @@ equal(Val1, Val2) ->
 %% @doc Encode an effecient binary representation of an `minreg()'
 -spec to_binary(minreg()) -> binary().
 to_binary(MinReg) ->
-    <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(MinReg))/binary>>.
+    <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(MinReg))/binary>>.
 
 %% @doc Decode binary `minreg()'
 -spec from_binary(binary()) -> minreg().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
-    riak_dt:from_binary(Bin).
+    binary_to_term(Bin).
 
 %% @doc No Stats as it's just an integer
 -spec stats(minreg()) -> [{atom(), number()}].

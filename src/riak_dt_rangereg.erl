@@ -206,12 +206,12 @@ equal(Val1, Val2) ->
 %% @doc Encode an effecient binary representation of an `rangereg()'
 -spec to_binary(rangereg()) -> binary().
 to_binary(RR) ->
-    <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(RR))/binary>>.
+    <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(RR))/binary>>.
 
 %% @doc Decode binary `rangereg()'
 -spec from_binary(binary()) -> rangereg().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
-    riak_dt:from_binary(Bin).
+    binary_to_term(Bin).
 
 
 %% @doc No Stats as everything in the datatype is public
