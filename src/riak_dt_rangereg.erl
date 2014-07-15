@@ -40,6 +40,9 @@
 %%   If the timestamps are the same, the larger of the two integers is
 %%   kept.
 %%
+%% If no timestamp is submitted in the operation, the current time since
+%% the unix epoch, in microseconds, will be used.
+%%
 %% @end
 
 -module(riak_dt_rangereg).
@@ -71,7 +74,7 @@
 -opaque rangereg() :: #rangereg{}.
 -type rangereg_pair() :: undefined | {integer(), integer()}.
 -type rangereg_single() :: undefined | integer().
--type rangereg_op() :: {assign, integer(), integer()}.
+-type rangereg_op() :: {assign, integer(), integer()} | {assign, integer()}.
 
 -type nonintegral_error() :: {error, {type, {non_integral, term()}}}.
 
@@ -127,7 +130,16 @@ pair_ts({_Val, Ts}) ->
 update({assign, Value, Ts}, _Actor, OldVal) when is_integer(Value) ->
     {ok, merge(new_range_from_assign(Value, Ts), OldVal)};
 update({assign, Value, _Ts}, _Actor, _OldVal) ->
+    {error, {type, {nonintegral, Value}}};
+update({assign, Value}, _Actor, OldVal) when is_integer(Value) ->
+    MicroEpoch = make_micro_epoch(),
+    {ok, merge(new_range_from_assign(Value, MicroEpoch)), OldVal};
+update({assign, Value}, _Actor, OldVal) ->
     {error, {type, {nonintegral, Value}}}.
+
+make_micro_epoch() ->
+    {Mega, Sec, Micro} = os:timestamp(),
+    (Mega * 1000000 + Sec) * 1000000 + Micro.
 
 -spec update(rangereg_op(), riak_dt:actor(), rangereg(), riak_dt:context()) ->
                     {ok, rangereg()} | nonintegral_error().
