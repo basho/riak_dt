@@ -43,9 +43,11 @@
 %% @end
 
 -module(riak_dt_rangereg).
+-behaviour(riak_dt).
 
--export([new/0, value/1, value/2, update/3, merge/2,
-         equal/2, to_binary/1, from_binary/1]).
+-export([new/0, value/1, value/2, update/3, update/4, merge/2,
+         equal/2, to_binary/1, from_binary/1, parent_clock/2,
+         stats/1, stat/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -70,6 +72,8 @@
 -type rangereg_pair() :: undefined | {integer(), integer()}.
 -type rangereg_single() :: undefined | integer().
 -type rangereg_op() :: {assign, integer(), integer()}.
+
+-type nonintegral_error() :: {error, {type, {non_integral, term()}}}.
 
 %% @doc Create a new, empty `rangereg()'
 -spec new() -> rangereg().
@@ -118,13 +122,26 @@ pair_ts({_Val, Ts}) ->
   Ts.
 
 %% @doc Assign a `Value' to the `rangereg()'
--spec update(rangereg_op(), term(), rangereg()) ->
-                    {ok, rangereg()}.
+-spec update(rangereg_op(), riak_dt:update_actor(), rangereg()) ->
+                    {ok, rangereg()} | nonintegral_error().
 update({assign, Value, Ts}, _Actor, OldVal) when is_integer(Value) ->
-    {ok, merge(new_range_from_assign(Value, Ts), OldVal)}.
+    {ok, merge(new_range_from_assign(Value, Ts), OldVal)};
+update({assign, Value, _Ts}, _Actor, _OldVal) ->
+    {error, {type, {nonintegral, Value}}}.
+
+-spec update(rangereg_op(), riak_dt:update_actor(), rangereg(), riak_dt:context()) ->
+                    {ok, rangereg()} | nonintegral_error().
+update(Op, Actor, OldVal, _Ctx) ->
+    update(Op, Actor, OldVal).
 
 new_range_from_assign(Value, Ts) ->
   #rangereg{max=Value, min=Value, first={Value,Ts}, last={Value,Ts}}.
+
+
+-spec parent_clock(riak_dt_vclock:vclock(), rangereg()) ->
+                          rangereg().
+parent_clock(_Clock, RangeReg) ->
+    RangeReg.
 
 %% @doc Merge two `rangereg()'s to a single `rangereg()'. This is the Least Upper Bound
 %% function described in the literature.
@@ -186,8 +203,6 @@ equal(Val1, Val2) ->
 -define(TAG, ?DT_RANGEREG_TAG).
 -define(V1_VERS, 1).
 
-% TODO: compression?
-
 %% @doc Encode an effecient binary representation of an `rangereg()'
 -spec to_binary(rangereg()) -> binary().
 to_binary(RR) ->
@@ -197,6 +212,17 @@ to_binary(RR) ->
 -spec from_binary(binary()) -> rangereg().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
     riak_dt:from_binary(Bin).
+
+
+%% @doc No Stats as everything in the datatype is public
+-spec stats(rangereg()) -> [{atom(), number()}].
+stats(_RangeReg) ->
+    [].
+
+%% @doc No Stats as everything in the datatype is public
+-spec stat(atom(), rangereg()) -> number() | undefined.
+stat(_, _) -> undefined.
+
 
 %% ===================================================================
 %% EUnit tests
