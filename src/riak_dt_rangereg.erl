@@ -134,7 +134,7 @@ update({assign, Value, _Ts}, _Actor, _OldVal) ->
 update({assign, Value}, _Actor, OldVal) when is_integer(Value) ->
     MicroEpoch = make_micro_epoch(),
     {ok, merge(new_range_from_assign(Value, MicroEpoch), OldVal)};
-update({assign, Value}, _Actor, OldVal) ->
+update({assign, Value}, _Actor, _OldVal) ->
     {error, {type, {nonintegral, Value}}}.
 
 make_micro_epoch() ->
