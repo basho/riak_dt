@@ -122,14 +122,14 @@ pair_ts({_Val, Ts}) ->
   Ts.
 
 %% @doc Assign a `Value' to the `rangereg()'
--spec update(rangereg_op(), riak_dt:update_actor(), rangereg()) ->
+-spec update(rangereg_op(), riak_dt:actor(), rangereg()) ->
                     {ok, rangereg()} | nonintegral_error().
 update({assign, Value, Ts}, _Actor, OldVal) when is_integer(Value) ->
     {ok, merge(new_range_from_assign(Value, Ts), OldVal)};
 update({assign, Value, _Ts}, _Actor, _OldVal) ->
     {error, {type, {nonintegral, Value}}}.
 
--spec update(rangereg_op(), riak_dt:update_actor(), rangereg(), riak_dt:context()) ->
+-spec update(rangereg_op(), riak_dt:actor(), rangereg(), riak_dt:context()) ->
                     {ok, rangereg()} | nonintegral_error().
 update(Op, Actor, OldVal, _Ctx) ->
     update(Op, Actor, OldVal).
