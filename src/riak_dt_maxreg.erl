@@ -28,9 +28,11 @@
 %% @end
 
 -module(riak_dt_maxreg).
+-behaviour(riak_dt).
 
--export([new/0, value/1, value/2, update/3, merge/2,
-         equal/2, to_binary/1, from_binary/1]).
+-export([new/0, value/1, value/2, update/3, update/4, merge/2,
+         equal/2, to_binary/1, from_binary/1, parent_clock/2,
+         stats/1, stat/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -48,6 +50,8 @@
 
 -type maxreg_op() :: {assign, integer()}.
 
+-type nonintegral_error() :: {error, {type, {nonintegral, term()}}}.
+
 %% @doc Create a new, empty `maxreg()'
 -spec new() -> maxreg().
 new() ->
@@ -64,10 +68,22 @@ value(_, V) ->
     value(V).
 
 %% @doc Assign a `Value' to the `maxreg()'
--spec update(maxreg_op(), term(), maxreg()) ->
-                    {ok, maxreg()}.
+-spec update(maxreg_op(), riak_dt:actor(), maxreg()) ->
+                    {ok, maxreg()} | nonintegral_error().
 update({assign, Value}, _Actor, OldVal) when is_integer(Value) ->
-    {ok, merge(OldVal, Value)}.
+    {ok, merge(OldVal, Value)};
+update({assign, Value}, _Actor, _OldVal) ->
+    {error, {type, {nonintegral, Value}}}.
+
+-spec update(maxreg_op(), riak_dt:actor(), maxreg(), riak_dt:context()) ->
+                    {ok, maxreg()} | nonintegral_error().
+update(Op, Actor, MaxReg, _Ctx) ->
+    update(Op, Actor, MaxReg).
+
+-spec parent_clock(riak_dt_vclock:vclock(), maxreg()) ->
+                          maxreg().
+parent_clock(_Clock, MaxReg) ->
+    MaxReg.
 
 %% @doc Merge two `maxreg()'s to a single `maxreg()'. This is the Least Upper Bound
 %% function described in the literature.
@@ -102,6 +118,15 @@ to_binary(MaxReg) ->
 -spec from_binary(binary()) -> maxreg().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
     riak_dt:from_binary(Bin).
+
+
+%% @doc No Stats because it's just an integer
+-spec stats(maxreg()) -> [{atom(), number()}].
+stats(_MaxReg) -> [].
+
+%% @doc No Stats because it's just an integer
+-spec stat(atom(), maxreg()) -> number() | 'undefined'.
+stat(_, _) -> undefined.
 
 %% ===================================================================
 %% EUnit tests
