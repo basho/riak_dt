@@ -132,13 +132,13 @@ new_range_from_assign(Value, Ts) ->
 %% For LWW, if the timestamps are equal, we take the higher integer. For FWW, we take
 %% the lower integer.
 -spec merge(rangereg(), rangereg()) -> rangereg().
-merge(#rangereg{max=MaxA, min=MinA, first=FirstA, last=LastA}, 
+merge(#rangereg{max=MaxA, min=MinA, first=FirstA, last=LastA},
       #rangereg{max=MaxB, min=MinB, first=FirstB, last=LastB}) ->
     #rangereg{max=max_with_small_undefined(MaxA,MaxB),
                min=min_with_large_undefined(MinA,MinB),
                first=fww(FirstA,FirstB),
                last =lww(LastA,LastB)}.
-    
+
 %% @private
 max_with_small_undefined(undefined, X) ->
     X;
@@ -191,13 +191,12 @@ equal(Val1, Val2) ->
 %% @doc Encode an effecient binary representation of an `rangereg()'
 -spec to_binary(rangereg()) -> binary().
 to_binary(RR) ->
-    Bin = term_to_binary(RR),
-    <<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>.
+    <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(RR))/binary>>.
 
 %% @doc Decode binary `rangereg()'
 -spec from_binary(binary()) -> rangereg().
-from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Rest/binary>>) ->
-    binary_to_term(Rest).
+from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
+    riak_dt:from_binary(Bin).
 
 %% ===================================================================
 %% EUnit tests
@@ -226,9 +225,9 @@ update_expected(_ID, {assign, Val, Ts}, OldVal) ->
     ordsets:add_element({Val,Ts}, OldVal);
 update_expected(_ID, _Op, Prev) ->
     Prev.
-    
+
 maxVal(Set) ->
-  ordsets:fold(fun({Val,_Ts},Max) -> 
+  ordsets:fold(fun({Val,_Ts},Max) ->
       max_with_small_undefined(Val,Max)
     end, undefined, Set).
 
@@ -245,7 +244,7 @@ firstVal(Set) ->
 lastVal(Set) ->
   ordsets:fold(fun(Pair,Last) ->
       lww(Pair,Last)
-    end, undefined, Set). 
+    end, undefined, Set).
 
 eqc_state_value(Val) ->
     [

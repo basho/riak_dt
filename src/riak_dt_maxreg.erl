@@ -74,7 +74,7 @@ update({assign, Value}, _Actor, OldVal) when is_integer(Value) ->
 -spec merge(maxreg(), maxreg()) -> maxreg().
 merge(Val1, Val2) ->
     max_with_small_undefined(Val1, Val2).
-    
+
 %% @private
 max_with_small_undefined(undefined, X) ->
     X;
@@ -93,22 +93,15 @@ equal(Val1, Val2) ->
 -define(TAG, ?DT_MAXREG_TAG).
 -define(V1_VERS, 1).
 
-% TODO: is 32 bits of integer enough? Do we require more bits?
-% TODO: do we want to be using t2b/b2t here?
-
 %% @doc Encode an effecient binary representation of an `maxreg()'
 -spec to_binary(maxreg()) -> binary().
-to_binary(undefined) ->
-    <<?TAG:8/integer, ?V1_VERS:8/integer, 0:1/integer>>;
-to_binary(Val) ->
-    <<?TAG:8/integer, ?V1_VERS:8/integer, 1:1/integer, Val:32/integer>>.
+to_binary(MaxReg) ->
+    <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(MaxReg))/binary>>.
 
 %% @doc Decode binary `maxreg()'
 -spec from_binary(binary()) -> maxreg().
-from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, 0:1/integer>>) ->
-    undefined;
-from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, 1:1/integer, Val:32/integer>>) ->
-    Val.
+from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
+    riak_dt:from_binary(Bin).
 
 %% ===================================================================
 %% EUnit tests
