@@ -28,9 +28,11 @@
 %% @end
 
 -module(riak_dt_minreg).
+-behaviour(riak_dt).
 
--export([new/0, value/1, value/2, update/3, merge/2,
-         equal/2, to_binary/1, from_binary/1]).
+-export([new/0, value/1, value/2, update/3, update/4, merge/2,
+         equal/2, to_binary/1, from_binary/1, parent_clock/2,
+         stats/1, stat/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -48,6 +50,8 @@
 
 -type minreg_op() :: {assign, integer()}.
 
+-type nonintegral_error() :: {error, {type, {nonintegral, term()}}}.
+
 %% @doc Create a new, empty `minreg()'
 -spec new() -> minreg().
 new() ->
@@ -64,10 +68,21 @@ value(_, V) ->
     value(V).
 
 %% @doc Assign a `Value' to the `minreg()'
--spec update(minreg_op(), term(), minreg()) ->
-                    {ok, minreg()}.
+-spec update(minreg_op(), riak_dt:actor(), minreg()) ->
+                    {ok, minreg()} | nonintegral_error().
 update({assign, Value}, _Actor, OldVal) when is_integer(Value) ->
-    {ok, merge(OldVal, Value)}.
+    {ok, merge(OldVal, Value)};
+update({assign, Value}, _Actor, _OldVal) ->
+    {error, {type, {nonintegral, Value}}}.
+
+-spec update(minreg_op(), riak_dt:actor(), minreg(), riak_dt:context()) ->
+                    {ok, minreg()} | nonintegral_error().
+update(Op, Actor, OldVal, _Ctx) ->
+    update(Op, Actor, OldVal).
+
+-spec parent_clock(riak_dt_vclock:vclock(), minreg()) -> minreg().
+parent_clock(_Clock, MinReg) ->
+    MinReg.
 
 %% @doc Merge two `minreg()'s to a single `minreg()'. This is the Least Upper Bound
 %% function described in the literature.
@@ -102,6 +117,14 @@ to_binary(MinReg) ->
 -spec from_binary(binary()) -> minreg().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
     riak_dt:from_binary(Bin).
+
+%% @doc No Stats as it's just an integer
+-spec stats(minreg()) -> [{atom(), number()}].
+stats(_MinReg) -> [].
+
+%% @doc No Stats as it's just an integer
+-spec stat(atom(), minreg()) -> number() | undefined.
+stat(_, _) -> undefined.
 
 %% ===================================================================
 %% EUnit tests
