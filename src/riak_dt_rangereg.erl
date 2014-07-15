@@ -21,10 +21,25 @@
 %% -------------------------------------------------------------------
 
 %% @doc
-%% A register that stores the smallest integer that is assigned to it
-%% It starts as `undefined`, which is a `bottom` value, but will take
-%% on any assigned value as long as it is smaller than the value it had
-%% before. Only good for storing integers.
+%% A register that keeps track of the largest, smallest, first, and last
+%% integers that were ever assigned to it. All of these start as `undefined`,
+%% but a single update can populate them all (as that integer is all of the
+%% above), after which subsequent updates may or may not change the different
+%% values depending on its value and timestamp:
+%%
+%% - the `max` field stores the largest integer, only being updated if
+%%   the new integer is larger than its current value
+%% - the `min` field stores the smallest integer, only being updated if
+%%   the new integer is smaller than its current value
+%% - the `first` field stores the first integer (by timestamp) and its
+%%   timestamp, only updating if the new integer has a lower timestamp.
+%%   If the timestamps are the same, the smaller of the two integers
+%%   is kept.
+%% - the `last` field stores the last integer (by timestamp) and its
+%%   timestamp, only updating if the new integer has a higher timestamp.
+%%   If the timestamps are the same, the larger of the two integers is
+%%   kept.
+%%
 %% @end
 
 -module(riak_dt_rangereg).
@@ -52,9 +67,9 @@
   }).
 
 -opaque rangereg() :: #rangereg{}.
--type rangereg_pair() :: undefined | {integer(), non_neg_integer()}.
+-type rangereg_pair() :: undefined | {integer(), integer()}.
 -type rangereg_single() :: undefined | integer().
--type rangereg_op() :: {assign, integer(), non_neg_integer()}.
+-type rangereg_op() :: {assign, integer(), integer()}.
 
 %% @doc Create a new, empty `rangereg()'
 -spec new() -> rangereg().
@@ -114,6 +129,8 @@ new_range_from_assign(Value, Ts) ->
 %% @doc Merge two `rangereg()'s to a single `rangereg()'. This is the Least Upper Bound
 %% function described in the literature.
 %% We max the maximum, min the minimum, LWW the last, and first-write-wins the first.
+%% For LWW, if the timestamps are equal, we take the higher integer. For FWW, we take
+%% the lower integer.
 -spec merge(rangereg(), rangereg()) -> rangereg().
 merge(#rangereg{max=MaxA, min=MinA, first=FirstA, last=LastA}, 
       #rangereg{max=MaxB, min=MinB, first=FirstB, last=LastB}) ->
@@ -195,8 +212,8 @@ eqc_value_test_() ->
 generate() ->
     ?LET({Op, Actor}, {gen_op(), char()},
          begin
-             {ok, Lww} = riak_dt_rangereg:update(Op, Actor, riak_dt_rangereg:new()),
-             Lww
+             {ok, RangeReg} = riak_dt_rangereg:update(Op, Actor, riak_dt_rangereg:new()),
+             RangeReg
          end).
 
 init_state() ->
