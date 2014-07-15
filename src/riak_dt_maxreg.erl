@@ -44,7 +44,7 @@
 
 -export_type([maxreg/0, maxreg_op/0]).
 
--opaque maxreg() :: integer() | undefined.
+-type maxreg() :: integer() | undefined.
 
 -type maxreg_op() :: {assign, integer()}.
 
@@ -123,8 +123,8 @@ eqc_value_test_() ->
 generate() ->
     ?LET({Op, Actor}, {gen_op(), char()},
          begin
-             {ok, Lww} = riak_dt_maxreg:update(Op, Actor, riak_dt_maxreg:new()),
-             Lww
+             {ok, MaxReg} = riak_dt_maxreg:update(Op, Actor, riak_dt_maxreg:new()),
+             MaxReg
          end).
 
 init_state() ->

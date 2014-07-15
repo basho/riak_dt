@@ -44,7 +44,7 @@
 
 -export_type([minreg/0, minreg_op/0]).
 
--opaque minreg() :: integer() | undefined.
+-type minreg() :: integer() | undefined.
 
 -type minreg_op() :: {assign, integer()}.
 
@@ -123,8 +123,8 @@ eqc_value_test_() ->
 generate() ->
     ?LET({Op, Actor}, {gen_op(), char()},
          begin
-             {ok, Lww} = riak_dt_minreg:update(Op, Actor, riak_dt_minreg:new()),
-             Lww
+             {ok, MinReg} = riak_dt_minreg:update(Op, Actor, riak_dt_minreg:new()),
+             MinReg
          end).
 
 init_state() ->
