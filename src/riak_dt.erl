@@ -23,7 +23,7 @@
 -module(riak_dt).
 
 -export([to_binary/1, from_binary/1]).
--export_type([actor/0, dot/0, update_actor/0, crdt/0, context/0]).
+-export_type([actor/0, dot/0, crdt/0, context/0]).
 
 -type crdt() :: term().
 -type operation() :: term().
@@ -32,7 +32,6 @@
 -type error() :: term().
 -type dot() :: {actor(), pos_integer()}.
 -type context() :: riak_dt_vclock:vclock() | undefined.
--type update_actor() :: actor() | dot().
 
 -callback new() -> crdt().
 -callback value(crdt()) -> term().
