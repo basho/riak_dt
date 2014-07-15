@@ -9,7 +9,7 @@
 %%%
 %%%   -include("riak_dt_tags.hrl").
 %%%   -define(TAG, ?DT_<type>_TAG).
-%%% 
+%%%
 %%% Then use ?TAG in the to_/from_binary kerfuffle.
 
 %% Flags: [73,74,79,80]
@@ -27,6 +27,7 @@
 %% Counters: [70,71]
 -define(DT_GCOUNTER_TAG, 70).
 -define(DT_PNCOUNTER_TAG, 71).
+-define(DT_EMCNTR_TAG, 85).
 
 %% Sets: [75,76,82]
 -define(DT_GSET_TAG, 82).

@@ -38,6 +38,7 @@
 -export([new/0, new/2, value/1, value/2,
          update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
 -export([to_binary/2, from_binary/2, current_version/1, change_versions/3]).
+-export([parent_clock/2, update/4]).
 
 %% EQC API
 -ifdef(EQC).
@@ -74,6 +75,12 @@ new(Actor, Value) when Value < 0 ->
 new(_Actor, _Zero) ->
     new().
 
+%% @doc no-op
+-spec parent_clock(riak_dt_vclock:vclock(), pncounter()) ->
+                          pncounter().
+parent_clock(_Clock, Cntr) ->
+    Cntr.
+
 %% @doc The single, total value of a `pncounter()'
 -spec value(pncounter()) -> integer().
 value(PNCnt) ->
@@ -94,7 +101,9 @@ value(negative, PNCnt) ->
 %% `Actor' is any term, and the 3rd argument is the `pncounter()' to update.
 %%
 %% returns the updated `pncounter()'
--spec update(pncounter_op(), term(), pncounter()) -> {ok, pncounter()}.
+-spec update(pncounter_op(), riak_dt:actor() | riak_dt:dot(), pncounter()) -> {ok, pncounter()}.
+update(Op, {Actor, _Cnt}, PNCnt) ->
+    update(Op, Actor, PNCnt);
 update(increment, Actor, PNCnt) ->
     update({increment, 1}, Actor, PNCnt);
 update(decrement, Actor, PNCnt) ->
@@ -107,6 +116,9 @@ update({increment, By}, Actor, PNCnt) when is_integer(By), By < 0 ->
     update({decrement, -By}, Actor, PNCnt);
 update({decrement, By}, Actor, PNCnt) when is_integer(By), By > 0 ->
     {ok, decrement_by(By, Actor, PNCnt)}.
+
+update(Op, Actor, Cntr, _Ctx) ->
+    update(Op, Actor, Cntr).
 
 %% @doc Merge two `pncounter()'s to a single `pncounter()'. This is the Least Upper Bound
 %% function described in the literature.
@@ -166,8 +178,7 @@ from_binary(Binary = <<?TAG:8/integer, _/binary>>) ->
 to_binary(?V2_VERS, PNCnt) ->
     Version = current_version(PNCnt),
     V2 = change_versions(Version, ?V2_VERS, PNCnt),
-    V2Bin = term_to_binary(V2),
-    <<?TAG:8/integer, ?V2_VERS:8/integer, V2Bin/binary>>;
+    <<?TAG:8/integer, ?V2_VERS:8/integer, (riak_dt:to_binary(V2))/binary>>;
 to_binary(?V1_VERS, PNCnt) ->
     Version = current_version(PNCnt),
     {P,N} = change_versions(Version, ?V1_VERS, PNCnt),
@@ -181,7 +192,7 @@ to_binary(?V1_VERS, PNCnt) ->
 
 -spec from_binary(version(), binary()) -> any_pncounter().
 from_binary(?V2_VERS, <<?TAG:8/integer, ?V2_VERS:8/integer, PNBin/binary>>) ->
-    binary_to_term(PNBin);
+    riak_dt:from_binary(PNBin);
 from_binary(?V1_VERS, <<?TAG:8/integer, ?V1_VERS:8/integer,
                   PBinLen:32/integer, PBin:PBinLen/binary,
                   NBinLen:32/integer, NBin:NBinLen/binary>>) ->

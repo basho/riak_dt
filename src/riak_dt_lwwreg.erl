@@ -33,11 +33,12 @@
 
 -export([new/0, value/1, value/2, update/3, merge/2,
          equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
+-export([parent_clock/2, update/4]).
 
 %% EQC API
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
--export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0, generate/0]).
+-export([gen_op/0, gen_op/1, update_expected/3, eqc_state_value/1, init_state/0, generate/0]).
 -endif.
 
 -ifdef(TEST).
@@ -56,6 +57,10 @@
 -spec new() -> lwwreg().
 new() ->
     {<<>>, 0}.
+
+-spec parent_clock(riak_dt_vclock:vclock(), lwwreg()) -> lwwreg().
+parent_clock(_Clock, Reg) ->
+    Reg.
 
 %% @doc The single total value of a `gcounter()'.
 -spec value(lwwreg()) -> term().
@@ -87,6 +92,9 @@ update({assign, Value}, _Actor, {OldVal, OldTS}) ->
                   {OldVal, OldTS}
           end,
     {ok, LWW}.
+
+update(Op, Actor, Reg, _Ctx) ->
+    update(Op, Actor, Reg).
 
 make_micro_epoch() ->
     {Mega, Sec, Micro} = os:timestamp(),
@@ -128,39 +136,13 @@ stat(_, _) -> undefined.
 
 %% @doc Encode an effecient binary representation of an `lwwreg()'
 -spec to_binary(lwwreg()) -> binary().
-to_binary({Val, TS}) ->
-    {ValueLen, ValueBin} = val_to_binary(Val),
-    {TSLen, TSBin} = ts_to_binary(TS),
-    <<?TAG:8/integer, ?V1_VERS:8/integer, ValueLen:8/integer, ValueBin/binary, TSLen:8/integer, TSBin/binary>>.
+to_binary(LWWReg) ->
+    <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(LWWReg))/binary>>.
 
 %% @doc Decode binary `lwwreg()'
 -spec from_binary(binary()) -> lwwreg().
-from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, ValueLen:8/integer, ValueBin:ValueLen/binary,
-              TSLen:8/integer, TSBin:TSLen/binary>>) ->
-    {binary_to_val(ValueBin), binary_to_ts(TSBin)}.
-
-val_to_binary(Val) when is_binary(Val) ->
-    Bin = <<1, Val/binary>>,
-    {byte_size(Bin), Bin};
-val_to_binary(Term) ->
-    Bin = <<0, (term_to_binary(Term))/binary>>,
-    {byte_size(Bin), Bin}.
-
-binary_to_val(<<1, Val/binary>>) ->
-    Val;
-binary_to_val(<<0, Val/binary>>) ->
-    binary_to_term(Val).
-
-binary_to_ts(<<1, TS/binary>>) ->
-    binary:decode_unsigned(TS);
-binary_to_ts(TS) ->
-    binary_to_val(TS).
-
-ts_to_binary(TS) when is_integer(TS) ->
-    Bin = <<1, (binary:encode_unsigned(TS))/binary>>,
-    {byte_size(Bin), Bin};
-ts_to_binary(TS) ->
-    val_to_binary(TS).
+from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
+    riak_dt:from_binary(Bin).
 
 %% ===================================================================
 %% EUnit tests
@@ -181,6 +163,9 @@ generate() ->
 
 init_state() ->
     {<<>>, 0}.
+
+gen_op(_Size) ->
+    gen_op().
 
 gen_op() ->
     ?LET(TS, largeint(), {assign, binary(), abs(TS)}).

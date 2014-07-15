@@ -27,6 +27,7 @@
 %% API
 -export([new/0, value/1, update/3, merge/2, equal/2,
          to_binary/1, from_binary/1, value/2, precondition_context/1, stats/1, stat/2]).
+-export([update/4, parent_clock/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -65,7 +66,27 @@ value(ORDict0) ->
         end, ORDict0),
     orddict:fetch_keys(ORDict1).
 
--spec value(any(), orset()) -> [member()].
+-spec value(any(), orset()) -> [member()] | orddict:orddict().
+value({fragment, Elem}, ORSet) ->
+    case value({tokens, Elem}, ORSet) of
+        [] ->
+            orddict:new();
+        Tokens ->
+            orddict:store(Elem, Tokens, orddict:new())
+    end;
+value({tokens, Elem}, ORSet) ->
+    case orddict:find(Elem, ORSet) of
+        error ->
+            orddict:new();
+        {ok, Tokens} ->
+            Tokens
+    end;
+value(removed, ORDict0) ->
+    ORDict1 = orddict:filter(fun(_Elem, Tokens) ->
+                                     ValidTokens = [Token || {Token, true} <- orddict:to_list(Tokens)],
+                                     length(ValidTokens) > 0
+                             end, ORDict0),
+    orddict:fetch_keys(ORDict1);
 value(_,ORSet) ->
     value(ORSet).
 
@@ -85,7 +106,16 @@ update({remove,Elem}, _Actor, ORDict) ->
 update({remove_all,Elems}, _Actor, ORDict0) ->
     remove_elems(Elems, ORDict0);
 update({update, Ops}, Actor, ORDict) ->
-    apply_ops(lists:sort(Ops), Actor, ORDict).
+    apply_ops(Ops, Actor, ORDict).
+
+-spec update(orset_op(), actor(), orset(), riak_dt:context()) ->
+                    {ok, orset()} | {error, {precondition ,{not_present, member()}}}.
+update(Op, Actor, ORDict, _Ctx) ->
+    update(Op, Actor, ORDict).
+
+-spec parent_clock(riak_dt_vclock:vclock(), orset()) -> orset().
+parent_clock(_Clock, ORSet) ->
+    ORSet.
 
 -spec merge(orset(), orset()) -> orset().
 merge(ORDictA, ORDictB) ->
@@ -283,7 +313,7 @@ member(Arg, L) ->
     lists:member(Arg, L).
 
 update_expected(ID, {update, Updates}, State) ->
-    do_updates(ID, lists:sort(Updates), State, State);
+    do_updates(ID, Updates, State, State);
 update_expected(ID, {add, Elem}, {Cnt0, Dict}) ->
     Cnt = Cnt0+1,
     ToAdd = {Elem, Cnt},
