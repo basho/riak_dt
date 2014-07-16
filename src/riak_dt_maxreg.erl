@@ -50,8 +50,6 @@
 
 -type maxreg_op() :: {assign, integer()}.
 
--type nonintegral_error() :: {error, {type, {nonintegral, term()}}}.
-
 %% @doc Create a new, empty `maxreg()'
 -spec new() -> maxreg().
 new() ->
@@ -69,14 +67,14 @@ value(_, V) ->
 
 %% @doc Assign a `Value' to the `maxreg()'
 -spec update(maxreg_op(), riak_dt:actor(), maxreg()) ->
-                    {ok, maxreg()} | nonintegral_error().
+                    {ok, maxreg()}.
 update({assign, Value}, _Actor, OldVal) when is_integer(Value) ->
     {ok, merge(OldVal, Value)};
-update({assign, Value}, _Actor, _OldVal) ->
-    {error, {type, {nonintegral, Value}}}.
+update({assign, _Value}, _Actor, _OldVal) ->
+    error(badarg).
 
 -spec update(maxreg_op(), riak_dt:actor(), maxreg(), riak_dt:context()) ->
-                    {ok, maxreg()} | nonintegral_error().
+                    {ok, maxreg()}.
 update(Op, Actor, MaxReg, _Ctx) ->
     update(Op, Actor, MaxReg).
 

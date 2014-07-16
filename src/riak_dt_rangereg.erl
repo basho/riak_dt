@@ -76,8 +76,6 @@
 -type rangereg_single() :: undefined | integer().
 -type rangereg_op() :: {assign, integer(), integer()} | {assign, integer()}.
 
--type nonintegral_error() :: {error, {type, {non_integral, term()}}}.
-
 %% @doc Create a new, empty `rangereg()'
 -spec new() -> rangereg().
 new() ->
@@ -126,23 +124,23 @@ pair_ts({_Val, Ts}) ->
 
 %% @doc Assign a `Value' to the `rangereg()'
 -spec update(rangereg_op(), riak_dt:actor(), rangereg()) ->
-                    {ok, rangereg()} | nonintegral_error().
+                    {ok, rangereg()}.
 update({assign, Value, Ts}, _Actor, OldVal) when is_integer(Value) ->
     {ok, merge(new_range_from_assign(Value, Ts), OldVal)};
-update({assign, Value, _Ts}, _Actor, _OldVal) ->
-    {error, {type, {nonintegral, Value}}};
+update({assign, _Value, _Ts}, _Actor, _OldVal) ->
+    error(badarg);
 update({assign, Value}, _Actor, OldVal) when is_integer(Value) ->
     MicroEpoch = make_micro_epoch(),
     {ok, merge(new_range_from_assign(Value, MicroEpoch), OldVal)};
-update({assign, Value}, _Actor, _OldVal) ->
-    {error, {type, {nonintegral, Value}}}.
+update({assign, _Value}, _Actor, _OldVal) ->
+    error(badarg).
 
 make_micro_epoch() ->
     {Mega, Sec, Micro} = os:timestamp(),
     (Mega * 1000000 + Sec) * 1000000 + Micro.
 
 -spec update(rangereg_op(), riak_dt:actor(), rangereg(), riak_dt:context()) ->
-                    {ok, rangereg()} | nonintegral_error().
+                    {ok, rangereg()}.
 update(Op, Actor, OldVal, _Ctx) ->
     update(Op, Actor, OldVal).
 

@@ -50,8 +50,6 @@
 
 -type minreg_op() :: {assign, integer()}.
 
--type nonintegral_error() :: {error, {type, {nonintegral, term()}}}.
-
 %% @doc Create a new, empty `minreg()'
 -spec new() -> minreg().
 new() ->
@@ -69,14 +67,14 @@ value(_, V) ->
 
 %% @doc Assign a `Value' to the `minreg()'
 -spec update(minreg_op(), riak_dt:actor(), minreg()) ->
-                    {ok, minreg()} | nonintegral_error().
+                    {ok, minreg()}.
 update({assign, Value}, _Actor, OldVal) when is_integer(Value) ->
     {ok, merge(OldVal, Value)};
-update({assign, Value}, _Actor, _OldVal) ->
-    {error, {type, {nonintegral, Value}}}.
+update({assign, _Value}, _Actor, _OldVal) ->
+    error(badarg).
 
 -spec update(minreg_op(), riak_dt:actor(), minreg(), riak_dt:context()) ->
-                    {ok, minreg()} | nonintegral_error().
+                    {ok, minreg()}.
 update(Op, Actor, OldVal, _Ctx) ->
     update(Op, Actor, OldVal).
 
