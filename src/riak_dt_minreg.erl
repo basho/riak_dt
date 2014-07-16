@@ -130,6 +130,9 @@ stat(_, _) -> undefined.
 -ifdef(TEST).
 
 -ifdef(EQC).
+bin_roundtrip_test_() ->
+    crdt_statem_eqc:run_binary_rt(?MODULE, 1000).
+
 eqc_value_test_() ->
     crdt_statem_eqc:run(?MODULE, 1000).
 
