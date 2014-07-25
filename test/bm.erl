@@ -108,6 +108,34 @@ every_actor_every_element(ActorsN, EntriesN, Type) ->
                       Actors),
     sizes(riak_dt_orswot, Set).
 
+
+pmap(Function, List) ->
+  Self = self(),
+  Pids = lists:map(fun(Entry) ->
+                    spawn(fun() -> execute(Self, Function, Entry) end)
+                   end,
+                   List),
+  %gather the results of the processes (in order) into a list
+  gather(Pids).
+
+% Execute the function and send the result back to the receiver
+execute(Recv, Function, Element) ->
+  Recv ! {self(), Function(Element)}.
+
+gather([]) ->
+  [];
+gather([H|T]) ->
+  receive
+      {H, Ret} ->
+        [Ret|gather(T)]
+  end.
+
+worst_case(AFrom, ATo, AStep, EFrom, ETo, EStep) ->
+    pmap(fun(B) ->
+                 [{A, B, every_actor_every_element(A, B, byte)} || A <- lists:seq(AFrom, ATo, AStep)]
+         end,
+         lists:seq(EFrom, ETo, EStep)).
+
 round_robin([], Cnt) ->
     error(badarg, [[], Cnt]);
 round_robin(L, N) ->
