@@ -30,6 +30,7 @@
 -define(DT_GSET_TAG, 82).
 -define(DT_ORSET_TAG, 76).
 -define(DT_ORSWOT_TAG, 75).
+-define(DT_LWWSET_TAG, 78).
 
 %% Maps
 -define(DT_MAP_TAG, 77).

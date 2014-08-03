@@ -164,7 +164,7 @@ crdt_equals(Mod, {_IDS, CS}, {_IDD, CD}) ->
 %% list equality expects lists in order
 sort(Mod, L) when Mod == riak_dt_orset; Mod == riak_dt_gset;
                   Mod == riak_dt_orswot; Mod == riak_dt_map;
-                  Mod == riak_dt_tsmap ->
+                  Mod == riak_dt_tsmap; Mod == riak_dt_lwwset ->
     lists:sort(L);
 sort(_, Other) ->
     Other.
