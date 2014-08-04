@@ -60,24 +60,24 @@
 
 -endif.
 
+-define(ADD, 1).
+-define(REM, 0).
+
 -export_type([lwwset/0, lwwset_op/0, binary_lwwset/0]).
 
--type lwwset() :: [entries()].
+-type lwwset() :: [entry()].
 
 -type binary_lwwset() :: binary(). %% A binary that from_binary/1 will operate on.
 
 -type lwwset_op() ::  {add, member(), ts()} | {remove, member(), ts()}.
 
--type entries() :: [{member(), {ts(), status()}}].
+-type entry() :: {member(), {ts(), status()}}.
 
 -type member() :: term().
 -type ts() :: pos_integer().
 -type status() :: add() | remove().
--type add() :: 1.
--type remove() :: 0.
-
--define(ADD, 1).
--define(REM, 0).
+-type add() :: ?ADD.
+-type remove() :: ?REM.
 
 -spec new() -> lwwset().
 new() ->
