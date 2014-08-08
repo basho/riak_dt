@@ -1,3 +1,4 @@
+%% -*- coding: utf-8 -*-
 %% -------------------------------------------------------------------
 %%
 %% riak_dt_gset: A convergent, replicated, state based grow only set
@@ -24,7 +25,7 @@
 %%
 %% @reference Marc Shapiro, Nuno Preguiça, Carlos Baquero, Marek
 %% Zawirski (2011) A comprehensive study of Convergent and Commutative
-%% Replicated Data Types. http://hal.upmc.fr/inria-00555588/
+%% Replicated Data Types. [http://hal.upmc.fr/inria-00555588/]
 %%
 %% @end
 
@@ -70,7 +71,7 @@ new() ->
 value(GSet) ->
     ordsets:to_list(GSet).
 
-%% @Doc note: not implemented yet, same as `value/1'
+%% @doc note: not implemented yet, same as `value/1'
 -spec value(any(), gset()) -> [member()].
 value(_, GSet) ->
     value(GSet).
