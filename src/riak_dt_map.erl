@@ -159,8 +159,9 @@
 %% working on ways to fix this. One idea is to not remove a field with
 %% "undelivered" operations, but instead to "hide" it.
 %%
-%% @see riak_dt_orswot for more on the OR semantic
-%% @see riak_dt_emcntr for the embedded counter.
+%% See {@link riak_dt_orswot} for more on the OR semantic
+%%
+%% See {@link riak_dt_emcntr} for the embedded counter.
 %% @end
 
 -module(riak_dt_map).
@@ -361,7 +362,7 @@ apply_ops([{remove, Field} | Rest], Dot, Map, Ctx) ->
 %% present, either we defer it, or it has been done already, depending
 %% on if the Map clock descends the context clock or not.
 %%
-%% @see defer_remove/4 for handling of removes of fields that are
+%% {@link defer_remove/4} for handling of removes of fields that are
 %% _not_ present
 -spec remove_field(field(), map(), context()) ->
                           {ok, map()} | precondition_error().
@@ -657,7 +658,7 @@ stat(_,_) -> undefined.
 %% `binary_compression' to turn t2b compression on (`true') and off
 %% (`false')
 %%
-%% @see `from_binary/1'
+%% @see from_binary/1
 -spec to_binary(map()) -> binary_map().
 to_binary(Map) ->
     <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(Map))/binary>>.
@@ -665,7 +666,7 @@ to_binary(Map) ->
 %% @doc When the argument is a `binary_map()' produced by
 %% `to_binary/1' will return the original `map()'.
 %%
-%% @see `to_binary/1'
+%% @see to_binary/1
 -spec from_binary(binary_map()) -> map().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
     riak_dt:from_binary(B).
