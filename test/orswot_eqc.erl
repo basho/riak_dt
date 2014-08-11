@@ -21,6 +21,7 @@
 
 -module(orswot_eqc).
 
+-ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eqc/include/eqc_statem.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -469,3 +470,4 @@ model_merge({S1, D1}, {S2, D2}) ->
     S = riak_dt_orset:merge(S1, S2),
     D = riak_dt_orset:merge(D1, D2),
     model_apply_deferred(S, D).
+-endif.
