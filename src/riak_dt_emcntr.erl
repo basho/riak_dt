@@ -1,3 +1,4 @@
+%% -*- coding: utf-8 -*-
 %% -------------------------------------------------------------------
 %%
 %% riak_dt_emcntr: A convergent, replicated, state based PN counter,
@@ -31,14 +32,14 @@
 %% that a field was removed and re-added P and N maybe be _lower_ than
 %% their removed values, and when merged with a replica that has not
 %% seen the remove, the remove is lost. This counter adds some
-%% causality by storing a `dot` with P and N. Merge takes the max
+%% causality by storing a `dot' with P and N. Merge takes the max
 %% event for each actor, so newer values win over old ones. The rest
 %% of the mechanics are the same.
 %%
-%% @see riak_kv_gcounter.erl
+%% @see riak_kv_gcounter
 %%
-%% @reference Marc Shapiro, Nuno Preguiça, Carlos Baquero, Marek Zawirski (2011) A comprehensive study of
-%% Convergent and Commutative Replicated Data Types. http://hal.upmc.fr/inria-00555588/
+%% @reference Marc Shapiro, Nuno Preguiça, Carlos Baquero, Marek Zawirski (2011) A comprehensive study of
+%% Convergent and Commutative Replicated Data Types. [http://hal.upmc.fr/inria-00555588/]
 %%
 %% @end
 

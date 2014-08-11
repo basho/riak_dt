@@ -61,7 +61,7 @@ update(disable, Actor, {Clock,_}) ->
 update(enable, _Actor, {Clock,_}) ->
     {ok, {Clock, true}}.
 
-%% @fixme this needs ot use the context
+%% @todo this needs to use the context
 -spec update(oe_flag_op(), riak_dt:actor(), oe_flag(), _Ctx) ->
                     {ok, oe_flag()}.
 update(Op, Actor, Flag, _Ctx) ->

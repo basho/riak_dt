@@ -1,3 +1,4 @@
+%% -*- coding: utf-8 -*-
 %% -------------------------------------------------------------------
 %%
 %% riak_dt_orswot: Tombstone-less, replicated, state based observe remove set
@@ -43,19 +44,20 @@
 %%
 %% Essentially we've made a dotted version vector.
 %%
-%% @see riak_dt_multi, riak_dt_vclock
+%% @see riak_dt_multi
+%% @see riak_dt_vclock
 %%
-%% @reference Marc Shapiro, Nuno Preguiça, Carlos Baquero, Marek
+%% @reference Marc Shapiro, Nuno Preguiça, Carlos Baquero, Marek
 %% Zawirski (2011) A comprehensive study of Convergent and Commutative
-%% Replicated Data Types. http://hal.upmc.fr/inria-00555588/
+%% Replicated Data Types. [http://hal.upmc.fr/inria-00555588/]
 %%
 %% @reference Annette Bieniusa, Marek Zawirski, Nuno Preguiça, Marc
 %% Shapiro, Carlos Baquero, Valter Balegas, Sérgio Duarte (2012) An
 %% Optimized Conﬂict-free Replicated Set
-%% http://arxiv.org/abs/1210.3368
+%% [http://arxiv.org/abs/1210.3368]
 %%
 %% @reference Nuno Preguiça, Carlos Baquero, Paulo Sérgio Almeida,
-%% Victor Fonte, Ricardo Gonçalves http://arxiv.org/abs/1011.5808
+%% Victor Fonte, Ricardo Gonçalves [http://arxiv.org/abs/1011.5808]
 %%
 %% @end
 -module(riak_dt_orswot).
@@ -432,7 +434,7 @@ stat(_,_) -> undefined.
 %% `binary_compression' to turn t2b compression on (`true') and off
 %% (`false')
 %%
-%% @see `from_binary/1'
+%% @see from_binary/1
 -spec to_binary(orswot()) -> binary_orswot().
 to_binary(S) ->
      <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(S))/binary>>.
@@ -440,7 +442,7 @@ to_binary(S) ->
 %% @doc When the argument is a `binary_orswot()' produced by
 %% `to_binary/1' will return the original `orswot()'.
 %%
-%% @see `to_binary/1'
+%% @see to_binary/1
 -spec from_binary(binary_orswot()) -> orswot().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
     riak_dt:from_binary(B).
