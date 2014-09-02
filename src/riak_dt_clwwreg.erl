@@ -171,14 +171,6 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
 
 -ifdef(EQC).
 
-%% Really not sure how to get this to work, so leaving it for the moment.
-%% There's a test in riak_kv/tests which makes sure riak_object works like
-%% dvvset does, this module just directly calls dvvset, so I see little point
-%% in making a test like that.
-%%
-%eqc_value_test_() ->
-%    crdt_statem_eqc:run(?MODULE, ?NUMTESTS).
-
 bin_roundtrip_test_() ->
     crdt_statem_eqc:run_binary_rt(?MODULE, ?NUMTESTS).
 
@@ -188,22 +180,6 @@ generate() ->
              {ok, Clww} = riak_dt_clwwreg:update(Op, Actor, riak_dt_clwwreg:new()),
              Clww
          end).
-
-init_state() ->
-    undefined.
-
-gen_op(_Size) ->
-    gen_op().
-
-gen_op() ->
-    ?LET(TS, largeint(), {assign, binary(), abs(TS)}).
-
-update_expected(_ID, {assign, _Val, _Ts}, Wat) ->
-    % FIXME
-    Wat.
-
-eqc_state_value(Wat) ->
-    Wat.
 
 -endif.
 
