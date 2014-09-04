@@ -45,7 +45,7 @@
 %%
 %% @end
 
--module(riak_dt_rangereg).
+-module(riak_dt_range).
 -behaviour(riak_dt).
 
 -export([new/0, value/1, value/2, update/3, update/4, merge/2,
@@ -62,28 +62,28 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--export_type([rangereg/0, rangereg_op/0]).
+-export_type([range/0, range_op/0]).
 
--record(rangereg, {
-    max   :: rangereg_single(),
-    min   :: rangereg_single(),
-    first :: rangereg_pair(),
-    last  :: rangereg_pair()
+-record(range, {
+    max   :: range_single(),
+    min   :: range_single(),
+    first :: range_pair(),
+    last  :: range_pair()
   }).
 
--opaque rangereg() :: #rangereg{}.
--type rangereg_pair() :: undefined | {integer(), integer()}.
--type rangereg_single() :: undefined | integer().
--type rangereg_op() :: {assign, integer(), integer()} | {assign, integer()}.
+-opaque range() :: #range{}.
+-type range_pair() :: undefined | {integer(), integer()}.
+-type range_single() :: undefined | integer().
+-type range_op() :: {assign, integer(), integer()} | {assign, integer()}.
 
 %% @doc Create a new, empty `rangereg()'
--spec new() -> rangereg().
+-spec new() -> range().
 new() ->
-    #rangereg{}.
+    #range{}.
 
 %% @doc The value of a `rangereg()': a proplist with 4 keys, max, min, first, last
--spec value(rangereg()) -> term().
-value(#rangereg{max=Max, min=Min, first=First, last=Last}) ->
+-spec value(range()) -> term().
+value(#range{max=Max, min=Min, first=First, last=Last}) ->
     [
       {max, Max}, 
       {min, Min}, 
@@ -97,21 +97,21 @@ pair_val(undefined) ->
 pair_val({Val, _Ts}) ->
   Val.
 
-%% @doc query this `rangereg()'.
--spec value(term(), rangereg()) -> term().
-value(max, #rangereg{max=Max}) ->
+%% @doc query this `range()'.
+-spec value(term(), range()) -> term().
+value(max, #range{max=Max}) ->
   Max;
-value(min, #rangereg{min=Min}) ->
+value(min, #range{min=Min}) ->
   Min;
-value(first, #rangereg{first=First}) ->
+value(first, #range{first=First}) ->
   pair_val(First);
-value(first_ts, #rangereg{first=First}) ->
+value(first_ts, #range{first=First}) ->
   pair_ts(First);
-value(last, #rangereg{last=Last}) ->
+value(last, #range{last=Last}) ->
   pair_val(Last);
-value(last_ts, #rangereg{last=Last}) ->
+value(last_ts, #range{last=Last}) ->
   pair_ts(Last);
-value(timerange, #rangereg{first=First,last=Last}) ->
+value(timerange, #range{first=First,last=Last}) ->
   {range, pair_ts(First), pair_ts(Last)};
 value(_, V) ->
     value(V).
@@ -122,9 +122,9 @@ pair_ts(undefined) ->
 pair_ts({_Val, Ts}) ->
   Ts.
 
-%% @doc Assign a `Value' to the `rangereg()'
--spec update(rangereg_op(), riak_dt:actor(), rangereg()) ->
-                    {ok, rangereg()}.
+%% @doc Assign a `Value' to the `range()'
+-spec update(range_op(), riak_dt:actor(), range()) ->
+                    {ok, range()}.
 update({assign, Value, Ts}, _Actor, OldVal) when is_integer(Value) ->
     {ok, merge(new_range_from_assign(Value, Ts), OldVal)};
 update({assign, _Value, _Ts}, _Actor, _OldVal) ->
@@ -139,29 +139,29 @@ make_micro_epoch() ->
     {Mega, Sec, Micro} = os:timestamp(),
     (Mega * 1000000 + Sec) * 1000000 + Micro.
 
--spec update(rangereg_op(), riak_dt:actor(), rangereg(), riak_dt:context()) ->
-                    {ok, rangereg()}.
+-spec update(range_op(), riak_dt:actor(), range(), riak_dt:context()) ->
+                    {ok, range()}.
 update(Op, Actor, OldVal, _Ctx) ->
     update(Op, Actor, OldVal).
 
 new_range_from_assign(Value, Ts) ->
-  #rangereg{max=Value, min=Value, first={Value,Ts}, last={Value,Ts}}.
+  #range{max=Value, min=Value, first={Value,Ts}, last={Value,Ts}}.
 
 
--spec parent_clock(riak_dt_vclock:vclock(), rangereg()) ->
-                          rangereg().
-parent_clock(_Clock, RangeReg) ->
-    RangeReg.
+-spec parent_clock(riak_dt_vclock:vclock(), range()) ->
+                          range().
+parent_clock(_Clock, Range) ->
+    Range.
 
-%% @doc Merge two `rangereg()'s to a single `rangereg()'. This is the Least Upper Bound
+%% @doc Merge two `range()'s to a single `range()'. This is the Least Upper Bound
 %% function described in the literature.
 %% We max the maximum, min the minimum, LWW the last, and first-write-wins the first.
 %% For LWW, if the timestamps are equal, we take the higher integer. For FWW, we take
 %% the lower integer.
--spec merge(rangereg(), rangereg()) -> rangereg().
-merge(#rangereg{max=MaxA, min=MinA, first=FirstA, last=LastA},
-      #rangereg{max=MaxB, min=MinB, first=FirstB, last=LastB}) ->
-    #rangereg{max=max_with_small_undefined(MaxA,MaxB),
+-spec merge(range(), range()) -> range().
+merge(#range{max=MaxA, min=MinA, first=FirstA, last=LastA},
+      #range{max=MaxB, min=MinB, first=FirstB, last=LastB}) ->
+    #range{max=max_with_small_undefined(MaxA,MaxB),
                min=min_with_large_undefined(MinA,MinB),
                first=fww(FirstA,FirstB),
                last =lww(LastA,LastB)}.
@@ -203,34 +203,34 @@ lww({_VA,TsA}, {VB,TsB}) when TsA < TsB ->
 lww(A,B) ->
   max(A,B). %% some kind of tiebreaker.
 
-%% @doc Are two `rangereg()'s structurally equal? Equality here is
+%% @doc Are two `range()'s structurally equal? Equality here is
 %% that both registers contain the same value.
--spec equal(rangereg(), rangereg()) -> boolean().
+-spec equal(range(), range()) -> boolean().
 equal(Val1, Val2) ->
     Val1 =:= Val2.
 
 -include("riak_dt_tags.hrl").
--define(TAG, ?DT_RANGEREG_TAG).
+-define(TAG, ?DT_RANGE_TAG).
 -define(V1_VERS, 1).
 
-%% @doc Encode an effecient binary representation of an `rangereg()'
--spec to_binary(rangereg()) -> binary().
+%% @doc Encode an effecient binary representation of an `range()'
+-spec to_binary(range()) -> binary().
 to_binary(RR) ->
     <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(RR))/binary>>.
 
-%% @doc Decode binary `rangereg()'
--spec from_binary(binary()) -> rangereg().
+%% @doc Decode binary `range()'
+-spec from_binary(binary()) -> range().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
     binary_to_term(Bin).
 
 
 %% @doc No Stats as everything in the datatype is public
--spec stats(rangereg()) -> [{atom(), number()}].
-stats(_RangeReg) ->
+-spec stats(range()) -> [{atom(), number()}].
+stats(_Range) ->
     [].
 
 %% @doc No Stats as everything in the datatype is public
--spec stat(atom(), rangereg()) -> number() | undefined.
+-spec stat(atom(), range()) -> number() | undefined.
 stat(_, _) -> undefined.
 
 
@@ -250,8 +250,8 @@ eqc_value_test_() ->
 generate() ->
     ?LET({Op, Actor}, {gen_op(), char()},
          begin
-             {ok, RangeReg} = riak_dt_rangereg:update(Op, Actor, riak_dt_rangereg:new()),
-             RangeReg
+             {ok, Range} = riak_dt_range:update(Op, Actor, riak_dt_range:new()),
+             Range
          end).
 
 init_state() ->

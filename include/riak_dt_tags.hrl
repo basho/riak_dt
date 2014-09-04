@@ -22,7 +22,7 @@
 -define(DT_LWWREG_TAG, 72).
 -define(DT_MAXREG_TAG, 90).
 -define(DT_MINREG_TAG, 91).
--define(DT_RANGEREG_TAG, 92).
+-define(DT_RANGE_TAG, 92).
 
 %% Counters: [70,71]
 -define(DT_GCOUNTER_TAG, 70).
