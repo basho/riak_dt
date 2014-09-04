@@ -74,7 +74,7 @@
 -opaque range() :: #range{}.
 -type range_pair() :: undefined | {integer(), integer()}.
 -type range_single() :: undefined | integer().
--type range_op() :: {assign, integer(), integer()} | {assign, integer()}.
+-type range_op() :: {add, integer(), integer()} | {add, integer()}.
 
 %% @doc Create a new, empty `rangereg()'
 -spec new() -> range().
@@ -122,17 +122,17 @@ pair_ts(undefined) ->
 pair_ts({_Val, Ts}) ->
   Ts.
 
-%% @doc Assign a `Value' to the `range()'
+%% @doc Add a `Value' to the `range()'
 -spec update(range_op(), riak_dt:actor(), range()) ->
                     {ok, range()}.
-update({assign, Value, Ts}, _Actor, OldVal) when is_integer(Value) ->
-    {ok, merge(new_range_from_assign(Value, Ts), OldVal)};
-update({assign, _Value, _Ts}, _Actor, _OldVal) ->
+update({add, Value, Ts}, _Actor, OldVal) when is_integer(Value) ->
+    {ok, merge(new_range_from_add(Value, Ts), OldVal)};
+update({add, _Value, _Ts}, _Actor, _OldVal) ->
     error(badarg);
-update({assign, Value}, _Actor, OldVal) when is_integer(Value) ->
+update({add, Value}, _Actor, OldVal) when is_integer(Value) ->
     MicroEpoch = make_micro_epoch(),
-    {ok, merge(new_range_from_assign(Value, MicroEpoch), OldVal)};
-update({assign, _Value}, _Actor, _OldVal) ->
+    {ok, merge(new_range_from_add(Value, MicroEpoch), OldVal)};
+update({add, _Value}, _Actor, _OldVal) ->
     error(badarg).
 
 make_micro_epoch() ->
@@ -144,7 +144,7 @@ make_micro_epoch() ->
 update(Op, Actor, OldVal, _Ctx) ->
     update(Op, Actor, OldVal).
 
-new_range_from_assign(Value, Ts) ->
+new_range_from_add(Value, Ts) ->
   #range{max=Value, min=Value, first={Value,Ts}, last={Value,Ts}}.
 
 
@@ -258,9 +258,9 @@ init_state() ->
     ordsets:new().
 
 gen_op() ->
-    {assign, largeint(), largeint()}.
+    {add, largeint(), largeint()}.
 
-update_expected(_ID, {assign, Val, Ts}, OldVal) ->
+update_expected(_ID, {add, Val, Ts}, OldVal) ->
     ordsets:add_element({Val,Ts}, OldVal);
 update_expected(_ID, _Op, Prev) ->
     Prev.
