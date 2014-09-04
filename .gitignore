@@ -7,3 +7,6 @@ dev/*
 doc/*
 rel/riak_dt
 data/*
+.qc/*
+.eqc-info
+current_counterexample.eqc

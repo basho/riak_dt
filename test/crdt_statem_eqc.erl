@@ -36,6 +36,12 @@
         eqc:on_output(fun(Str, Args) ->
                               io:format(user, Str, Args) end, P)).
 
+run(Module, Count) ->
+    {atom_to_list(Module), {timeout, 120, [?_assert(prop_converge(Count, Module))]}}.
+
+run_binary_rt(Module, Count) ->
+    {atom_to_list(Module), {timeout, 120, [?_assert(prop_bin_roundtrip(Count, Module))]}}.
+
 %% Initialize the state
 initial_state() ->
     #state{}.
@@ -63,8 +69,17 @@ next_state(S, _V, _C) ->
     S.
 
 %% Precondition, checked before command is added to the command sequence
-precondition(_S,{call,_,_,_}) ->
+precondition(S, {call,?MODULE, update, [_Mod, _Op, Vnode]}) ->
+     #state{vnodes=Vnodes} = S,
+     is_member(Vnode, Vnodes);
+precondition(S, {call,?MODULE, Fun, [_Mod, Vnode1, Vnode2]}) when Fun /= create ->
+     #state{vnodes=Vnodes} = S,
+     is_member(Vnode1, Vnodes) and is_member(Vnode2, Vnodes);
+precondition(_S, {call, _Mod, _Fun, _Args}) ->
     true.
+
+is_member(Vnode, Vnodes) ->
+    lists:member(Vnode, Vnodes).
 
 %% Postcondition, checked after command has been evaluated
 %% OBS: S is the state before next_state(S,_,<command>)
@@ -73,11 +88,11 @@ postcondition(_S,{call,?MODULE, crdt_equals, _},Res) ->
 postcondition(_S,{call,_,_,_},_Res) ->
     true.
 
-prop_converge(InitialValue, NumTests, Mod) ->
-    eqc:quickcheck(eqc:numtests(NumTests, ?QC_OUT(prop_converge(InitialValue, Mod)))).
+prop_converge(NumTests, Mod) ->
+    eqc:quickcheck(eqc:numtests(NumTests, ?QC_OUT(prop_converge(Mod)))).
 
-prop_converge(InitialValue, Mod) ->
-    ?FORALL(Cmds,commands(?MODULE, #state{mod=Mod, mod_state=InitialValue}),
+prop_converge(Mod) ->
+    ?FORALL(Cmds,commands(?MODULE, #state{mod=Mod, mod_state=Mod:init_state()}),
             begin
                 {H,S,Res} = run_commands(?MODULE,Cmds),
                 Merged = merge_crdts(Mod, S#state.vnodes),
@@ -85,10 +100,36 @@ prop_converge(InitialValue, Mod) ->
                 ExpectedValue = Mod:eqc_state_value(S#state.mod_state),
                 ?WHENFAIL(
                    %% History: ~p\nState: ~p\ H,S,
-                   io:format("History: ~p\nState: ~p", [H,S]),
+                   io:format("History: ~p\nState: ~p~n", [H, S]),
                    conjunction([{res, equals(Res, ok)},
-                                {total, equals(sort(MergedVal), sort(ExpectedValue))}]))
+                                {total, equals(sort(Mod, MergedVal), sort(Mod, ExpectedValue))}]))
             end).
+
+prop_bin_roundtrip(Count, Mod) ->
+    eqc:quickcheck(eqc:numtests(Count, ?QC_OUT(prop_bin_roundtrip(Mod)))).
+
+prop_bin_roundtrip(Mod) ->
+    ?FORALL(CRDT, Mod:generate(),
+            begin
+                Bin = Mod:to_binary(CRDT),
+                CRDT2= Mod:from_binary(Bin),
+                collect({range(byte_size(term_to_binary(CRDT))), range(byte_size(Bin))},
+                        ?WHENFAIL(
+                           begin
+                               io:format("Gen ~p~n", [CRDT]),
+                               io:format("Rountripped ~p~n", [CRDT2])
+                           end,
+                           Mod:equal(CRDT, CRDT2)))
+            end).
+
+bytes_smaller(Bin1, Bin2) ->
+   trunc(((byte_size(Bin2) - byte_size(Bin1)) / byte_size(Bin1)) *  100).
+
+range(0) ->
+    0;
+range(Value) ->
+    N = Value div 10,
+    {N * 10, (N +1) * 10}.
 
 merge_crdts(Mod, []) ->
     Mod:new();
@@ -103,7 +144,13 @@ create(Mod) ->
     Mod:new().
 
 update(Mod, Op, {ID, C}) ->
-    Mod:update(Op, ID, C).
+    %% Fix this for expected errors etc.
+    case Mod:update(Op, ID, C) of
+        {ok, C2} ->
+            C2;
+        _Error ->
+            C
+    end.
 
 merge(Mod, {_IDS, CS}, {_IDD, CD}) ->
     Mod:merge(CS, CD).
@@ -115,9 +162,11 @@ crdt_equals(Mod, {_IDS, CS}, {_IDD, CD}) ->
 %% Helpers
 %% The orset CRDT returns a list, it has no guarantees about order
 %% list equality expects lists in order
-sort(L) when is_list(L) ->
+sort(Mod, L) when Mod == riak_dt_orset; Mod == riak_dt_gset;
+                  Mod == riak_dt_orswot; Mod == riak_dt_map;
+                  Mod == riak_dt_tsmap ->
     lists:sort(L);
-sort(Other) ->
+sort(_, Other) ->
     Other.
 
 -endif. % EQC

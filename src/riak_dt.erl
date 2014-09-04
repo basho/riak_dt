@@ -22,11 +22,51 @@
 
 -module(riak_dt).
 
--export([behaviour_info/1]).
+-export([to_binary/1, from_binary/1]).
+-export_type([actor/0, dot/0, crdt/0, context/0]).
 
-behaviour_info(callbacks) ->
-    [{new, 0},
-     {value, 1},
-     {update, 3},
-     {merge, 2},
-     {equal, 2}].
+-type crdt() :: term().
+-type operation() :: term().
+-type actor() :: term().
+-type value() :: term().
+-type error() :: term().
+-type dot() :: {actor(), pos_integer()}.
+-type context() :: riak_dt_vclock:vclock() | undefined.
+
+-callback new() -> crdt().
+-callback value(crdt()) -> term().
+-callback value(term(), crdt()) -> value().
+-callback update(operation(), actor(), crdt()) -> {ok, crdt()} | {error, error()}.
+-callback update(operation(), actor(), crdt(), context()) -> {ok, crdt()} | {error, error()}.
+%% @doc When nested in a Map, some CRDTs need the logical clock of the
+%% top level Map to make context operations. This callback provides
+%% the clock and the crdt, and if relevant, returns to crdt with the
+%% given clock as it's own.
+-callback parent_clock(riak_dt_vclock:vclock(), crdt()) ->
+     crdt().
+-callback merge(crdt(), crdt()) -> crdt().
+-callback equal(crdt(), crdt()) -> boolean().
+-callback to_binary(crdt()) -> binary().
+-callback from_binary(binary()) -> crdt().
+-callback stats(crdt()) -> [{atom(), number()}].
+-callback stat(atom(), crdt()) -> number() | undefined.
+
+-ifdef(EQC).
+% Extra callbacks for any crdt_statem_eqc tests
+
+-callback gen_op() -> eqc_gen:gen(operation()).
+
+-endif.
+
+-spec to_binary(crdt()) -> binary().
+to_binary(Term) ->
+    Opts = case application:get_env(riak_dt, binary_compression, 1) of
+               true -> [compressed];
+               N when N >= 0, N =< 9 -> [{compressed, N}];
+               _ -> []
+           end,
+    term_to_binary(Term, Opts).
+
+-spec from_binary(binary()) -> crdt().
+from_binary(Binary) ->
+    binary_to_term(Binary).
