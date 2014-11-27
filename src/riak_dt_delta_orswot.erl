@@ -32,8 +32,9 @@
 new() ->
     {riak_dt_vclock:fresh(), orddict:new(), orddict:new()}.
 
-value({_Clock, Entries, _Seen}) ->
-    [K || {K, _Dots} <- orddict:to_list(Entries)].
+value({Clock, Entries, _Seen}) ->
+    [K || {K, Dots} <- orddict:to_list(Entries),
+        riak_dt_vclock:subtract_dots(Dots, Clock) == []].
 
 update({add, Elem}, Actor, ORSet) ->
     {ok, add_elem(Actor, ORSet, Elem)};
