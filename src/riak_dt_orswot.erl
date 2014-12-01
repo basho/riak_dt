@@ -130,7 +130,7 @@ parent_clock(Clock, {_SetClock, Entries, Deferred}) ->
 
 -spec value(orswot()) -> [member()].
 value({_Clock, Entries, _Deferred}) ->
-    [K || {K, _Dots} <- ?DICT:to_list(Entries)].
+    lists:sort([K || {K, _Dots} <- ?DICT:to_list(Entries)]).
 
 -spec value(orswot_q(), orswot()) -> term().
 value(size, ORset) ->
