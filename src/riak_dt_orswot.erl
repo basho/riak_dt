@@ -411,7 +411,7 @@ apply_deferred(Clock, Entries, Deferred) ->
 -spec equal(orswot(), orswot()) -> boolean().
 equal({Clock1, Entries1, _}, {Clock2, Entries2, _}) ->
     riak_dt_vclock:equal(Clock1, Clock2) andalso
-        ?DICT:fetch_keys(Entries1) == ?DICT:fetch_keys(Entries2) andalso
+        lists:sort(?DICT:fetch_keys(Entries1)) == lists:sort(?DICT:fetch_keys(Entries2)) andalso
         clocks_equal(?DICT:to_list(Entries1), ?DICT:to_list(Entries2)).
 
 %%-spec clocks_equal(?DICT:?DICT(), ?DICT:?DICT()) -> boolean().
