@@ -316,7 +316,7 @@ merge({LHSClock, LHSEntries, LHSDeferred}, {RHSClock, RHSEntries, RHSDeferred}) 
                  end,
                  {?DICT:new(), RHSEntries},
                  LHSEntries),
-    %% Now what about the stuff left from the right hand side? Do the same to that!
+    %%Now what about the stuff left from the right hand side? Do the same to that!
     Entries = ?DICT:fold(fun(Elem, Dots, Acc) ->
                          case riak_dt_vclock:subtract_dots(Dots, LHSClock) of
                              [] ->
