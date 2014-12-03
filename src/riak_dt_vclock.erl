@@ -41,7 +41,7 @@
 
 -export_type([vclock/0, vclock_node/0, binary_vclock/0]).
 
--type vclock() :: [vc_entry()].
+-type vclock() :: [vc_entry()] | [].
 -type binary_vclock() :: binary().
 % The timestamp is present but not used, in case a client wishes to inspect it.
 -type vc_entry() :: {vclock_node(), counter()}.

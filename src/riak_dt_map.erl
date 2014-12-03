@@ -190,7 +190,7 @@
 
 -type binary_map() :: binary(). %% A binary that from_binary/1 will accept
 -type map() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
--type entries() :: [field()].
+-type entries() :: dict(field_name(), field_value()).
 -type field() :: {field_name(), field_value()}.
 -type field_name() :: {Name :: binary(), CRDTModule :: crdt_mod()}.
 -type field_value() :: {crdts(), tombstone()}.
@@ -204,7 +204,10 @@
 %% Only field removals can be deferred. CRDTs stored in the map may
 %% have contexts and deferred operations, but as these are part of the
 %% state, they are stored under the field as an update like any other.
--type deferred() :: [{context(), [field()]}].
+-type deferred() :: dict(context(), [field()]).
+
+%% used until we move to erlang 17 and can use dict:dict/2
+-type dict(_A, _B) :: dict().
 
 %% limited to only those mods that support both a shared causal
 %% context, and by extension, the reset-remove semantic.
@@ -593,7 +596,7 @@ equal({Clock1, Values1, Deferred1}, {Clock2, Values2, Deferred2}) ->
         pairwise_equals(lists:sort(?DICT:to_list(Values1)),
                         lists:sort(?DICT:to_list(Values2))).
 
--spec pairwise_equals(entries(), entries()) -> boolean().
+-spec pairwise_equals([field()], [field()]) -> boolean().
 pairwise_equals([], []) ->
     true;
 pairwise_equals([{{Name, Type}, {Dots1, TS1}}| Rest1], [{{Name, Type}, {Dots2, TS2}}|Rest2]) ->
