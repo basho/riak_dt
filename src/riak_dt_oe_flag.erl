@@ -27,6 +27,7 @@
 
 -export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1, stats/1, stat/2]).
 -export([update/4, parent_clock/2]).
+-export([to_binary/2, from_binary/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -113,6 +114,10 @@ from_binary(<<?TAG:8, ?VSN1:8, BFlag:8, VClock/binary>>) ->
            end,
     {riak_dt_vclock:from_binary(VClock), Flag}.
 
+-spec from_binary(Vers :: 1, binary()) -> oe_flag().
+from_binary(1, Flag) ->
+    from_binary(Flag).
+
 -spec to_binary(oe_flag()) -> binary().
 to_binary({Clock, Flag}) ->
     BFlag = case Flag of
@@ -121,6 +126,10 @@ to_binary({Clock, Flag}) ->
             end,
     VCBin = riak_dt_vclock:to_binary(Clock),
     <<?TAG:8, ?VSN1:8, BFlag:8, VCBin/binary>>.
+
+-spec to_binary(Vers :: 1, oe_flag()) -> binary().
+to_binary(1, Flag) ->
+    to_binary(Flag).
 
 -spec stats(oe_flag()) -> [{atom(), integer()}].
 stats(OEF) ->

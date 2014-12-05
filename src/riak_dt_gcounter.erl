@@ -38,6 +38,7 @@
 -behaviour(riak_dt).
 -export([new/0, new/2, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
 -export([update/4, parent_clock/2]).
+-export([to_binary/2, from_binary/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -132,10 +133,19 @@ to_binary(GCnt) ->
     EntriesBin = term_to_binary(GCnt),
     <<?TAG:8/integer, ?V1_VERS:8/integer, EntriesBin/binary>>.
 
+-spec to_binary(Vers :: 1, gcounter()) -> binary().
+to_binary(1, C) ->
+    to_binary(C).
+
 %% @doc Decode binary G-Counter
 -spec from_binary(binary()) -> gcounter().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, EntriesBin/binary>>) ->
     binary_to_term(EntriesBin).
+
+-spec from_binary(Vers :: 1, binary()) ->
+                         gcounter().
+from_binary(1, B) ->
+    from_binary(B).
 
 %% ===================================================================
 %% EUnit tests

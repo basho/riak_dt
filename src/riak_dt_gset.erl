@@ -36,6 +36,7 @@
 -export([new/0, value/1, update/3, merge/2, equal/2,
          to_binary/1, from_binary/1, value/2, stats/1, stat/2]).
 -export([update/4, parent_clock/2]).
+-export([to_binary/2, from_binary/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -108,10 +109,20 @@ to_binary(GSet) ->
     %% @TODO something smarter
     <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(GSet))/binary>>.
 
+-spec to_binary(Vers :: 1, gset()) -> binary().
+to_binary(1, S) ->
+    to_binary(S).
+
 -spec from_binary(binary()) -> gset().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
     %% @TODO something smarter
     binary_to_term(Bin).
+
+-spec from_binary(Vers :: 1, binary()) ->
+                         gset().
+from_binary(1, B) ->
+    from_binary(B).
+
 
 -spec stats(gset()) -> [{atom(), number()}].
 stats(GSet) ->

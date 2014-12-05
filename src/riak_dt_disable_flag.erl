@@ -31,6 +31,7 @@
 
 -export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1, stats/1, stat/2]).
 -export([update/4, parent_clock/2]).
+-export([to_binary/2, from_binary/2]).
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -export([gen_op/0, init_state/0, update_expected/3, eqc_state_value/1]).
@@ -85,9 +86,19 @@ parent_clock(_Clock, Flag) ->
 from_binary(<<?TAG:7, 0:1>>) -> off;
 from_binary(<<?TAG:7, 1:1>>) -> on.
 
+-spec from_binary(Vers :: 1, binary()) ->
+                         disable_flag().
+from_binary(1, Bin) ->
+    from_binary(Bin).
+
 -spec to_binary(disable_flag()) -> binary().
 to_binary(off) -> <<?TAG:7, 0:1>>;
 to_binary(on) -> <<?TAG:7, 1:1>>.
+
+-spec to_binary(Vers :: 1, disable_flag()) ->
+                       binary().
+to_binary(1, Flag) ->
+    to_binary(Flag).
 
 -spec stats(disable_flag()) -> [{atom(), number()}].
 stats(_) -> [].

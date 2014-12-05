@@ -48,6 +48,7 @@
 -export([new/0, value/1, value/2]).
 -export([update/3, merge/2, equal/2]).
 -export([to_binary/1, from_binary/1]).
+-export([to_binary/2, from_binary/2]).
 -export([stats/1, stat/2]).
 -export([parent_clock/2, update/4]).
 
@@ -228,12 +229,20 @@ to_binary(Cntr) ->
     Bin = term_to_binary(Cntr),
     <<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>.
 
+-spec to_binary(Vers :: 1, emcntr()) -> binary().
+to_binary(1, Cntr) ->
+    to_binary(Cntr).
+
 %% @doc Decode a binary encoded riak_dt_emcntr.
 %%
 %% @see to_binary/1
 -spec from_binary(binary()) -> emcntr().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
     binary_to_term(Bin).
+
+-spec from_binary(Vers :: 1, binary()) -> emcntr().
+from_binary(1, B) ->
+    from_binary(B).
 
 %% ===================================================================
 %% EUnit tests

@@ -34,6 +34,7 @@
 -export([new/0, value/1, value/2, update/3, merge/2,
          equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
 -export([parent_clock/2, update/4]).
+-export([to_binary/2, from_binary/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -139,10 +140,20 @@ stat(_, _) -> undefined.
 to_binary(LWWReg) ->
     <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(LWWReg))/binary>>.
 
+-spec to_binary(Vers :: 1, lwwreg()) -> binary().
+to_binary(1, LWW) ->
+    to_binary(LWW).
+
 %% @doc Decode binary `lwwreg()'
 -spec from_binary(binary()) -> lwwreg().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
     riak_dt:from_binary(Bin).
+
+-spec from_binary(Vers :: 1, binary()) ->
+                         lwwreg().
+from_binary(1, B) ->
+    from_binary(B).
+
 
 %% ===================================================================
 %% EUnit tests

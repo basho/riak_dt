@@ -47,7 +47,12 @@
 -callback merge(crdt(), crdt()) -> crdt().
 -callback equal(crdt(), crdt()) -> boolean().
 -callback to_binary(crdt()) -> binary().
+-callback to_binary(TargetVers :: pos_integer(), crdt()) ->
+     binary().
 -callback from_binary(binary()) -> crdt().
+-callback from_binary(TargetVers :: pos_integer(), binary()) ->
+    crdt().
+
 -callback stats(crdt()) -> [{atom(), number()}].
 -callback stat(atom(), crdt()) -> number() | undefined.
 

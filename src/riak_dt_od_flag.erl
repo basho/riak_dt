@@ -28,6 +28,7 @@
 -export([new/0, value/1, value/2, update/3, update/4]).
 -export([ merge/2, equal/2, from_binary/1]).
 -export([to_binary/1, stats/1, stat/2]).
+-export([to_binary/2, from_binary/2]).
 -export([precondition_context/1]).
 -export([parent_clock/2]).
 
@@ -176,9 +177,17 @@ stat(_, _) -> undefined.
 from_binary(<<?TAG:8, ?VSN1:8, Bin/binary>>) ->
     riak_dt:from_binary(Bin).
 
+-spec from_binary(Vers :: 1, binary()) -> od_flag().
+from_binary(1, Flag) ->
+    from_binary(Flag).
+
 -spec to_binary(od_flag()) -> binary().
 to_binary(Flag) ->
     <<?TAG:8, ?VSN1:8, (riak_dt:to_binary(Flag))/binary>>.
+
+-spec to_binary(Vers :: 1, od_flag()) -> binary().
+to_binary(1, Flag) ->
+    to_binary(Flag).
 
 %% @doc the `precondition_context' is an opaque piece of state that
 %% can be used for context operations to ensure only observed state is
