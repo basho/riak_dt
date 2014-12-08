@@ -191,24 +191,21 @@
 
 -type binary_map() :: binary(). %% A binary that from_binary/1 will accept
 -type map() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
--type entries() :: dict(field_name(), field_value()).
+-type entries() :: [field()].
 -type field() :: {field_name(), field_value()}.
 -type field_name() :: {Name :: binary(), CRDTModule :: crdt_mod()}.
--type field_value() :: {crdts(), tombstone()}.
+-type field_value() :: {riak_dt_vclock:vclock(), crdt()}.
 
--type crdts() :: [entry()].
--type entry() :: {riak_dt:dot(), crdt()}.
+%%-type crdts() :: [entry()].
+%%-type entry() :: {riak_dt:dot(), crdt()}.
 
 %% Only for present fields, ensures removes propogate
--type tombstone() :: crdt().
+%%-type tombstone() :: crdt().
 
 %% Only field removals can be deferred. CRDTs stored in the map may
 %% have contexts and deferred operations, but as these are part of the
 %% state, they are stored under the field as an update like any other.
--type deferred() :: dict(context(), [field()]).
-
-%% used until we move to erlang 17 and can use dict:dict/2
--type dict(_A, _B) :: dict().
+-type deferred() :: [{context(), [field()]}].
 
 %% limited to only those mods that support both a shared causal
 %% context, and by extension, the reset-remove semantic.
@@ -237,12 +234,13 @@
 -type value() :: {field(), riak_dt_map:values() | integer() | [term()] | boolean() | term()}.
 -type precondition_error() :: {error, {precondition, {not_present, field()}}}.
 
+-define(FRESH_CLOCK, riak_dt_vclock:fresh()).
 -define(DICT, dict).
 
 %% @doc Create a new, empty Map.
 -spec new() -> map().
 new() ->
-    {riak_dt_vclock:fresh(), ?DICT:new(), ?DICT:new()}.
+    {riak_dt_vclock:fresh(), dict:new(), dict:new()}.
 
 %% @doc sets the clock in the map to that `Clock'. Used by a
 %% containing Map for sub-CRDTs
@@ -253,28 +251,10 @@ parent_clock(Clock, {_MapClock, Values, Deferred}) ->
 %% @doc get the current set of values for this Map
 -spec value(map()) -> values().
 value({_Clock, Values, _Deferred}) ->
-    lists:sort(?DICT:fold(fun({Name, Type}, CRDTs, Acc) ->
-                                  Merged = merge_crdts(Type, CRDTs),
-                                  [{{Name, Type}, Type:value(Merged)} | Acc] end,
-                          [],
-                          Values)).
-
-%% @private merge entry for field, if present, or return new if not
-merge_field({_Name, Type}, error) ->
-    Type:new();
-merge_field({_Name, Type}, {ok, CRDTs}) ->
-    merge_crdts(Type, CRDTs);
-merge_field(Field, Values) ->
-    merge_field(Field, ?DICT:find(Field, Values)).
-
-%% @private merge the CRDTs of a type
-merge_crdts(Type, {CRDTs, TS}) ->
-    V = ?DICT:fold(fun(_Dot, CRDT, CRDT0) ->
-                             Type:merge(CRDT0, CRDT) end,
-                     Type:new(),
-                     CRDTs),
-    %% Merge with the tombstone to drop any removed dots
-    Type:merge(TS, V).
+    lists:sort(dict:fold(fun({Name, Type}, {_Dots, CRDT}, Acc) ->
+                                 [{{Name, Type}, Type:value(CRDT)} | Acc] end,
+                         [],
+                         Values)).
 
 %% @doc query map (not implemented yet)
 -spec value(term(), map()) -> values().
@@ -327,6 +307,24 @@ update_clock(Actor, Clock) ->
     Dot = {Actor, riak_dt_vclock:get_counter(Actor, NewClock)},
     {Dot, NewClock}.
 
+get({_Name, Type}=Field, Fields, Clock) ->
+    CRDT = case dict:find(Field, Fields) of
+               {ok, {_Dots, CRDT0}} ->
+                   CRDT0;
+               error ->
+                   Type:new()
+           end,
+    Type:parent_clock(Clock, CRDT).
+
+get_entry({_Name, Type}=Field, Fields, Clock) ->
+    {Dots, CRDT} = case dict:find(Field, Fields) of
+                       {ok, Entry} ->
+                           Entry;
+                       error ->
+                           {[], Type:new()}
+                   end,
+    {Dots, Type:parent_clock(Clock, CRDT)}.
+
 %% @private
 -spec apply_ops([map_field_update() | map_field_op()], riak_dt:dot(),
                 {riak_dt_vclock:vclock(), entries() , deferred()}, context()) ->
@@ -334,17 +332,11 @@ update_clock(Actor, Clock) ->
 apply_ops([], _Dot, Map, _Ctx) ->
     {ok, Map};
 apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock, Values, Deferred}, Ctx) ->
-    CRDT = merge_field(Field, Values),
-    CRDT1 = Type:parent_clock(Clock, CRDT),
-    case Type:update(Op, Dot, CRDT1, Ctx) of
-        {ok, Updated} ->
-            NewValues = ?DICT:store(Field, {?DICT:store(Dot, Updated, ?DICT:new()),
-                                              %% old tombstone was
-                                              %% merged into current
-                                              %% value so create a new
-                                              %% empty one
-                                              Type:new()}
-                                     , Values),
+    CRDT = get(Field, Values, Clock),
+    case Type:update(Op, Dot, CRDT, Ctx) of
+        {ok, Updated0} ->
+            Updated = Type:parent_clock(?FRESH_CLOCK, Updated0),
+            NewValues = dict:store(Field, {[Dot], Updated}, Values),
             apply_ops(Rest, Dot, {Clock, NewValues, Deferred}, Ctx);
         Error ->
             Error
@@ -372,27 +364,27 @@ apply_ops([{remove, Field} | Rest], Dot, Map, Ctx) ->
 -spec remove_field(field(), map(), context()) ->
                           {ok, map()} | precondition_error().
 remove_field(Field, {Clock, Values, Deferred}, undefined) ->
-    case ?DICT:find(Field, Values) of
+    case dict:find(Field, Values) of
         error ->
             {error, {precondition, {not_present, Field}}};
         {ok, _Removed} ->
-            {ok, {Clock, ?DICT:erase(Field, Values), Deferred}}
+            {ok, {Clock, dict:erase(Field, Values), Deferred}}
     end;
 %% Context removes
 remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
     Deferred = defer_remove(Clock, Ctx, Field, Deferred0),
     NewValues = case ctx_rem_field(Field, Values, Ctx, Clock) of
                     empty ->
-                        ?DICT:erase(Field, Values);
-                    CRDTs ->
-                        ?DICT:store(Field, CRDTs, Values)
+                        dict:erase(Field, Values);
+                    CRDT ->
+                        dict:store(Field, CRDT, Values)
                 end,
     {ok, {Clock, NewValues, Deferred}}.
 
 %% @private drop dominated fields
 ctx_rem_field(_Field, error, _Ctx_, _Clock) ->
     empty;
-ctx_rem_field({_, Type}, {ok, {CRDTs, TS0}}, Ctx, MapClock) ->
+ctx_rem_field({_, Type}, {ok, {Dots, CRDT}}, Ctx, MapClock) ->
     %% Drop dominated fields, and update the tombstone.
     %%
     %% If the context is removing a field at dot {a, 1} and the
@@ -403,19 +395,18 @@ ctx_rem_field({_, Type}, {ok, {CRDTs, TS0}}, Ctx, MapClock) ->
     %%
     TombstoneClock = riak_dt_vclock:glb(Ctx, MapClock), %% GLB is events seen by both clocks only
     TS = Type:parent_clock(TombstoneClock, Type:new()),
-    Remaining = ?DICT:filter(fun(Dot, _CRDT) ->
-                                       is_dot_unseen(Dot, Ctx)
-                               end,
-                           CRDTs),
-    case ?DICT:size(Remaining) of
-        0 -> %% Ctx remove removed all dots for field
+    SurvivingDots = riak_dt_vclock:subtract_dots(Dots, Ctx),
+    case SurvivingDots of
+        [] -> %% Ctx remove removed all dots for field
             empty;
         _ ->
             %% Update the tombstone with the GLB clock
-            {Remaining, Type:merge(TS, TS0)}
+            CRDT2 = Type:merge(TS, Type:parent_clock(MapClock, CRDT)),
+            %% Always reset to empty clock so we don't duplicate storage
+            {SurvivingDots, Type:parent_clock(?FRESH_CLOCK, CRDT2)}
     end;
 ctx_rem_field(Field, Values, Ctx, MapClock) ->
-    ctx_rem_field(Field, ?DICT:find(Field, Values), Ctx, MapClock).
+    ctx_rem_field(Field, dict:find(Field, Values), Ctx, MapClock).
 
 %% @private If we're asked to remove something we don't have (or have,
 %% but maybe not all 'updates' for it), is it because we've not seen
@@ -436,132 +427,46 @@ defer_remove(Clock, Ctx, Field, Deferred) ->
     case riak_dt_vclock:descends(Clock, Ctx) of
         %% no need to save this remove, we're done
         true -> Deferred;
-        false -> ?DICT:update(Ctx,
+        false -> dict:update(Ctx,
                                 fun(Fields) ->
                                         ordsets:add_element(Field, Fields) end,
                                 ordsets:add_element(Field, ordsets:new()),
                                 Deferred)
     end.
 
-%% @doc merge two `map()'s.
--spec merge(map(), map()) -> map().
-merge(Map, Map) ->
-    Map;
-%% @TODO is there a way to optimise this, based on clocks maybe?
 merge({LHSClock, LHSEntries, LHSDeferred}, {RHSClock, RHSEntries, RHSDeferred}) ->
     Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
-    {CommonKeys, LHSUnique, RHSUnique} = key_sets(LHSEntries, RHSEntries),
-    Acc0 = filter_unique(LHSUnique, LHSEntries, RHSClock, ?DICT:new()),
-    Acc1 = filter_unique(RHSUnique, RHSEntries, LHSClock, Acc0),
-    Entries = merge_common(CommonKeys, LHSEntries, RHSEntries, LHSClock, RHSClock, Acc1),
-    Deferred = merge_deferred(RHSDeferred, LHSDeferred),
+    Fields = lists:umerge(dict:fetch_keys(LHSEntries), dict:fetch_keys(RHSEntries)),
+    Entries = lists:foldl(fun({_Name, Type}=Field, Acc) ->
+                                  {LHSDots, LHSCRDT} = get_entry(Field, LHSEntries, LHSClock),
+                                  {RHSDots, RHSCRDT} = get_entry(Field, RHSEntries, RHSClock),
+                                  case keep_dots(LHSDots, RHSDots, LHSClock, RHSClock) of
+                                      [] ->
+                                          Acc;
+                                      Dots ->
+                                          CRDT = Type:merge(LHSCRDT, RHSCRDT),
+                                          %% Yes! Reset the clock, again
+                                          dict:store(Field, {Dots, Type:parent_clock(?FRESH_CLOCK, CRDT)}, Acc)
+                                  end
+                          end,
+                          dict:new(),
+                          Fields),
+    Deferred = merge_deferred(LHSDeferred, RHSDeferred),
     apply_deferred(Clock, Entries, Deferred).
 
-%% @private filter the set of fields that are on one side of a merge
-%% only.
--spec filter_unique(set(), entries(), riak_dt_vclock:vclock(), entries()) -> entries().
-filter_unique(FieldSet, Entries, Clock, Acc) ->
-    sets:fold(fun({_Name, Type}=Field, Keep) ->
-                      {Dots, TS} = ?DICT:fetch(Field, Entries),
-                      KeepDots = ?DICT:filter(fun(Dot, _CRDT) ->
-                                                      is_dot_unseen(Dot, Clock)
-                                              end,
-                                              Dots),
+keep_dots(LHSDots, RHSDots, LHSClock, RHSClock) ->
+    CommonDots = sets:intersection(sets:from_list(LHSDots), sets:from_list(RHSDots)),
+    LHSUnique = sets:to_list(sets:subtract(sets:from_list(LHSDots), CommonDots)),
+    RHSUnique = sets:to_list(sets:subtract(sets:from_list(RHSDots), CommonDots)),
+    LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, RHSClock),
+    RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, LHSClock),
+    riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]).
 
-                      case ?DICT:size(KeepDots) of
-                          0 ->
-                              Keep;
-                          _ ->
-                              %% create a tombstone since the
-                              %% otherside does not have this field,
-                              %% it either removed it, or never had
-                              %% it. If it never had it, the removing
-                              %% dots in the tombstone will have no
-                              %% impact on the value, if the otherside
-                              %% removed it, then the removed dots
-                              %% will be propogated by the tombstone.
-                              Tombstone = Type:merge(TS, Type:parent_clock(Clock, Type:new())),
-                              ?DICT:store(Field, {KeepDots, Tombstone}, Keep)
-                      end
-              end,
-              Acc,
-              FieldSet).
-
-%% @private predicate function, `true' if the provided `dot()' is
-%% concurrent with the clock, `false' if the clock has seen the dot.
--spec is_dot_unseen(riak_dt:dot(), riak_dt_vclock:vclock()) -> boolean().
-is_dot_unseen(Dot, Clock) ->
-    not riak_dt_vclock:descends(Clock, [Dot]).
-
-%% @doc Get the keys from an ?DICT as a set
--spec key_set(?DICT()) -> set().
-key_set(Dict) ->
-    sets:from_list(?DICT:fetch_keys(Dict)).
-
-%% @doc break the keys from an two ?DICTs out into three sets, the
-%% common keys, those unique to one, and those unique to the other.
--spec key_sets(?DICT(), ?DICT()) -> {set(), set(), set()}.
-key_sets(LHS, RHS) ->
-    LHSet = key_set(LHS),
-    RHSet = key_set(RHS),
-    {sets:intersection(LHSet, RHSet),
-     sets:subtract(LHSet, RHSet),
-     sets:subtract(RHSet, LHSet)}.
-
-
-%% @private for a set of dots (that are unique to one side) decide
-%% whether to keep, or drop each.
--spec filter_dots(set(), ?DICT(), riak_dt_vclock:vclock()) -> entries().
-filter_dots(Dots, CRDTs, Clock) ->
-    DotsToKeep = sets:filter(fun(Dot) ->
-                                     is_dot_unseen(Dot, Clock)
-                             end,
-                             Dots),
-
-    ?DICT:filter(fun(Dot, _CRDT) ->
-                           sets:is_element(Dot, DotsToKeep)
-                   end,
-                   CRDTs).
-
-%% @private merge the common fields into a set of surviving dots and a
-%% tombstone per field.  If a dot is on both sides, keep it. If it is
-%% only on one side, drop it if dominated by the otheride's clock.
-merge_common(FieldSet, LHS, RHS, LHSClock , RHSClock, Acc) ->
-    sets:fold(fun({_, Type}=Field, Keep) ->
-                      {LHSDots, LHTS} = ?DICT:fetch(Field, LHS),
-                      {RHSDots, RHTS} = ?DICT:fetch(Field, RHS),
-                      {CommonDots, LHSUniqe, RHSUnique} = key_sets(LHSDots, RHSDots),
-                      TS = Type:merge(RHTS, LHTS),
-
-                      CommonSurviving = sets:fold(fun(Dot, Common) ->
-                                                          L = ?DICT:fetch(Dot, LHSDots),
-                                                          ?DICT:store(Dot, L, Common)
-                                                  end,
-                                                  ?DICT:new(),
-                                                  CommonDots),
-
-                      LHSSurviving = filter_dots(LHSUniqe, LHSDots, RHSClock),
-                      RHSSurviving = filter_dots(RHSUnique, RHSDots, LHSClock),
-
-                      Dots = ?DICT:from_list(lists:merge([?DICT:to_list(CommonSurviving),
-                                                          ?DICT:to_list(LHSSurviving),
-                                                          ?DICT:to_list(RHSSurviving)])),
-
-                      case ?DICT:size(Dots) of
-                          0 ->
-                              Keep;
-                          _ ->
-                              ?DICT:store(Field, {Dots, TS}, Keep)
-                      end
-
-              end,
-              Acc,
-              FieldSet).
 
 %% @private
 -spec merge_deferred(deferred(), deferred()) -> deferred().
 merge_deferred(LHS, RHS) ->
-    ?DICT:merge(fun(_K, LH, RH) ->
+    dict:merge(fun(_K, LH, RH) ->
                           ordsets:union(LH, RH) end,
                   LHS, RHS).
 
@@ -597,19 +502,11 @@ equal({Clock1, Values1, Deferred1}, {Clock2, Values2, Deferred2}) ->
         pairwise_equals(lists:sort(?DICT:to_list(Values1)),
                         lists:sort(?DICT:to_list(Values2))).
 
--spec pairwise_equals([field()], [field()]) -> boolean().
+-spec pairwise_equals(entries(), entries()) -> boolean().
 pairwise_equals([], []) ->
     true;
-pairwise_equals([{{Name, Type}, {Dots1, TS1}}| Rest1], [{{Name, Type}, {Dots2, TS2}}|Rest2]) ->
-    %% Tombstones don't need to be equal. When we merge with a map
-    %% where one side is absent, we take the absent sides clock, when
-    %% we merge where both sides have a field, we merge the
-    %% tombstones, and apply deferred. The deferred remove uses a glb
-    %% of the context and the clock, meaning we get a smaller
-    %% tombstone. Both are correct when it comes to determining the
-    %% final value. As long as tombstones are not conflicting (that is
-    %% A == B | A > B | B > A)
-    case {?DICT:fetch_keys(Dots1) == ?DICT:fetch_keys(Dots2), Type:equal(TS1, TS2)} of
+pairwise_equals([{{Name, Type}, {Dots1, CRDT1}}|Rest1], [{{Name, Type}, {Dots2, CRDT2}}|Rest2]) ->
+    case {riak_dt_vclock:equal(Dots1, Dots2), Type:equal(CRDT1, CRDT2)} of
         {true, true} ->
             pairwise_equals(Rest1, Rest2);
         _ ->
@@ -636,24 +533,17 @@ precondition_context({Clock, _Field, _Deferred}) ->
 %%                   of lag/staleness.
 -spec stats(map()) -> [{atom(), integer()}].
 stats(Map) ->
-    [ {S, stat(S, Map)} || S <- [actor_count, field_count, duplication, deferred_length]].
+    [ {S, stat(S, Map)} || S <- [actor_count, field_count, deferred_length]].
 
 -spec stat(atom(), map()) -> number() | undefined.
 stat(actor_count, {Clock, _, _}) ->
     length(Clock);
 stat(field_count, {_, Fields, _}) ->
     ?DICT:size(Fields);
-stat(duplication, {_, Fields, _}) ->
-    %% Number of duplicated fields
-    {FieldCnt, Duplicates} = ?DICT:fold(fun(_Field, {Dots ,_}, {FCnt, DCnt}) ->
-                                                  {FCnt+1, DCnt + ?DICT:size(Dots)}
-                                          end,
-                                          {0, 0},
-                                          Fields),
-    Duplicates - FieldCnt;
 stat(deferred_length, {_, _, Deferred}) ->
     ?DICT:size(Deferred);
 stat(_,_) -> undefined.
+
 
 -include("riak_dt_tags.hrl").
 -define(TAG, ?DT_MAP_TAG).
@@ -735,6 +625,7 @@ from_binary(?V2_VERS, <<?TAG:8/integer, ?V2_VERS:8/integer, B/binary>>) ->
 from_binary(?V2_VERS, <<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
     Map= riak_dt:from_binary(B),
     to_v2(Map).
+
 
 %% ===================================================================
 %% EUnit tests
@@ -886,18 +777,14 @@ stat_test() ->
     {ok, Map2} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"foo">>, 3}}]}, a2, Map1),
     {ok, Map3} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"bar">>, 4}}]}, a3, Map1),
     Map4 = merge(Map2, Map3),
-    ?assertEqual([{actor_count, 0}, {field_count, 0}, {duplication, 0}, {deferred_length, 0}], stats(Map)),
+    ?assertEqual([{actor_count, 0}, {field_count, 0}, {deferred_length, 0}], stats(Map)),
     ?assertEqual(3, stat(actor_count, Map4)),
     ?assertEqual(5, stat(field_count, Map4)),
     ?assertEqual(undefined, stat(waste_pct, Map4)),
-    ?assertEqual(1, stat(duplication, Map4)),
     {ok, Map5} = update({update, [{update, {l3, riak_dt_lwwreg}, {assign, <<"baz">>, 5}}]}, a3, Map4),
     ?assertEqual(6, stat(field_count, Map5)),
-    ?assertEqual(1, stat(duplication, Map5)),
-    %% Updating field {l, riak_dt_lwwreg} merges the duplicates to a single field
     %% @see apply_ops
     {ok, Map6} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"bim">>, 6}}]}, a2, Map5),
-    ?assertEqual(0, stat(duplication, Map6)),
     {ok, Map7} = update({update, [{remove, {l, riak_dt_lwwreg}}]}, a1, Map6),
     ?assertEqual(5, stat(field_count, Map7)).
 
@@ -909,24 +796,6 @@ equals_test() ->
     D = merge(B, A),
     ?assert(equal(C, D)),
     ?assert(equal(A, A)).
-
-%% up/downgrade tests
-v1_v2_test() ->
-    {ok, Map} = update({update, [{update, {<<"set">>, riak_dt_orswot}, {add_all, [<<"bar">>, <<"baz">>]}}]}, a, new()),
-    V2Bin = to_binary(?V2_VERS, Map),
-    V1Bin = to_binary(?V1_VERS, Map),
-    Map2 = from_binary(?V2_VERS, V1Bin),
-    V1Map = from_binary(?V1_VERS, V1Bin),
-    V1MapFromV2 = from_binary(?V1_VERS, V2Bin),
-    ?assertMatch(<<?TAG:8/integer, ?V1_VERS:8/integer, _/binary>>, V1Bin),
-    ?assertMatch(<<?TAG:8/integer, ?V2_VERS:8/integer, _/binary>>, V2Bin),
-    ?assert(equal(Map, Map2)),
-    ?assertEqual(V1MapFromV2, V1Map),
-    ?assertEqual(V2Bin, to_binary(Map)),
-    ?assertEqual(V1Bin, to_binary(?V1_VERS, V1Map)),
-    ?assert(equal(Map, from_binary(V2Bin))),
-    ?assert(equal(Map, from_binary(V1Bin))),
-    ?assert(equal(Map, from_binary(?V2_VERS, V2Bin))).
 
 -ifdef(EQC).
 -define(NUMTESTS, 1000).
@@ -974,9 +843,9 @@ gen_field(Size) ->
     , elements([
                 riak_dt_emcntr,
                 riak_dt_orswot,
-                riak_dt_lwwreg,
+%%                riak_dt_lwwreg,
                 riak_dt_od_flag
-               ] ++ [riak_dt_map || Size > 0])}.
+               ] ++ [?MODULE || Size > 0])}.
 
 gen_field_op({_Name, Type}, Size) ->
     Type:gen_op(Size).
