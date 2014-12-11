@@ -27,7 +27,7 @@
 
 -export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1, stats/1, stat/2]).
 -export([update/4, parent_clock/2]).
--export([to_binary/2, from_binary/2]).
+-export([to_binary/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -106,17 +106,17 @@ equal(_,_) -> false.
 -define(TAG, ?DT_OE_FLAG_TAG).
 -define(VSN1, 1).
 
--spec from_binary(binary()) -> oe_flag().
+-spec from_binary(binary()) -> {ok, oe_flag()} | ?UNSUPPORTED_VERSION | ?INVALID_BINARY.
 from_binary(<<?TAG:8, ?VSN1:8, BFlag:8, VClock/binary>>) ->
     Flag = case BFlag of
                1 -> true;
                0 -> false
            end,
-    {riak_dt_vclock:from_binary(VClock), Flag}.
-
--spec from_binary(Vers :: 1, binary()) -> oe_flag().
-from_binary(1, Flag) ->
-    from_binary(Flag).
+    {ok, {riak_dt_vclock:from_binary(VClock), Flag}};
+from_binary(<<?TAG:8, Vers:8, _BFlag/binary>>) ->
+    ?UNSUPPORTED_VERSION(Vers);
+from_binary(_B) ->
+    ?INVALID_BINARY.
 
 -spec to_binary(oe_flag()) -> binary().
 to_binary({Clock, Flag}) ->
@@ -127,9 +127,11 @@ to_binary({Clock, Flag}) ->
     VCBin = riak_dt_vclock:to_binary(Clock),
     <<?TAG:8, ?VSN1:8, BFlag:8, VCBin/binary>>.
 
--spec to_binary(Vers :: 1, oe_flag()) -> binary().
+-spec to_binary(Vers :: pos_integer(), oe_flag()) -> {ok, binary()} | ?UNSUPPORTED_VERSION.
 to_binary(1, Flag) ->
-    to_binary(Flag).
+    {ok, to_binary(Flag)};
+to_binary(Vers, _F) ->
+    ?UNSUPPORTED_VERSION(Vers).
 
 -spec stats(oe_flag()) -> [{atom(), integer()}].
 stats(OEF) ->

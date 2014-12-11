@@ -48,7 +48,7 @@
 -export([new/0, value/1, value/2]).
 -export([update/3, merge/2, equal/2]).
 -export([to_binary/1, from_binary/1]).
--export([to_binary/2, from_binary/2]).
+-export([to_binary/2]).
 -export([stats/1, stat/2]).
 -export([parent_clock/2, update/4]).
 
@@ -229,20 +229,24 @@ to_binary(Cntr) ->
     Bin = term_to_binary(Cntr),
     <<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>.
 
--spec to_binary(Vers :: 1, emcntr()) -> binary().
+-spec to_binary(Vers :: pos_integer(), emcntr()) -> {ok, binary()} | ?UNSUPPORTED_VERSION.
 to_binary(1, Cntr) ->
-    to_binary(Cntr).
+    B = to_binary(Cntr),
+    {ok, B};
+to_binary(Vers, _Cntr) ->
+    ?UNSUPPORTED_VERSION(Vers).
 
 %% @doc Decode a binary encoded riak_dt_emcntr.
 %%
 %% @see to_binary/1
--spec from_binary(binary()) -> emcntr().
+-spec from_binary(binary()) -> {ok, emcntr()} | ?INVALID_BINARY | ?UNSUPPORTED_VERSION.
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
-    binary_to_term(Bin).
+    {ok, binary_to_term(Bin)};
+from_binary(<<?TAG:8/integer, Vers:8/integer, _Bin/binary>>) ->
+    ?UNSUPPORTED_VERSION(Vers);
+from_binary(_Bin) ->
+    ?INVALID_BINARY.
 
--spec from_binary(Vers :: 1, binary()) -> emcntr().
-from_binary(1, B) ->
-    from_binary(B).
 
 %% ===================================================================
 %% EUnit tests
@@ -405,7 +409,7 @@ roundtrip_bin_test() ->
     {ok, PN3} = update(increment, {[{very, ["Complex"], <<"actor">>}, honest], 900987}, PN2),
     {ok, PN4} = update(decrement, {"another_acotr", 28}, PN3),
     Bin = to_binary(PN4),
-    Decoded = from_binary(Bin),
+    {ok, Decoded} = from_binary(Bin),
     ?assert(equal(PN4, Decoded)).
 
 stat_test() ->

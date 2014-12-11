@@ -25,6 +25,8 @@
 -export([to_binary/1, from_binary/1, dict_to_orddict/1]).
 -export_type([actor/0, dot/0, crdt/0, context/0]).
 
+-include("riak_dt_tags.hrl").
+
 -type crdt() :: term().
 -type operation() :: term().
 -type actor() :: term().
@@ -48,10 +50,10 @@
 -callback equal(crdt(), crdt()) -> boolean().
 -callback to_binary(crdt()) -> binary().
 -callback to_binary(TargetVers :: pos_integer(), crdt()) ->
-     binary().
--callback from_binary(binary()) -> crdt().
--callback from_binary(TargetVers :: pos_integer(), binary()) ->
-    crdt().
+     {ok, binary()} | ?UNSUPPORTED_VERSION.
+-callback from_binary(binary()) -> {ok, crdt()} |
+                                   ?INVALID_BINARY |
+                                   ?UNSUPPORTED_VERSION.
 
 -callback stats(crdt()) -> [{atom(), number()}].
 -callback stat(atom(), crdt()) -> number() | undefined.
@@ -80,4 +82,4 @@ from_binary(Binary) ->
 %% @private
 -spec dict_to_orddict(dict()) -> orddict:orddict().
 dict_to_orddict(Dict) ->
-    orddict:from_list(dict:to_list(Dict)).
+    lists:sort(dict:to_list(Dict)).

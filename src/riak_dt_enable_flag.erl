@@ -31,7 +31,7 @@
 
 -export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1, stats/1, stat/2]).
 -export([update/4, parent_clock/2]).
--export([to_binary/2, from_binary/2]).
+-export([to_binary/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -82,22 +82,21 @@ merge(FA, FB) ->
 equal(FA,FB) ->
     FA =:= FB.
 
--spec from_binary(binary()) -> enable_flag().
-from_binary(<<?TAG:7, 0:1>>) -> off;
-from_binary(<<?TAG:7, 1:1>>) -> on.
-
--spec from_binary(Vers :: 1, binary()) -> enable_flag().
-from_binary(1, B) ->
-    from_binary(B).
+-spec from_binary(binary()) -> {ok, enable_flag()} | ?INVALID_BINARY.
+from_binary(<<?TAG:7, 0:1>>) -> {ok, off};
+from_binary(<<?TAG:7, 1:1>>) -> {ok, on};
+from_binary(_B) -> ?INVALID_BINARY.
 
 -spec to_binary(enable_flag()) -> binary().
 to_binary(off) -> <<?TAG:7, 0:1>>;
 to_binary(on) -> <<?TAG:7, 1:1>>.
 
--spec to_binary(Vers :: 1, enable_flag()) ->
-                       binary().
+-spec to_binary(Vers :: pos_integer(), enable_flag()) ->
+                       {ok, binary()} | ?UNSUPPORTED_VERSION.
 to_binary(1, Flag) ->
-    to_binary(Flag).
+    {ok, to_binary(Flag)};
+to_binary(Vers, _Flag) ->
+    ?UNSUPPORTED_VERSION(Vers).
 
 -spec stats(enable_flag()) -> [{atom(), number()}].
 stats(_) -> [].

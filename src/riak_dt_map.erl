@@ -178,7 +178,7 @@
 %% API
 -export([new/0, value/1, value/2, update/3, update/4]).
 -export([merge/2, equal/2, to_binary/1, from_binary/1]).
--export([to_binary/2, from_binary/2]).
+-export([to_binary/2]).
 -export([precondition_context/1, stats/1, stat/2]).
 -export([parent_clock/2]).
 
@@ -658,7 +658,6 @@ stat(_,_) -> undefined.
 -include("riak_dt_tags.hrl").
 -define(TAG, ?DT_MAP_TAG).
 -define(V1_VERS, 1).
--define(V2_VERS, 2).
 
 %% @doc returns a binary representation of the provided `map()'. The
 %% resulting binary is tagged and versioned for ease of future
@@ -670,17 +669,17 @@ stat(_,_) -> undefined.
 %% @see `from_binary/1'
 -spec to_binary(map()) -> binary_map().
 to_binary(Map) ->
-    to_binary(?V2_VERS, Map).
+    {ok, B} = to_binary(?V1_VERS, Map),
+    B.
 
 %% @private encode v1 maps as v2, and vice versa. The first argument
 %% is the target binary type.
--spec to_binary(1 | 2, map()) -> binary_map().
-to_binary(?V2_VERS, Map0) ->
-    Map = to_v2(Map0),
-    <<?TAG:8/integer, ?V2_VERS:8/integer, (riak_dt:to_binary(Map))/binary>>;
+-spec to_binary(Vers :: pos_integer(), map()) -> {ok, binary_map()} | ?UNSUPPORTED_VERSION.
 to_binary(?V1_VERS, Map0) ->
     Map = to_v1(Map0),
-    <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(Map))/binary>>.
+    {ok, <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(Map))/binary>>};
+to_binary(Vers, _Map) ->
+    ?UNSUPPORTED_VERSION(Vers).
 
 %% @private transpose a v1 map (orddicts) to a v2 (dicts)
 -spec to_v2({riak_dt_vclock:vclock(), orddict:orddict() | dict(),
@@ -712,29 +711,16 @@ to_v1({Clock, Fields0, Deferred0}) ->
 %% `to_binary/1' will return the original `map()'.
 %%
 %% @see `to_binary/1'
--spec from_binary(binary_map()) -> map().
+-spec from_binary(binary_map()) -> {ok, map()} | ?UNSUPPORTED_VERSION | ?INVALID_BINARY.
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
     Map = riak_dt:from_binary(B),
-    %% upgrade v1 structure to v2
-    to_v2(Map);
-from_binary(<<?TAG:8/integer, ?V2_VERS:8/integer, B/binary>>) ->
-    riak_dt:from_binary(B).
-
-%% @doc When the 2nd argument is a `binary_map()' produced by
-%% either `to_binary/1' or `to_binary/2' and the first is a valid
-%% version (`1' or `2' at present) will return an `map()' in the
-%% correct `TargetVersion'
--spec from_binary(TargetVersion :: 1 | 2, binary_map()) -> map().
-from_binary(?V1_VERS, <<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
-    riak_dt:from_binary(B);
-from_binary(?V1_VERS, <<?TAG:8/integer, ?V2_VERS:8/integer, B/binary>>) ->
-    Map = riak_dt:from_binary(B),
-    to_v1(Map);
-from_binary(?V2_VERS, <<?TAG:8/integer, ?V2_VERS:8/integer, B/binary>>) ->
-    riak_dt:from_binary(B);
-from_binary(?V2_VERS, <<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
-    Map= riak_dt:from_binary(B),
-    to_v2(Map).
+    %% upgrade ondisk v1/v2 structure to v2 term. We use lists of disk
+    %% as tha works fine for both orddict and list
+    {ok, to_v2(Map)};
+from_binary(<<?TAG:8/integer, Vers:8/integer, _B/binary>>) ->
+    ?UNSUPPORTED_VERSION(Vers);
+from_binary(_B) ->
+    ?INVALID_BINARY.
 
 %% ===================================================================
 %% EUnit tests
@@ -910,23 +896,23 @@ equals_test() ->
     ?assert(equal(C, D)),
     ?assert(equal(A, A)).
 
-%% up/downgrade tests
-v1_v2_test() ->
-    {ok, Map} = update({update, [{update, {<<"set">>, riak_dt_orswot}, {add_all, [<<"bar">>, <<"baz">>]}}]}, a, new()),
-    V2Bin = to_binary(?V2_VERS, Map),
-    V1Bin = to_binary(?V1_VERS, Map),
-    Map2 = from_binary(?V2_VERS, V1Bin),
-    V1Map = from_binary(?V1_VERS, V1Bin),
-    V1MapFromV2 = from_binary(?V1_VERS, V2Bin),
-    ?assertMatch(<<?TAG:8/integer, ?V1_VERS:8/integer, _/binary>>, V1Bin),
-    ?assertMatch(<<?TAG:8/integer, ?V2_VERS:8/integer, _/binary>>, V2Bin),
-    ?assert(equal(Map, Map2)),
-    ?assertEqual(V1MapFromV2, V1Map),
-    ?assertEqual(V2Bin, to_binary(Map)),
-    ?assertEqual(V1Bin, to_binary(?V1_VERS, V1Map)),
-    ?assert(equal(Map, from_binary(V2Bin))),
-    ?assert(equal(Map, from_binary(V1Bin))),
-    ?assert(equal(Map, from_binary(?V2_VERS, V2Bin))).
+%% %% up/downgrade tests
+%% v1_v2_test() ->
+%%     {ok, Map} = update({update, [{update, {<<"set">>, riak_dt_orswot}, {add_all, [<<"bar">>, <<"baz">>]}}]}, a, new()),
+%%     V2Bin = to_binary(?V2_VERS, Map),
+%%     V1Bin = to_binary(?V1_VERS, Map),
+%%     Map2 = from_binary(?V2_VERS, V1Bin),
+%%     V1Map = from_binary(?V1_VERS, V1Bin),
+%%     V1MapFromV2 = from_binary(?V1_VERS, V2Bin),
+%%     ?assertMatch(<<?TAG:8/integer, ?V1_VERS:8/integer, _/binary>>, V1Bin),
+%%     ?assertMatch(<<?TAG:8/integer, ?V2_VERS:8/integer, _/binary>>, V2Bin),
+%%     ?assert(equal(Map, Map2)),
+%%     ?assertEqual(V1MapFromV2, V1Map),
+%%     ?assertEqual(V2Bin, to_binary(Map)),
+%%     ?assertEqual(V1Bin, to_binary(?V1_VERS, V1Map)),
+%%     ?assert(equal(Map, from_binary(V2Bin))),
+%%     ?assert(equal(Map, from_binary(V1Bin))),
+%%     ?assert(equal(Map, from_binary(?V2_VERS, V2Bin))).
 
 -ifdef(EQC).
 -define(NUMTESTS, 1000).

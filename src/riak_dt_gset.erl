@@ -36,7 +36,7 @@
 -export([new/0, value/1, update/3, merge/2, equal/2,
          to_binary/1, from_binary/1, value/2, stats/1, stat/2]).
 -export([update/4, parent_clock/2]).
--export([to_binary/2, from_binary/2]).
+-export([to_binary/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -106,23 +106,22 @@ equal(GSet1, GSet2) ->
 
 -spec to_binary(gset()) -> binary_gset().
 to_binary(GSet) ->
-    %% @TODO something smarter
-    <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(GSet))/binary>>.
+    <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(GSet))/binary>>.
 
--spec to_binary(Vers :: 1, gset()) -> binary().
+-spec to_binary(Vers :: pos_integer(), gset()) -> {ok, binary()} | ?UNSUPPORTED_VERSION.
 to_binary(1, S) ->
-    to_binary(S).
+    B = to_binary(S),
+    {ok, B};
+to_binary(Vers, _S) ->
+    ?UNSUPPORTED_VERSION(Vers).
 
--spec from_binary(binary()) -> gset().
+-spec from_binary(binary()) -> {ok, gset()} | ?UNSUPPORTED_VERSION | ?INVALID_BINARY.
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
-    %% @TODO something smarter
-    binary_to_term(Bin).
-
--spec from_binary(Vers :: 1, binary()) ->
-                         gset().
-from_binary(1, B) ->
-    from_binary(B).
-
+    {ok, riak_dt:from_binary(Bin)};
+from_binary(<<?TAG:8/integer, Vers:8/integer, _Bin/binary>>) ->
+    ?UNSUPPORTED_VERSION(Vers);
+from_binary(_B) ->
+    ?INVALID_BINARY.
 
 -spec stats(gset()) -> [{atom(), number()}].
 stats(GSet) ->

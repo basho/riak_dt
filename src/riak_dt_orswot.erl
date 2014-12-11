@@ -78,7 +78,7 @@
 -export([new/0, value/1, value/2]).
 -export([update/3, update/4, merge/2, equal/2]).
 -export([to_binary/1, from_binary/1]).
--export([to_binary/2, from_binary/2]).
+-export([to_binary/2]).
 -export([precondition_context/1, stats/1, stat/2]).
 -export([parent_clock/2]).
 
@@ -407,7 +407,6 @@ stat(_,_) -> undefined.
 -include("riak_dt_tags.hrl").
 -define(TAG, ?DT_ORSWOT_TAG).
 -define(V1_VERS, 1).
--define(V2_VERS, 2).
 
 %% @doc returns a binary representation of the provided
 %% `orswot()'. The resulting binary is tagged and versioned for ease
@@ -419,17 +418,17 @@ stat(_,_) -> undefined.
 %% @see `from_binary/1'
 -spec to_binary(orswot()) -> binary_orswot().
 to_binary(S) ->
-    to_binary(?V2_VERS, S).
+    {ok, B} = to_binary(?V1_VERS, S),
+    B.
 
 %% @private encode v1 sets as v2, and vice versa. The first argument
 %% is the target binary type.
--spec to_binary(1 | 2, orswot()) -> binary_orswot().
-to_binary(?V2_VERS, S0) ->
-    S = to_v2(S0),
-    <<?TAG:8/integer, ?V2_VERS:8/integer, (riak_dt:to_binary(S))/binary>>;
+-spec to_binary(Vers :: pos_integer(), orswot()) -> {ok, binary_orswot()} | ?UNSUPPORTED_VERSION.
 to_binary(?V1_VERS, S0) ->
     S = to_v1(S0),
-    <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(S))/binary>>.
+    {ok, <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(S))/binary>>};
+to_binary(Vers, _S0) ->
+    ?UNSUPPORTED_VERSION(Vers).
 
 %% @private transpose a v1 orswot (orddicts) to a v2 (dicts)
 -spec to_v2({riak_dt_vclock:vclock(), orddict:orddict() | dict(),
@@ -462,29 +461,15 @@ to_v1({Clock, Entries0, Deferred0}) ->
 %% `to_binary/1' will return the original `orswot()'.
 %%
 %% @see `to_binary/1'
--spec from_binary(binary_orswot()) -> orswot().
+-spec from_binary(binary_orswot()) -> {ok, orswot()} | ?UNSUPPORTED_VERSION | ?INVALID_BINARY.
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
     S = riak_dt:from_binary(B),
     %% Now upgrdae the structure to dict from orddict
-    to_v2(S);
-from_binary(<<?TAG:8/integer, ?V2_VERS:8/integer, B/binary>>) ->
-    riak_dt:from_binary(B).
-
-%% @doc When the 2nd argument is a `binary_orswot()' produced by
-%% either `to_binary/1' or `to_binary/2' and the first is a valid
-%% version (`1' or `2' at present) will return an `orswot()' in the
-%% correct `TargetVersion'
--spec from_binary(TargetVersion :: 1 | 2, binary_orswot()) -> orswot().
-from_binary(?V1_VERS, <<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
-    riak_dt:from_binary(B);
-from_binary(?V1_VERS, <<?TAG:8/integer, ?V2_VERS:8/integer, B/binary>>) ->
-    S = riak_dt:from_binary(B),
-    to_v1(S);
-from_binary(?V2_VERS, <<?TAG:8/integer, ?V2_VERS:8/integer, B/binary>>) ->
-    riak_dt:from_binary(B);
-from_binary(?V2_VERS, <<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
-    S = riak_dt:from_binary(B),
-    to_v2(S).
+    {ok, to_v2(S)};
+from_binary(<<?TAG:8/integer, Vers:8/integer, _B/binary>>) ->
+    ?UNSUPPORTED_VERSION(Vers);
+from_binary(_B) ->
+    ?INVALID_BINARY.
 
 %% ===================================================================
 %% EUnit tests
@@ -599,22 +584,22 @@ batch_order_test() ->
     ?assertEqual([<<"bar">>, <<"baz">>], value(Set5)).
 
 %% up/downgrade tests
-v1_v2_test() ->
-    {ok, Set} = update({add_all, [<<"bar">>, <<"baz">>]}, a, new()),
-    V2Bin = to_binary(?V2_VERS, Set),
-    V1Bin = to_binary(?V1_VERS, Set),
-    Set2 = from_binary(?V2_VERS, V1Bin),
-    V1Set = from_binary(?V1_VERS, V1Bin),
-    V1SetFromV2 = from_binary(?V1_VERS, V2Bin),
-    ?assertMatch(<<?TAG:8/integer, ?V1_VERS:8/integer, _/binary>>, V1Bin),
-    ?assertMatch(<<?TAG:8/integer, ?V2_VERS:8/integer, _/binary>>, V2Bin),
-    ?assert(equal(Set, Set2)),
-    ?assertEqual(V1SetFromV2, V1Set),
-    ?assertEqual(V2Bin, to_binary(Set)),
-    ?assertEqual(V1Bin, to_binary(?V1_VERS, V1Set)),
-    ?assert(equal(Set, from_binary(V2Bin))),
-    ?assert(equal(Set, from_binary(V1Bin))),
-    ?assert(equal(Set, from_binary(?V2_VERS, V2Bin))).
+%% v1_v2_test() ->
+%%     {ok, Set} = update({add_all, [<<"bar">>, <<"baz">>]}, a, new()),
+%%     V2Bin = to_binary(?V2_VERS, Set),
+%%     V1Bin = to_binary(?V1_VERS, Set),
+%%     Set2 = from_binary(?V2_VERS, V1Bin),
+%%     V1Set = from_binary(?V1_VERS, V1Bin),
+%%     V1SetFromV2 = from_binary(?V1_VERS, V2Bin),
+%%     ?assertMatch(<<?TAG:8/integer, ?V1_VERS:8/integer, _/binary>>, V1Bin),
+%%     ?assertMatch(<<?TAG:8/integer, ?V2_VERS:8/integer, _/binary>>, V2Bin),
+%%     ?assert(equal(Set, Set2)),
+%%     ?assertEqual(V1SetFromV2, V1Set),
+%%     ?assertEqual(V2Bin, to_binary(Set)),
+%%     ?assertEqual(V1Bin, to_binary(?V1_VERS, V1Set)),
+%%     ?assert(equal(Set, from_binary(V2Bin))),
+%%     ?assert(equal(Set, from_binary(V1Bin))),
+%%     ?assert(equal(Set, from_binary(?V2_VERS, V2Bin))).
 
 -ifdef(EQC).
 

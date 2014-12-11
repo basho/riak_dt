@@ -37,7 +37,7 @@
 
 -export([new/0, new/2, value/1, value/2,
          update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
--export([to_binary/2, from_binary/2, current_version/1, change_versions/3]).
+-export([to_binary/2, current_version/1, change_versions/3]).
 -export([parent_clock/2, update/4]).
 
 %% EQC API
@@ -166,19 +166,14 @@ stat(_, _) -> undefined.
 %% @doc Encode an effecient binary representation of `pncounter()'
 -spec to_binary(any_pncounter()) -> binary().
 to_binary(PNCnt) ->
-    to_binary(?V2_VERS, PNCnt).
+    {ok, B} = to_binary(?V2_VERS, PNCnt),
+    B.
 
-%% @doc Decode a binary encoded PN-Counter
--spec from_binary(binary()) -> pncounter().
-from_binary(Binary = <<?TAG:8/integer, _/binary>>) ->
-    from_binary(?V2_VERS, Binary).
-
-
--spec to_binary(version(), any_pncounter()) -> binary().
+-spec to_binary(version(), any_pncounter()) -> {ok, binary()} | ?UNSUPPORTED_VERSION.
 to_binary(?V2_VERS, PNCnt) ->
     Version = current_version(PNCnt),
     V2 = change_versions(Version, ?V2_VERS, PNCnt),
-    <<?TAG:8/integer, ?V2_VERS:8/integer, (riak_dt:to_binary(V2))/binary>>;
+    {ok, <<?TAG:8/integer, ?V2_VERS:8/integer, (riak_dt:to_binary(V2))/binary>>};
 to_binary(?V1_VERS, PNCnt) ->
     Version = current_version(PNCnt),
     {P,N} = change_versions(Version, ?V1_VERS, PNCnt),
@@ -186,22 +181,26 @@ to_binary(?V1_VERS, PNCnt) ->
     NBin = riak_dt_gcounter:to_binary(N),
     PBinLen = byte_size(PBin),
     NBinLen = byte_size(NBin),
-    <<?TAG:8/integer, ?V1_VERS:8/integer,
+    {ok, <<?TAG:8/integer, ?V1_VERS:8/integer,
       PBinLen:32/integer, PBin:PBinLen/binary,
-      NBinLen:32/integer, NBin:NBinLen/binary>>.
+           NBinLen:32/integer, NBin:NBinLen/binary>>};
+to_binary(Vers, _Cnt) ->
+    ?UNSUPPORTED_VERSION(Vers).
 
--spec from_binary(version(), binary()) -> any_pncounter().
-from_binary(?V2_VERS, <<?TAG:8/integer, ?V2_VERS:8/integer, PNBin/binary>>) ->
-    riak_dt:from_binary(PNBin);
-from_binary(?V1_VERS, <<?TAG:8/integer, ?V1_VERS:8/integer,
+-spec from_binary(binary()) -> {ok, any_pncounter()} | ?UNSUPPORTED_VERSION | ?INVALID_BINARY.
+from_binary(<<?TAG:8/integer, ?V2_VERS:8/integer, PNBin/binary>>) ->
+    {ok, riak_dt:from_binary(PNBin)};
+from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer,
                   PBinLen:32/integer, PBin:PBinLen/binary,
                   NBinLen:32/integer, NBin:NBinLen/binary>>) ->
-    OldStyleIncs = riak_dt_gcounter:from_binary(PBin),
-    OldStyleDecs = riak_dt_gcounter:from_binary(NBin),
-    {OldStyleIncs,OldStyleDecs};
-from_binary(OutVers, Binary = <<?TAG:8/integer, InVers:8/integer, _/binary>>) ->
-    OtherVers = from_binary(InVers, Binary),
-    change_versions(InVers, OutVers, OtherVers).
+    {ok, OldStyleIncs} = riak_dt_gcounter:from_binary(PBin),
+    {ok, OldStyleDecs} = riak_dt_gcounter:from_binary(NBin),
+    C = change_versions(?V1_VERS, ?V2_VERS, {OldStyleIncs, OldStyleDecs}),
+    {ok, C};
+from_binary(<<?TAG:8/integer, Vers:8/integer, _/binary>>) ->
+    ?UNSUPPORTED_VERSION(Vers);
+from_binary(_B) ->
+    ?INVALID_BINARY.
 
 -spec current_version(any_pncounter()) -> version().
 current_version(PNCnt) when is_list(PNCnt) ->
@@ -389,14 +388,14 @@ roundtrip_bin_test() ->
     {ok, PN3} = update(increment, [{very, ["Complex"], <<"actor">>}, honest], PN2),
     {ok, PN4} = update(decrement, "another_acotr", PN3),
     Bin = to_binary(PN4),
-    Decoded = from_binary(Bin),
+    {ok, Decoded} = from_binary(Bin),
     ?assert(equal(PN4, Decoded)).
 
 % This is kinda important, I should probably do more about this test.
 update_bin_test() ->
     OldPNCnt = {[{a,1}],[{b,3}]},
-    OldPNBin = to_binary(?V1_VERS, OldPNCnt),
-    NewPNCnt = from_binary(OldPNBin),
+    {ok, OldPNBin} = to_binary(?V1_VERS, OldPNCnt),
+    {ok, NewPNCnt} = from_binary(OldPNBin),
     ?assertEqual([{b,0,3},{a,1,0}], NewPNCnt).
 
 query_test() ->
