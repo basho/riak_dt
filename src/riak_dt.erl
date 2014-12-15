@@ -79,7 +79,7 @@ from_binary(Binary) ->
     binary_to_term(Binary).
 
 
-%% @private
+%% @private turns a dict into a sorted list of [{key, value}]
 -spec dict_to_orddict(dict()) -> orddict:orddict().
 dict_to_orddict(Dict) ->
     lists:sort(dict:to_list(Dict)).

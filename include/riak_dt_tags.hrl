@@ -37,6 +37,6 @@
 %% Other
 
 %% Error macros
--define(UNSUPPORTED_VERSION(V), {error, unsupported_version, Vers}).
+-define(UNSUPPORTED_VERSION(Vers), {error, unsupported_version, Vers}).
 -define(INVALID_BINARY, {error, invalid_binary}).
 -define(UNSUPPORTED_VERSION, {error, unsupported_version, Vers :: pos_integer()}).

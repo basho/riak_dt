@@ -896,23 +896,12 @@ equals_test() ->
     ?assert(equal(C, D)),
     ?assert(equal(A, A)).
 
-%% %% up/downgrade tests
-%% v1_v2_test() ->
-%%     {ok, Map} = update({update, [{update, {<<"set">>, riak_dt_orswot}, {add_all, [<<"bar">>, <<"baz">>]}}]}, a, new()),
-%%     V2Bin = to_binary(?V2_VERS, Map),
-%%     V1Bin = to_binary(?V1_VERS, Map),
-%%     Map2 = from_binary(?V2_VERS, V1Bin),
-%%     V1Map = from_binary(?V1_VERS, V1Bin),
-%%     V1MapFromV2 = from_binary(?V1_VERS, V2Bin),
-%%     ?assertMatch(<<?TAG:8/integer, ?V1_VERS:8/integer, _/binary>>, V1Bin),
-%%     ?assertMatch(<<?TAG:8/integer, ?V2_VERS:8/integer, _/binary>>, V2Bin),
-%%     ?assert(equal(Map, Map2)),
-%%     ?assertEqual(V1MapFromV2, V1Map),
-%%     ?assertEqual(V2Bin, to_binary(Map)),
-%%     ?assertEqual(V1Bin, to_binary(?V1_VERS, V1Map)),
-%%     ?assert(equal(Map, from_binary(V2Bin))),
-%%     ?assert(equal(Map, from_binary(V1Bin))),
-%%     ?assert(equal(Map, from_binary(?V2_VERS, V2Bin))).
+unsupported_version_test() ->
+    ?assertMatch(?UNSUPPORTED_VERSION(12), to_binary(12, new())),
+    ?assertMatch(?UNSUPPORTED_VERSION(8) , from_binary(<<?TAG:8/integer, 8:8/integer, (crypto:rand_bytes(22))/binary>>)).
+
+invalid_binary_test() ->
+    ?assertMatch(?INVALID_BINARY, from_binary(<<(crypto:rand_bytes(187))/binary>>)).
 
 -ifdef(EQC).
 -define(NUMTESTS, 1000).

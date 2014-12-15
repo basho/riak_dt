@@ -583,24 +583,6 @@ batch_order_test() ->
     {ok, Set5} = update({add, <<"baz">>}, a, Set4),
     ?assertEqual([<<"bar">>, <<"baz">>], value(Set5)).
 
-%% up/downgrade tests
-%% v1_v2_test() ->
-%%     {ok, Set} = update({add_all, [<<"bar">>, <<"baz">>]}, a, new()),
-%%     V2Bin = to_binary(?V2_VERS, Set),
-%%     V1Bin = to_binary(?V1_VERS, Set),
-%%     Set2 = from_binary(?V2_VERS, V1Bin),
-%%     V1Set = from_binary(?V1_VERS, V1Bin),
-%%     V1SetFromV2 = from_binary(?V1_VERS, V2Bin),
-%%     ?assertMatch(<<?TAG:8/integer, ?V1_VERS:8/integer, _/binary>>, V1Bin),
-%%     ?assertMatch(<<?TAG:8/integer, ?V2_VERS:8/integer, _/binary>>, V2Bin),
-%%     ?assert(equal(Set, Set2)),
-%%     ?assertEqual(V1SetFromV2, V1Set),
-%%     ?assertEqual(V2Bin, to_binary(Set)),
-%%     ?assertEqual(V1Bin, to_binary(?V1_VERS, V1Set)),
-%%     ?assert(equal(Set, from_binary(V2Bin))),
-%%     ?assert(equal(Set, from_binary(V1Bin))),
-%%     ?assert(equal(Set, from_binary(?V2_VERS, V2Bin))).
-
 -ifdef(EQC).
 
 bin_roundtrip_test_() ->
