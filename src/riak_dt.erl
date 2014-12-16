@@ -22,8 +22,10 @@
 
 -module(riak_dt).
 
--export([to_binary/1, from_binary/1]).
+-export([to_binary/1, from_binary/1, dict_to_orddict/1]).
 -export_type([actor/0, dot/0, crdt/0, context/0]).
+
+-include("riak_dt_tags.hrl").
 
 -type crdt() :: term().
 -type operation() :: term().
@@ -47,7 +49,12 @@
 -callback merge(crdt(), crdt()) -> crdt().
 -callback equal(crdt(), crdt()) -> boolean().
 -callback to_binary(crdt()) -> binary().
--callback from_binary(binary()) -> crdt().
+-callback to_binary(TargetVers :: pos_integer(), crdt()) ->
+     {ok, binary()} | ?UNSUPPORTED_VERSION.
+-callback from_binary(binary()) -> {ok, crdt()} |
+                                   ?INVALID_BINARY |
+                                   ?UNSUPPORTED_VERSION.
+
 -callback stats(crdt()) -> [{atom(), number()}].
 -callback stat(atom(), crdt()) -> number() | undefined.
 
@@ -70,3 +77,9 @@ to_binary(Term) ->
 -spec from_binary(binary()) -> crdt().
 from_binary(Binary) ->
     binary_to_term(Binary).
+
+
+%% @private turns a dict into a sorted list of [{key, value}]
+-spec dict_to_orddict(dict()) -> orddict:orddict().
+dict_to_orddict(Dict) ->
+    lists:sort(dict:to_list(Dict)).

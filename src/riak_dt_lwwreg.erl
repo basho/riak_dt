@@ -34,6 +34,7 @@
 -export([new/0, value/1, value/2, update/3, merge/2,
          equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
 -export([parent_clock/2, update/4]).
+-export([to_binary/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -139,10 +140,20 @@ stat(_, _) -> undefined.
 to_binary(LWWReg) ->
     <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(LWWReg))/binary>>.
 
+-spec to_binary(Vers :: pos_integer(), lwwreg()) -> {ok, binary()} | ?UNSUPPORTED_VERSION.
+to_binary(1, LWW) ->
+    {ok, to_binary(LWW)};
+to_binary(Vers, _LWW) ->
+    ?UNSUPPORTED_VERSION(Vers).
+
 %% @doc Decode binary `lwwreg()'
--spec from_binary(binary()) -> lwwreg().
+-spec from_binary(binary()) -> {ok, lwwreg()} | ?UNSUPPORTED_VERSION | ?INVALID_BINARY.
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
-    riak_dt:from_binary(Bin).
+    {ok, riak_dt:from_binary(Bin)};
+from_binary(<<?TAG:8/integer, Vers:8/integer, _Bin/binary>>) ->
+    ?UNSUPPORTED_VERSION(Vers);
+from_binary(_B) ->
+    ?INVALID_BINARY.
 
 %% ===================================================================
 %% EUnit tests
@@ -231,7 +242,7 @@ roundtrip_bin_test() ->
     {ok, LWW3} = update({assign, 89}, a3, LWW2),
     {ok, LWW4} = update({assign, <<"this is a binary">>}, a4, LWW3),
     Bin = to_binary(LWW4),
-    Decoded = from_binary(Bin),
+    {ok, Decoded} = from_binary(Bin),
     ?assert(equal(LWW4, Decoded)).
 
 query_test() ->

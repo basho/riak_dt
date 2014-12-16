@@ -38,6 +38,7 @@
 -behaviour(riak_dt).
 -export([new/0, new/2, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
 -export([update/4, parent_clock/2]).
+-export([to_binary/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -132,10 +133,21 @@ to_binary(GCnt) ->
     EntriesBin = term_to_binary(GCnt),
     <<?TAG:8/integer, ?V1_VERS:8/integer, EntriesBin/binary>>.
 
+-spec to_binary(Vers :: pos_integer(), gcounter()) -> {ok, binary()} | ?UNSUPPORTED_VERSION.
+to_binary(1, C) ->
+    B = to_binary(C),
+    {ok, B};
+to_binary(Vers, _C) ->
+    ?UNSUPPORTED_VERSION(Vers).
+
 %% @doc Decode binary G-Counter
--spec from_binary(binary()) -> gcounter().
+-spec from_binary(binary()) -> {ok, gcounter()} | ?INVALID_BINARY | ?UNSUPPORTED_VERSION.
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, EntriesBin/binary>>) ->
-    binary_to_term(EntriesBin).
+    {ok, binary_to_term(EntriesBin)};
+from_binary(<<?TAG:8/integer, Vers:8/integer, _EntriesBin/binary>>) ->
+    ?UNSUPPORTED_VERSION(Vers);
+from_binary(_B) ->
+    ?INVALID_BINARY.
 
 %% ===================================================================
 %% EUnit tests
@@ -254,7 +266,7 @@ roundtrip_bin_test() ->
     {ok, GC3} = update(increment, "a4", GC2),
     {ok, GC4} = update({increment, 10000000000000000000000000000000000000000}, {complex, "actor", [<<"term">>, 2]}, GC3),
     Bin = to_binary(GC4),
-    Decoded = from_binary(Bin),
+    {ok, Decoded} = from_binary(Bin),
     ?assert(equal(GC4, Decoded)).
 
 lots_of_actors_test() ->
@@ -268,7 +280,7 @@ lots_of_actors_test() ->
                      new(),
                      lists:seq(1, 1000)),
     Bin = to_binary(GC),
-    Decoded = from_binary(Bin),
+    {ok, Decoded} = from_binary(Bin),
     ?assert(equal(GC, Decoded)).
 
 stat_test() ->

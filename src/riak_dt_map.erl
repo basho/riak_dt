@@ -178,6 +178,7 @@
 %% API
 -export([new/0, value/1, value/2, update/3, update/4]).
 -export([merge/2, equal/2, to_binary/1, from_binary/1]).
+-export([to_binary/2]).
 -export([precondition_context/1, stats/1, stat/2]).
 -export([parent_clock/2]).
 
@@ -190,7 +191,7 @@
 
 -type binary_map() :: binary(). %% A binary that from_binary/1 will accept
 -type map() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
--type entries() :: [field()].
+-type entries() :: dict(field_name(), field_value()).
 -type field() :: {field_name(), field_value()}.
 -type field_name() :: {Name :: binary(), CRDTModule :: crdt_mod()}.
 -type field_value() :: {crdts(), tombstone()}.
@@ -204,7 +205,10 @@
 %% Only field removals can be deferred. CRDTs stored in the map may
 %% have contexts and deferred operations, but as these are part of the
 %% state, they are stored under the field as an update like any other.
--type deferred() :: [{context(), [field()]}].
+-type deferred() :: dict(context(), [field()]).
+
+%% used until we move to erlang 17 and can use dict:dict/2
+-type dict(_A, _B) :: dict().
 
 %% limited to only those mods that support both a shared causal
 %% context, and by extension, the reset-remove semantic.
@@ -233,10 +237,12 @@
 -type value() :: {field(), riak_dt_map:values() | integer() | [term()] | boolean() | term()}.
 -type precondition_error() :: {error, {precondition, {not_present, field()}}}.
 
+-define(DICT, dict).
+
 %% @doc Create a new, empty Map.
 -spec new() -> map().
 new() ->
-    {riak_dt_vclock:fresh(), orddict:new(), orddict:new()}.
+    {riak_dt_vclock:fresh(), ?DICT:new(), ?DICT:new()}.
 
 %% @doc sets the clock in the map to that `Clock'. Used by a
 %% containing Map for sub-CRDTs
@@ -247,11 +253,11 @@ parent_clock(Clock, {_MapClock, Values, Deferred}) ->
 %% @doc get the current set of values for this Map
 -spec value(map()) -> values().
 value({_Clock, Values, _Deferred}) ->
-    orddict:fold(fun({Name, Type}, CRDTs, Acc) ->
-                         Merged = merge_crdts(Type, CRDTs),
-                         [{{Name, Type}, Type:value(Merged)} | Acc] end,
-                 [],
-                 Values).
+    lists:sort(?DICT:fold(fun({Name, Type}, CRDTs, Acc) ->
+                                  Merged = merge_crdts(Type, CRDTs),
+                                  [{{Name, Type}, Type:value(Merged)} | Acc] end,
+                          [],
+                          Values)).
 
 %% @private merge entry for field, if present, or return new if not
 merge_field({_Name, Type}, error) ->
@@ -259,11 +265,11 @@ merge_field({_Name, Type}, error) ->
 merge_field({_Name, Type}, {ok, CRDTs}) ->
     merge_crdts(Type, CRDTs);
 merge_field(Field, Values) ->
-    merge_field(Field, orddict:find(Field, Values)).
+    merge_field(Field, ?DICT:find(Field, Values)).
 
 %% @private merge the CRDTs of a type
 merge_crdts(Type, {CRDTs, TS}) ->
-    V = orddict:fold(fun(_Dot, CRDT, CRDT0) ->
+    V = ?DICT:fold(fun(_Dot, CRDT, CRDT0) ->
                              Type:merge(CRDT0, CRDT) end,
                      Type:new(),
                      CRDTs),
@@ -332,7 +338,7 @@ apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock, Values, Defer
     CRDT1 = Type:parent_clock(Clock, CRDT),
     case Type:update(Op, Dot, CRDT1, Ctx) of
         {ok, Updated} ->
-            NewValues = orddict:store(Field, {orddict:store(Dot, Updated, orddict:new()),
+            NewValues = ?DICT:store(Field, {?DICT:store(Dot, Updated, ?DICT:new()),
                                               %% old tombstone was
                                               %% merged into current
                                               %% value so create a new
@@ -366,20 +372,20 @@ apply_ops([{remove, Field} | Rest], Dot, Map, Ctx) ->
 -spec remove_field(field(), map(), context()) ->
                           {ok, map()} | precondition_error().
 remove_field(Field, {Clock, Values, Deferred}, undefined) ->
-    case orddict:find(Field, Values) of
+    case ?DICT:find(Field, Values) of
         error ->
             {error, {precondition, {not_present, Field}}};
         {ok, _Removed} ->
-            {ok, {Clock, orddict:erase(Field, Values), Deferred}}
+            {ok, {Clock, ?DICT:erase(Field, Values), Deferred}}
     end;
 %% Context removes
 remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
     Deferred = defer_remove(Clock, Ctx, Field, Deferred0),
     NewValues = case ctx_rem_field(Field, Values, Ctx, Clock) of
                     empty ->
-                        orddict:erase(Field, Values);
+                        ?DICT:erase(Field, Values);
                     CRDTs ->
-                        orddict:store(Field, CRDTs, Values)
+                        ?DICT:store(Field, CRDTs, Values)
                 end,
     {ok, {Clock, NewValues, Deferred}}.
 
@@ -397,11 +403,11 @@ ctx_rem_field({_, Type}, {ok, {CRDTs, TS0}}, Ctx, MapClock) ->
     %%
     TombstoneClock = riak_dt_vclock:glb(Ctx, MapClock), %% GLB is events seen by both clocks only
     TS = Type:parent_clock(TombstoneClock, Type:new()),
-    Remaining = orddict:filter(fun(Dot, _CRDT) ->
+    Remaining = ?DICT:filter(fun(Dot, _CRDT) ->
                                        is_dot_unseen(Dot, Ctx)
                                end,
                            CRDTs),
-    case orddict:size(Remaining) of
+    case ?DICT:size(Remaining) of
         0 -> %% Ctx remove removed all dots for field
             empty;
         _ ->
@@ -409,7 +415,7 @@ ctx_rem_field({_, Type}, {ok, {CRDTs, TS0}}, Ctx, MapClock) ->
             {Remaining, Type:merge(TS, TS0)}
     end;
 ctx_rem_field(Field, Values, Ctx, MapClock) ->
-    ctx_rem_field(Field, orddict:find(Field, Values), Ctx, MapClock).
+    ctx_rem_field(Field, ?DICT:find(Field, Values), Ctx, MapClock).
 
 %% @private If we're asked to remove something we don't have (or have,
 %% but maybe not all 'updates' for it), is it because we've not seen
@@ -430,7 +436,7 @@ defer_remove(Clock, Ctx, Field, Deferred) ->
     case riak_dt_vclock:descends(Clock, Ctx) of
         %% no need to save this remove, we're done
         true -> Deferred;
-        false -> orddict:update(Ctx,
+        false -> ?DICT:update(Ctx,
                                 fun(Fields) ->
                                         ordsets:add_element(Field, Fields) end,
                                 ordsets:add_element(Field, ordsets:new()),
@@ -445,7 +451,7 @@ merge(Map, Map) ->
 merge({LHSClock, LHSEntries, LHSDeferred}, {RHSClock, RHSEntries, RHSDeferred}) ->
     Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
     {CommonKeys, LHSUnique, RHSUnique} = key_sets(LHSEntries, RHSEntries),
-    Acc0 = filter_unique(LHSUnique, LHSEntries, RHSClock, orddict:new()),
+    Acc0 = filter_unique(LHSUnique, LHSEntries, RHSClock, ?DICT:new()),
     Acc1 = filter_unique(RHSUnique, RHSEntries, LHSClock, Acc0),
     Entries = merge_common(CommonKeys, LHSEntries, RHSEntries, LHSClock, RHSClock, Acc1),
     Deferred = merge_deferred(RHSDeferred, LHSDeferred),
@@ -456,13 +462,13 @@ merge({LHSClock, LHSEntries, LHSDeferred}, {RHSClock, RHSEntries, RHSDeferred}) 
 -spec filter_unique(set(), entries(), riak_dt_vclock:vclock(), entries()) -> entries().
 filter_unique(FieldSet, Entries, Clock, Acc) ->
     sets:fold(fun({_Name, Type}=Field, Keep) ->
-                      {Dots, TS} = orddict:fetch(Field, Entries),
-                      KeepDots = orddict:filter(fun(Dot, _CRDT) ->
+                      {Dots, TS} = ?DICT:fetch(Field, Entries),
+                      KeepDots = ?DICT:filter(fun(Dot, _CRDT) ->
                                                       is_dot_unseen(Dot, Clock)
                                               end,
                                               Dots),
 
-                      case orddict:size(KeepDots) of
+                      case ?DICT:size(KeepDots) of
                           0 ->
                               Keep;
                           _ ->
@@ -475,7 +481,7 @@ filter_unique(FieldSet, Entries, Clock, Acc) ->
                               %% removed it, then the removed dots
                               %% will be propogated by the tombstone.
                               Tombstone = Type:merge(TS, Type:parent_clock(Clock, Type:new())),
-                              orddict:store(Field, {KeepDots, Tombstone}, Keep)
+                              ?DICT:store(Field, {KeepDots, Tombstone}, Keep)
                       end
               end,
               Acc,
@@ -487,14 +493,14 @@ filter_unique(FieldSet, Entries, Clock, Acc) ->
 is_dot_unseen(Dot, Clock) ->
     not riak_dt_vclock:descends(Clock, [Dot]).
 
-%% @doc Get the keys from an orddict as a set
--spec key_set(orddict:orddict()) -> set().
-key_set(Orddict) ->
-    sets:from_list(orddict:fetch_keys(Orddict)).
+%% @doc Get the keys from an ?DICT as a set
+-spec key_set(?DICT()) -> set().
+key_set(Dict) ->
+    sets:from_list(?DICT:fetch_keys(Dict)).
 
-%% @doc break the keys from an two orddicts out into three sets, the
+%% @doc break the keys from an two ?DICTs out into three sets, the
 %% common keys, those unique to one, and those unique to the other.
--spec key_sets(orddict:orddict(), orddict:orddict()) -> {set(), set(), set()}.
+-spec key_sets(?DICT(), ?DICT()) -> {set(), set(), set()}.
 key_sets(LHS, RHS) ->
     LHSet = key_set(LHS),
     RHSet = key_set(RHS),
@@ -505,14 +511,14 @@ key_sets(LHS, RHS) ->
 
 %% @private for a set of dots (that are unique to one side) decide
 %% whether to keep, or drop each.
--spec filter_dots(set(), orddict:orddict(), riak_dt_vclock:vclock()) -> entries().
+-spec filter_dots(set(), ?DICT(), riak_dt_vclock:vclock()) -> entries().
 filter_dots(Dots, CRDTs, Clock) ->
     DotsToKeep = sets:filter(fun(Dot) ->
                                      is_dot_unseen(Dot, Clock)
                              end,
                              Dots),
 
-    orddict:filter(fun(Dot, _CRDT) ->
+    ?DICT:filter(fun(Dot, _CRDT) ->
                            sets:is_element(Dot, DotsToKeep)
                    end,
                    CRDTs).
@@ -522,28 +528,30 @@ filter_dots(Dots, CRDTs, Clock) ->
 %% only on one side, drop it if dominated by the otheride's clock.
 merge_common(FieldSet, LHS, RHS, LHSClock , RHSClock, Acc) ->
     sets:fold(fun({_, Type}=Field, Keep) ->
-                      {LHSDots, LHTS} = orddict:fetch(Field, LHS),
-                      {RHSDots, RHTS} = orddict:fetch(Field, RHS),
+                      {LHSDots, LHTS} = ?DICT:fetch(Field, LHS),
+                      {RHSDots, RHTS} = ?DICT:fetch(Field, RHS),
                       {CommonDots, LHSUniqe, RHSUnique} = key_sets(LHSDots, RHSDots),
                       TS = Type:merge(RHTS, LHTS),
 
                       CommonSurviving = sets:fold(fun(Dot, Common) ->
-                                                          L = orddict:fetch(Dot, LHSDots),
-                                                          orddict:store(Dot, L, Common)
+                                                          L = ?DICT:fetch(Dot, LHSDots),
+                                                          ?DICT:store(Dot, L, Common)
                                                   end,
-                                                  orddict:new(),
+                                                  ?DICT:new(),
                                                   CommonDots),
 
                       LHSSurviving = filter_dots(LHSUniqe, LHSDots, RHSClock),
                       RHSSurviving = filter_dots(RHSUnique, RHSDots, LHSClock),
 
-                      Dots = orddict:from_list(lists:merge([CommonSurviving, LHSSurviving, RHSSurviving])),
+                      Dots = ?DICT:from_list(lists:merge([?DICT:to_list(CommonSurviving),
+                                                          ?DICT:to_list(LHSSurviving),
+                                                          ?DICT:to_list(RHSSurviving)])),
 
-                      case Dots of
-                          [] ->
+                      case ?DICT:size(Dots) of
+                          0 ->
                               Keep;
                           _ ->
-                              orddict:store(Field, {Dots, TS}, Keep)
+                              ?DICT:store(Field, {Dots, TS}, Keep)
                       end
 
               end,
@@ -553,7 +561,7 @@ merge_common(FieldSet, LHS, RHS, LHSClock , RHSClock, Acc) ->
 %% @private
 -spec merge_deferred(deferred(), deferred()) -> deferred().
 merge_deferred(LHS, RHS) ->
-    orddict:merge(fun(_K, LH, RH) ->
+    ?DICT:merge(fun(_K, LH, RH) ->
                           ordsets:union(LH, RH) end,
                   LHS, RHS).
 
@@ -562,11 +570,11 @@ merge_deferred(LHS, RHS) ->
 -spec apply_deferred(riak_dt_vclock:vclock(), entries(), deferred()) ->
                             {riak_dt_vclock:vclock(), entries(), deferred()}.
 apply_deferred(Clock, Entries, Deferred) ->
-    lists:foldl(fun({Ctx, Fields}, Map) ->
-                        remove_all(Fields, Map, Ctx)
-                end,
-                {Clock, Entries, []},
-                Deferred).
+    ?DICT:fold(fun(Ctx, Fields, Map) ->
+                       remove_all(Fields, Map, Ctx)
+               end,
+               {Clock, Entries, ?DICT:new()},
+               Deferred).
 
 %% @private
 -spec remove_all([field()], map(), context()) ->
@@ -586,9 +594,10 @@ remove_all(Fields, Map, Ctx) ->
 equal({Clock1, Values1, Deferred1}, {Clock2, Values2, Deferred2}) ->
     riak_dt_vclock:equal(Clock1, Clock2) andalso
         Deferred1 == Deferred2 andalso
-        pairwise_equals(Values1, Values2).
+        pairwise_equals(lists:sort(?DICT:to_list(Values1)),
+                        lists:sort(?DICT:to_list(Values2))).
 
--spec pairwise_equals(entries(), entries()) -> boolean().
+-spec pairwise_equals([field()], [field()]) -> boolean().
 pairwise_equals([], []) ->
     true;
 pairwise_equals([{{Name, Type}, {Dots1, TS1}}| Rest1], [{{Name, Type}, {Dots2, TS2}}|Rest2]) ->
@@ -600,7 +609,7 @@ pairwise_equals([{{Name, Type}, {Dots1, TS1}}| Rest1], [{{Name, Type}, {Dots2, T
     %% tombstone. Both are correct when it comes to determining the
     %% final value. As long as tombstones are not conflicting (that is
     %% A == B | A > B | B > A)
-    case {orddict:fetch_keys(Dots1) == orddict:fetch_keys(Dots2), Type:equal(TS1, TS2)} of
+    case {?DICT:fetch_keys(Dots1) == ?DICT:fetch_keys(Dots2), Type:equal(TS1, TS2)} of
         {true, true} ->
             pairwise_equals(Rest1, Rest2);
         _ ->
@@ -633,17 +642,17 @@ stats(Map) ->
 stat(actor_count, {Clock, _, _}) ->
     length(Clock);
 stat(field_count, {_, Fields, _}) ->
-    length(Fields);
+    ?DICT:size(Fields);
 stat(duplication, {_, Fields, _}) ->
     %% Number of duplicated fields
-    {FieldCnt, Duplicates} = orddict:fold(fun(_Field, {Dots ,_}, {FCnt, DCnt}) ->
-                                                  {FCnt+1, DCnt + orddict:size(Dots)}
+    {FieldCnt, Duplicates} = ?DICT:fold(fun(_Field, {Dots ,_}, {FCnt, DCnt}) ->
+                                                  {FCnt+1, DCnt + ?DICT:size(Dots)}
                                           end,
                                           {0, 0},
                                           Fields),
     Duplicates - FieldCnt;
 stat(deferred_length, {_, _, Deferred}) ->
-    length(Deferred);
+    ?DICT:size(Deferred);
 stat(_,_) -> undefined.
 
 -include("riak_dt_tags.hrl").
@@ -660,16 +669,58 @@ stat(_,_) -> undefined.
 %% @see `from_binary/1'
 -spec to_binary(map()) -> binary_map().
 to_binary(Map) ->
-    <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(Map))/binary>>.
+    {ok, B} = to_binary(?V1_VERS, Map),
+    B.
+
+%% @private encode v1 maps as v2, and vice versa. The first argument
+%% is the target binary type.
+-spec to_binary(Vers :: pos_integer(), map()) -> {ok, binary_map()} | ?UNSUPPORTED_VERSION.
+to_binary(?V1_VERS, Map0) ->
+    Map = to_v1(Map0),
+    {ok, <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(Map))/binary>>};
+to_binary(Vers, _Map) ->
+    ?UNSUPPORTED_VERSION(Vers).
+
+%% @private transpose a v1 map (orddicts) to a v2 (dicts)
+-spec to_v2({riak_dt_vclock:vclock(), orddict:orddict() | dict(),
+             orddict:orddict() | dict()}) ->
+                   {riak_dt_vclock:vclock(), dict(), dict()}.
+to_v2({Clock, Fields0, Deferred0}) when is_list(Fields0),
+                                         is_list(Deferred0) ->
+    Fields = ?DICT:from_list(Fields0),
+    Deferred = ?DICT:from_list(Deferred0),
+    {Clock, Fields, Deferred};
+to_v2(S) ->
+    S.
+
+%% @private transpose a v2 map (dicts) to a v1 (orddicts)
+-spec to_v1({riak_dt_vclock:vclock(), orddict:orddict() | dict(),
+             orddict:orddict() | dict()}) ->
+                   {riak_dt_vclock:vclock(), orddict:orddict(), orddict:orddict()}.
+to_v1({_Clock, Fields0, Deferred0}=S) when is_list(Fields0),
+                                            is_list(Deferred0) ->
+    S;
+to_v1({Clock, Fields0, Deferred0}) ->
+    %% Must be dicts, there is no is_dict test though
+    %% should we use error handling as logic here??
+    Fields = riak_dt:dict_to_orddict(Fields0),
+    Deferred = riak_dt:dict_to_orddict(Deferred0),
+    {Clock, Fields, Deferred}.
 
 %% @doc When the argument is a `binary_map()' produced by
 %% `to_binary/1' will return the original `map()'.
 %%
 %% @see `to_binary/1'
--spec from_binary(binary_map()) -> map().
+-spec from_binary(binary_map()) -> {ok, map()} | ?UNSUPPORTED_VERSION | ?INVALID_BINARY.
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
-    riak_dt:from_binary(B).
-
+    Map = riak_dt:from_binary(B),
+    %% upgrade ondisk v1/v2 structure to v2 term. We use lists of disk
+    %% as tha works fine for both orddict and list
+    {ok, to_v2(Map)};
+from_binary(<<?TAG:8/integer, Vers:8/integer, _B/binary>>) ->
+    ?UNSUPPORTED_VERSION(Vers);
+from_binary(_B) ->
+    ?INVALID_BINARY.
 
 %% ===================================================================
 %% EUnit tests
@@ -844,6 +895,13 @@ equals_test() ->
     D = merge(B, A),
     ?assert(equal(C, D)),
     ?assert(equal(A, A)).
+
+unsupported_version_test() ->
+    ?assertMatch(?UNSUPPORTED_VERSION(12), to_binary(12, new())),
+    ?assertMatch(?UNSUPPORTED_VERSION(8) , from_binary(<<?TAG:8/integer, 8:8/integer, (crypto:rand_bytes(22))/binary>>)).
+
+invalid_binary_test() ->
+    ?assertMatch(?INVALID_BINARY, from_binary(<<(crypto:rand_bytes(187))/binary>>)).
 
 -ifdef(EQC).
 -define(NUMTESTS, 1000).
