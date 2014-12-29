@@ -632,6 +632,33 @@ from_binary(?V2_VERS, <<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
 %% ===================================================================
 -ifdef(TEST).
 
+keep_deferred_test() ->
+    Field = {'X', riak_dt_od_flag},
+    InitialState = riak_dt_map:new(),
+
+    %Update at node A
+    {ok, {CtxA1, _, _}=StateA1} = update({update, [{update, Field, enable}]}, a, InitialState),
+    %Update with the context of node A on node B generates a deferred.
+    {ok, {CtxB1, _, _}=StateB1} = update({update, [{update, Field, disable}]}, b, InitialState, CtxA1),
+    %Remove field in B is causal with the disable op - it removes the field and the deferred.
+    {ok, StateB2} = update({update, [{remove, Field}]}, b, StateB1, CtxB1),
+    StateAB = merge(StateA1,StateB2),
+    ?assertEqual([],value(StateAB)).
+
+keep_deferred_with_concurrent_add_test() ->
+    Field = {'X', riak_dt_od_flag},
+    InitialState = riak_dt_map:new(),
+
+    %Update at node A
+    {ok, {CtxA1, _, _}=StateA1} = update({update, [{update, Field, enable}]}, a, InitialState),
+    %Update with the context of node A on node B generates a deferred.
+    {ok, {_, _, _}=StateA2} = update({update, [{update, Field, enable}]}, a, StateA1, CtxA1),
+    {ok, {CtxB1, _, _}=StateB1} = update({update, [{update, Field, disable}]}, b, InitialState, CtxA1),
+    %Remove field in B is causal with the disable op - it removes the field and the deferred.
+    {ok, StateB2} = update({update, [{remove, Field}]}, b, StateB1, CtxB1),
+    StateAB = merge(StateA2,StateB2),
+    ?assertEqual([{{'X',riak_dt_od_flag},true}],value(StateAB)).    
+
 %% This fails on previous version of riak_dt_map
 assoc_test() ->
     Field = {'X', riak_dt_orswot},
