@@ -194,7 +194,7 @@
 -type entries() :: [field()].
 -type field() :: {field_name(), field_value()}.
 -type field_name() :: {Name :: binary(), CRDTModule :: crdt_mod()}.
--type field_value() :: {riak_dt_vclock:vclock(), crdt()}.
+-type field_value() :: {riak_dt_vclock:vclock(), crdt(), riak_dt_vclock:vclock()}.
 
 %%-type crdts() :: [entry()].
 %%-type entry() :: {riak_dt:dot(), crdt()}.
@@ -210,13 +210,13 @@
 %% limited to only those mods that support both a shared causal
 %% context, and by extension, the reset-remove semantic.
 -type crdt_mod() :: riak_dt_emcntr | riak_dt_lwwreg |
-                    riak_dt_od_flag |
-                    riak_dt_map | riak_dt_orswot.
+riak_dt_od_flag |
+riak_dt_map | riak_dt_orswot.
 
 -type crdt()  ::  riak_dt_emcntr:emcntr() | riak_dt_od_flag:od_flag() |
-                  riak_dt_lwwreg:lwwreg() |
-                  riak_dt_orswot:orswot() |
-                  riak_dt_map:map().
+riak_dt_lwwreg:lwwreg() |
+riak_dt_orswot:orswot() |
+riak_dt_map:map().
 
 -type map_op() :: {update, [map_field_update() | map_field_op()]}.
 
@@ -224,9 +224,9 @@
 -type map_field_update() :: {update, field(), crdt_op()}.
 
 -type crdt_op() :: riak_dt_emcntr:emcntr_op() |
-                   riak_dt_lwwreg:lwwreg_op() |
-                   riak_dt_orswot:orswot_op() | riak_dt_od_flag:od_flag_op() |
-                   riak_dt_map:map_op().
+riak_dt_lwwreg:lwwreg_op() |
+riak_dt_orswot:orswot_op() | riak_dt_od_flag:od_flag_op() |
+riak_dt_map:map_op().
 
 -type context() :: riak_dt_vclock:vclock() | undefined.
 
@@ -251,7 +251,7 @@ parent_clock(Clock, {_MapClock, Values, Deferred}) ->
 %% @doc get the current set of values for this Map
 -spec value(map()) -> values().
 value({_Clock, Values, _Deferred}) ->
-    lists:sort(dict:fold(fun({Name, Type}, {_Dots, CRDT}, Acc) ->
+    lists:sort(dict:fold(fun({Name, Type}, {_Dots, CRDT, _ContextT}, Acc) ->
                                  [{{Name, Type}, Type:value(CRDT)} | Acc] end,
                          [],
                          Values)).
@@ -278,7 +278,7 @@ value(_, Map) ->
 %%
 %% Atomic, all of `Ops' are performed successfully, or none are.
 -spec update(map_op(), riak_dt:actor() | riak_dt:dot(), map()) ->
-                    {ok, map()} | precondition_error().
+    {ok, map()} | precondition_error().
 update(Op, ActorOrDot, Map) ->
     update(Op, ActorOrDot, Map, undefined).
 
@@ -289,7 +289,7 @@ update(Op, ActorOrDot, Map) ->
 %%
 %% @see parent_clock/2
 -spec update(map_op(), riak_dt:actor() | riak_dt:dot(), map(), riak_dt:context()) ->
-                    {ok, map()}.
+    {ok, map()}.
 update({update, Ops}, ActorOrDot, {Clock0, Values, Deferred}, Ctx) ->
     {Dot, Clock} = update_clock(ActorOrDot, Clock0),
     apply_ops(Ops, Dot, {Clock, Values, Deferred}, Ctx).
@@ -298,7 +298,7 @@ update({update, Ops}, ActorOrDot, {Clock0, Values, Deferred}, Ctx) ->
 %% means that field removals increment the clock too.
 -spec update_clock(riak_dt:actor() | riak_dt:dot(),
                    riak_dt_vclock:vclock()) ->
-                          {riak_dt:dot(), riak_dt_vclock:vclock()}.
+    {riak_dt:dot(), riak_dt_vclock:vclock()}.
 update_clock(Dot, Clock) when is_tuple(Dot) ->
     NewClock = riak_dt_vclock:merge([[Dot], Clock]),
     {Dot, NewClock};
@@ -309,7 +309,7 @@ update_clock(Actor, Clock) ->
 
 get({_Name, Type}=Field, Fields, Clock) ->
     CRDT = case dict:find(Field, Fields) of
-               {ok, {_Dots, CRDT0}} ->
+               {ok, {_Dots, CRDT0, _ContextT}} ->
                    CRDT0;
                error ->
                    Type:new()
@@ -317,18 +317,18 @@ get({_Name, Type}=Field, Fields, Clock) ->
     Type:parent_clock(Clock, CRDT).
 
 get_entry({_Name, Type}=Field, Fields, Clock) ->
-    {Dots, CRDT} = case dict:find(Field, Fields) of
-                       {ok, Entry} ->
-                           Entry;
-                       error ->
-                           {[], Type:new()}
-                   end,
-    {Dots, Type:parent_clock(Clock, CRDT)}.
+    {Dots, CRDT, ContextT} = case dict:find(Field, Fields) of
+                                 {ok, Entry} ->
+                                     Entry;
+                                 error ->
+                                     {[], Type:new(), riak_dt_vclock:fresh()}
+                             end,
+    {Dots, Type:parent_clock(Clock, CRDT), ContextT}.
 
 %% @private
 -spec apply_ops([map_field_update() | map_field_op()], riak_dt:dot(),
                 {riak_dt_vclock:vclock(), entries() , deferred()}, context()) ->
-                       {ok, map()} | precondition_error().
+    {ok, map()} | precondition_error().
 apply_ops([], _Dot, Map, _Ctx) ->
     {ok, Map};
 apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock, Values, Deferred}, Ctx) ->
@@ -336,7 +336,7 @@ apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock, Values, Defer
     case Type:update(Op, Dot, CRDT, Ctx) of
         {ok, Updated0} ->
             Updated = Type:parent_clock(?FRESH_CLOCK, Updated0),
-            NewValues = dict:store(Field, {[Dot], Updated}, Values),
+            NewValues = dict:store(Field, {[Dot], Updated, riak_dt_vclock:fresh()}, Values),
             apply_ops(Rest, Dot, {Clock, NewValues, Deferred}, Ctx);
         Error ->
             Error
@@ -362,7 +362,7 @@ apply_ops([{remove, Field} | Rest], Dot, Map, Ctx) ->
 %% @see defer_remove/4 for handling of removes of fields that are
 %% _not_ present
 -spec remove_field(field(), map(), context()) ->
-                          {ok, map()} | precondition_error().
+    {ok, map()} | precondition_error().
 remove_field(Field, {Clock, Values, Deferred}, undefined) ->
     case dict:find(Field, Values) of
         error ->
@@ -373,7 +373,12 @@ remove_field(Field, {Clock, Values, Deferred}, undefined) ->
 %% Context removes
 remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
     Deferred = defer_remove(Clock, Ctx, Field, Deferred0),
+    DefCtx = get_def_ctx(dict:find(Field, Values),Clock),
     NewValues = case ctx_rem_field(Field, Values, Ctx, Clock) of
+                    empty when length(DefCtx) > 0 ->
+                        {ok, {Dots, CRDT, DeferredT}}=dict:find(Field, Values),
+                        Append = riak_dt_vclock:merge([DefCtx,DeferredT]),
+                        dict:store(Field,{Dots,CRDT,Append},Values);
                     empty ->
                         dict:erase(Field, Values);
                     CRDT ->
@@ -384,7 +389,11 @@ remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
 %% @private drop dominated fields
 ctx_rem_field(_Field, error, _Ctx_, _Clock) ->
     empty;
-ctx_rem_field({_, Type}, {ok, {Dots, CRDT}}, Ctx, MapClock) ->
+
+ctx_rem_field({_, riak_dt_map}, {ok, {_Dots, _CRDT,_DeferredT}}=_Elem, _Ctx, _MapClock) ->
+    io:format("Field is a map~n");
+
+ctx_rem_field({_, Type}, {ok, {Dots, CRDT,_DeferredT}}, Ctx, MapClock) ->
     %% Drop dominated fields, and update the tombstone.
     %%
     %% If the context is removing a field at dot {a, 1} and the
@@ -407,6 +416,19 @@ ctx_rem_field({_, Type}, {ok, {Dots, CRDT}}, Ctx, MapClock) ->
     end;
 ctx_rem_field(Field, Values, Ctx, MapClock) ->
     ctx_rem_field(Field, dict:find(Field, Values), Ctx, MapClock).
+
+%% Case value is a CRDT
+get_def_ctx({ok, {_, {_ValueClock,_Value,ValueDef},_MapEntryDef}}, MapClock) ->
+    %%ATTENTION: Merging the deferred clock with the map clock. 
+    %%  -- Its necessary to detect new updates.
+    %%This operations does not take into account the given context 
+    %%  -- Retrieves any deferred operation in the object
+    %%TODO: What to do with _MapEntryDef?
+    riak_dt_vclock:merge([MapClock | ValueDef]);
+
+get_def_ctx(error,_MapClock) ->
+    [].
+
 
 %% @private If we're asked to remove something we don't have (or have,
 %% but maybe not all 'updates' for it), is it because we've not seen
@@ -438,21 +460,23 @@ merge({LHSClock, LHSEntries, LHSDeferred}, {RHSClock, RHSEntries, RHSDeferred}) 
     Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
     Fields = lists:umerge(dict:fetch_keys(LHSEntries), dict:fetch_keys(RHSEntries)),
     Entries = lists:foldl(fun({_Name, Type}=Field, Acc) ->
-                                  {LHSDots, LHSCRDT} = get_entry(Field, LHSEntries, LHSClock),
-                                  {RHSDots, RHSCRDT} = get_entry(Field, RHSEntries, RHSClock),
+                                  {LHSDots, LHSCRDT, LHDeferredT} = get_entry(Field, LHSEntries, LHSClock),
+                                  {RHSDots, RHSCRDT, RHDeferredT} = get_entry(Field, RHSEntries, RHSClock),
                                   case keep_dots(LHSDots, RHSDots, LHSClock, RHSClock) of
                                       [] ->
                                           Acc;
                                       Dots ->
                                           CRDT = Type:merge(LHSCRDT, RHSCRDT),
+                                          MergedTombstone = riak_dt_vclock:merge([LHDeferredT,RHDeferredT]),
                                           %% Yes! Reset the clock, again
-                                          dict:store(Field, {Dots, Type:parent_clock(?FRESH_CLOCK, CRDT)}, Acc)
+                                          dict:store(Field, {Dots, Type:parent_clock(?FRESH_CLOCK, CRDT), MergedTombstone}, Acc)
                                   end
                           end,
                           dict:new(),
                           Fields),
     Deferred = merge_deferred(LHSDeferred, RHSDeferred),
-    apply_deferred(Clock, Entries, Deferred).
+    CRDT = apply_deferred(Clock, Entries, Deferred),
+    clear_deferred_tombstones(CRDT).
 
 keep_dots(LHSDots, RHSDots, LHSClock, RHSClock) ->
     CommonDots = sets:intersection(sets:from_list(LHSDots), sets:from_list(RHSDots)),
@@ -491,6 +515,27 @@ remove_all(Fields, Map, Ctx) ->
                 end,
                 Map,
                 Fields).
+
+%Eliminates the tombstone context if it has been integrated in the object's clock.
+clear_deferred_tombstones({Clock, Entries, Deferred}) ->
+    FilteredEntries = ?DICT:fold(fun(Type, {Clocki, _CRDT, Tombstone}=Elem,Acc) ->
+                                           case riak_dt_vclock:descends(Clock, Tombstone) of
+                                               false ->
+                                                   %%Clock does not descend from Tombstone - keep all.
+                                                   dict:store(Type, Elem, Acc);
+                                               true ->
+                                                    %%Clock descends from Tombstone,
+                                                    case riak_dt_vclock:descends(Tombstone,Clocki) of
+                                                       false -> 
+                                                           %%Clocki greater than tombstone -- Keep elem, clear tombstone
+                                                           dict:store(Type, {Clocki, _CRDT, []},Acc);
+                                                       true -> 
+                                                           %%Tombstone equal to clocki -- Remove entry
+                                                           Acc
+                                                   end
+                                           end
+                                   end, dict:new(), Entries),
+    {Clock,FilteredEntries,Deferred}.
 
 %% @doc compare two `map()'s for equality of structure Both schemas
 %% and value list must be equal. Performs a pariwise equals for all
