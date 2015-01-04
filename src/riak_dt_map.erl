@@ -578,9 +578,9 @@ equal({Clock1, Values1, Deferred1}, {Clock2, Values2, Deferred2}) ->
 -spec pairwise_equals(entries(), entries()) -> boolean().
 pairwise_equals([], []) ->
     true;
-pairwise_equals([{{Name, Type}, {Dots1, CRDT1}}|Rest1], [{{Name, Type}, {Dots2, CRDT2}}|Rest2]) ->
-    case {riak_dt_vclock:equal(Dots1, Dots2), Type:equal(CRDT1, CRDT2)} of
-        {true, true} ->
+pairwise_equals([{{Name, Type}, {Dots1, CRDT1,DeferredT1}}|Rest1], [{{Name, Type}, {Dots2, CRDT2, DeferredT2}}|Rest2]) ->
+    case {riak_dt_vclock:equal(Dots1, Dots2), Type:equal(CRDT1, CRDT2), riak_dt_vclock:equal(DeferredT1, DeferredT2)} of
+        {true, true, true} ->
             pairwise_equals(Rest1, Rest2);
         _ ->
             false
