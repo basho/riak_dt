@@ -373,25 +373,24 @@ remove_field(Field, {Clock, Values, Deferred}, undefined) ->
 %% Context removes
 remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
     Deferred = defer_remove(Clock, Ctx, Field, Deferred0),
-    DefCtx = get_def_ctx(dict:find(Field, Values),Clock),
-    NewValues = case ctx_rem_field(Field, Values, Ctx, Clock) of
-                    empty when length(DefCtx) > 0 ->
+    %%TODO: Does it need context argument?
+    %% -- Yes: A context that does not observe a deferred, should not move it upstream.
+    {DefCtx, UpdtValues} = remove_subtree(Field, Values, Clock),
+    NewValues = case ctx_rem_field(Field, UpdtValues, Ctx, Clock) of
+                    empty when DefCtx =/= no_deferred ->
                         {ok, {Dots, CRDT, DeferredT}}=dict:find(Field, Values),
-                        Append = riak_dt_vclock:merge([DefCtx,DeferredT]),
-                        dict:store(Field,{Dots,CRDT,Append},Values);
+                        Tombstone = riak_dt_vclock:merge([DefCtx,DeferredT]),
+                        dict:store(Field,{Dots, CRDT, Tombstone},UpdtValues);
                     empty ->
-                        dict:erase(Field, Values);
+                        dict:erase(Field, UpdtValues);
                     CRDT ->
-                        dict:store(Field, CRDT, Values)
+                        dict:store(Field, CRDT, UpdtValues)
                 end,
     {ok, {Clock, NewValues, Deferred}}.
 
 %% @private drop dominated fields
 ctx_rem_field(_Field, error, _Ctx_, _Clock) ->
     empty;
-
-ctx_rem_field({_, riak_dt_map}, {ok, {_Dots, _CRDT,_DeferredT}}=_Elem, _Ctx, _MapClock) ->
-    io:format("Field is a map~n");
 
 ctx_rem_field({_, Type}, {ok, {Dots, CRDT,_DeferredT}}, Ctx, MapClock) ->
     %% Drop dominated fields, and update the tombstone.
@@ -417,18 +416,47 @@ ctx_rem_field({_, Type}, {ok, {Dots, CRDT,_DeferredT}}, Ctx, MapClock) ->
 ctx_rem_field(Field, Values, Ctx, MapClock) ->
     ctx_rem_field(Field, dict:find(Field, Values), Ctx, MapClock).
 
-%% Case value is a CRDT
-get_def_ctx({ok, {_, {_ValueClock,_Value,ValueDef},_MapEntryDef}}, MapClock) ->
+%% Value is a map:
+%% Remove fields that don't have deferred operations.
+%% Get contexts from fields that have and update context tombstones.
+remove_subtree({_, riak_dt_map}, {Dots, {ValueClock, Value0, ValueDef}, DeferredT}, MapClock)->
+    {SubMergedDef, SubEntries} = dict:fold(fun(K, V, {UpdtClock, UpdtEntries}) ->
+                                                   case remove_subtree(K, V, MapClock) of
+                                                    %%ATTENTION: Should remove entries that have no deferred ops.
+                                                    %%Leaving them in place for now. 
+                                                        %%{MapClock, V} ->
+                                                           %%%No deferred context in subtree 
+                                                           %%%   - remove entry
+                                                           %%{UpdtClock, UpdtEntries};
+                                                       {TombstoneClock, Value} -> 
+                                                           %%Some deferred operation in subtree
+                                                           %%    - keep entry, update tombstones  
+                                                           {riak_dt_vclock:merge([TombstoneClock | UpdtClock]), 
+                                                            dict:store(K, Value, UpdtEntries)}
+                                                   end
+                                           end, {riak_dt_vclock:fresh(),dict:new()},Value0),
+    {SubMergedDef, {Dots, {ValueClock, SubEntries, ValueDef}, riak_dt_vclock:merge([SubMergedDef | DeferredT])}};
+
+%% Value is a leaf:
+%% Merge deferred operations' context with MapClock and send it upstream
+remove_subtree(_, {_, {_ValueClock,_Value,ValueDef},_MapEntryDef}=Entry, MapClock) ->
     %%ATTENTION: Merging the deferred clock with the map clock. 
     %%  -- Its necessary to detect new updates.
     %%This operations does not take into account the given context 
     %%  -- Retrieves any deferred operation in the object
     %%TODO: What to do with _MapEntryDef?
-    riak_dt_vclock:merge([MapClock | ValueDef]);
+    {riak_dt_vclock:merge([MapClock | ValueDef]), Entry};
 
-get_def_ctx(error,_MapClock) ->
-    [].
-
+remove_subtree(Field, Values, MapClock) ->
+    case dict:find(Field, Values) of
+        {ok,Value} -> 
+            {UpdtClock,UpdtValue} = remove_subtree(Field, Value, MapClock),
+            case UpdtClock of
+                MapClock -> {no_deferred, Values};
+                _ -> {UpdtClock, dict:store(Field, UpdtValue, Values)}
+            end;
+        error -> {MapClock, Values}
+    end.
 
 %% @private If we're asked to remove something we don't have (or have,
 %% but maybe not all 'updates' for it), is it because we've not seen
@@ -702,7 +730,7 @@ keep_deferred_with_concurrent_add_test() ->
     %Remove field in B is causal with the disable op - it removes the field and the deferred.
     {ok, StateB2} = update({update, [{remove, Field}]}, b, StateB1, CtxB1),
     StateAB = merge(StateA2,StateB2),
-    ?assertEqual([{{'X',riak_dt_od_flag},true}],value(StateAB)).    
+    ?assertEqual([{{'X',riak_dt_od_flag},true}],value(StateAB)).
 
 remove_subtree_test() ->
     Field = {'X', riak_dt_map},
@@ -718,6 +746,11 @@ remove_subtree_test() ->
     {ok, StateB2} = update(RemoveFieldX, b, StateB1, CtxB1),
     StateAB = merge(StateA1,StateB2),
     ?assertEqual([],value(StateAB)).
+
+keep_subtree_with_concurrent_add_test() ->
+    false.
+
+%%TODO: Visibility test; Remove with a context that does not cover a deferred operation --- define precise semantics.
 
 %% This fails on previous version of riak_dt_map
 assoc_test() ->
