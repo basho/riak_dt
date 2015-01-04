@@ -704,6 +704,21 @@ keep_deferred_with_concurrent_add_test() ->
     StateAB = merge(StateA2,StateB2),
     ?assertEqual([{{'X',riak_dt_od_flag},true}],value(StateAB)).    
 
+remove_subtree_test() ->
+    Field = {'X', riak_dt_map},
+    FieldA = {'X.A', riak_dt_od_flag},
+
+    EnableFlagA = {update, [{update, Field, {update, [{update, FieldA, enable}]}}]},
+    DisableFlagA = {update, [{update, Field, {update, [{update, FieldA, disable}]}}]},
+    RemoveFieldX = {update, [{remove, Field}]},
+    
+    InitialState = new(),
+    {ok, {CtxA1,_,_}=StateA1} = update(EnableFlagA, a, InitialState),
+    {ok, {CtxB1,_,_}=StateB1} = update(DisableFlagA, b, InitialState, CtxA1),
+    {ok, StateB2} = update(RemoveFieldX, b, StateB1, CtxB1),
+    StateAB = merge(StateA1,StateB2),
+    ?assertEqual([],value(StateAB)).
+
 %% This fails on previous version of riak_dt_map
 assoc_test() ->
     Field = {'X', riak_dt_orswot},
