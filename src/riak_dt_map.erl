@@ -546,6 +546,7 @@ remove_all(Fields, Map, Ctx) ->
 
 %Eliminates the tombstone context if it has been integrated in the object's clock.
 clear_deferred_tombstones({Clock, Entries, Deferred}) ->
+    %%TODO: check if _CRDT is a map and call the clear recursively
     FilteredEntries = ?DICT:fold(fun(Type, {Clocki, _CRDT, Tombstone}=Elem,Acc) ->
                                            case riak_dt_vclock:descends(Clock, Tombstone) of
                                                false ->
@@ -750,7 +751,7 @@ remove_subtree_test() ->
 keep_subtree_with_concurrent_add_test() ->
     false.
 
-%%TODO: Visibility test; Remove with a context that does not cover a deferred operation --- define precise semantics.
+%%TODO: Visibility test; Remove with a context that does not cover a deferred operation --- define precise semantics; Create X.F1 and X.F2. put a deferred in X.F1 and set X.F2 to true. Remove X. value must be []. concurrently set X.F1 to true and merge. X.F1 should be true and X.F2 should not exist.
 
 %% This fails on previous version of riak_dt_map
 assoc_test() ->
