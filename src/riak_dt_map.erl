@@ -748,6 +748,39 @@ remove_subtree_test() ->
     StateAB = merge(StateA1,StateB2),
     ?assertEqual([],value(StateAB)).
 
+remove_entry_in_subtree_test() ->
+    Field = {'X', riak_dt_map},
+    FieldA = {'X.A', riak_dt_od_flag},
+
+    EnableFlagA = {update, [{update, Field, {update, [{update, FieldA, enable}]}}]},
+    DisableFlagA = {update, [{update, Field, {update, [{update, FieldA, disable}]}}]},
+    RemoveFieldXA = {update, [{update, Field, {update, [{remove, FieldA}]}}]},
+    
+    InitialState = new(),
+    {ok, {CtxA1,_,_}=StateA1} = update(EnableFlagA, a, InitialState),
+    {ok, {CtxB1,_,_}=StateB1} = update(DisableFlagA, b, InitialState, CtxA1),
+    {ok, StateB2} = update(RemoveFieldXA, b, StateB1, CtxB1),
+    StateAB = merge(StateA1,StateB2),
+    ?assertEqual([{{'X',riak_dt_map},[]}],value(StateAB)).
+
+remove_entry_in_subtree_2_test() ->
+    Field = {'X', riak_dt_map},
+    FieldA = {'X.A', riak_dt_od_flag},
+    FieldB = {'X.B', riak_dt_od_flag},
+
+    EnableFlagA = {update, [{update, Field, {update, [{update, FieldA, enable}]}}]},
+    EnableFlagB = {update, [{update, Field, {update, [{update, FieldB, enable}]}}]},
+    DisableFlagA = {update, [{update, Field, {update, [{update, FieldA, disable}]}}]},
+    RemoveFieldXA = {update, [{update, Field, {update, [{remove, FieldA}]}}]},
+    
+    InitialState = new(),
+    {ok, {CtxA1,_,_}=StateA1} = update(EnableFlagA, a, InitialState),
+    {ok, {CtxB1,_,_}=StateB1} = update(DisableFlagA, b, InitialState, CtxA1),
+    {ok, {CtxB2,_,_}=StateB2} = update(EnableFlagB, b, StateB1, CtxB1),
+    {ok, StateB3} = update(RemoveFieldXA, b, StateB2, CtxB2),
+    StateAB = merge(StateA1,StateB2),
+    ?assertEqual([{{'X',riak_dt_map}, {{'X.B',riak_dt_od_flag},true}]}],[]}],value(StateAB)).
+
 keep_subtree_with_concurrent_add_test() ->
     false.
 
