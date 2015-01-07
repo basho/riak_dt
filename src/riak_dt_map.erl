@@ -336,7 +336,12 @@ apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock, Values, Defer
     case Type:update(Op, Dot, CRDT, Ctx) of
         {ok, Updated0} ->
             Updated = Type:parent_clock(?FRESH_CLOCK, Updated0),
-            NewValues = dict:store(Field, {[Dot], Updated, riak_dt_vclock:fresh()}, Values),
+            NewValues = case dict:find(Field,Values) of
+                {ok, {_,_,Tombstone}} ->
+                        dict:store(Field, {[Dot], Updated, Tombstone}, Values);
+                    error ->
+                        dict:store(Field, {[Dot], Updated, riak_dt_vclock:fresh()}, Values)
+            end,
             apply_ops(Rest, Dot, {Clock, NewValues, Deferred}, Ctx);
         Error ->
             Error
@@ -373,14 +378,13 @@ remove_field(Field, {Clock, Values, Deferred}, undefined) ->
 %% Context removes
 remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
     Deferred = defer_remove(Clock, Ctx, Field, Deferred0),
-    %%TODO: Does it need context argument?
-    %% -- Yes: A context that does not observe a deferred, should not move it upstream.
-    {DefCtx, UpdtValues} = remove_subtree(Field, Values, Clock),
+    {DefCtx, UpdtValues} = remove_subtree(Field, Values, Clock, Ctx),
     NewValues = case ctx_rem_field(Field, UpdtValues, Ctx, Clock) of
                     empty when DefCtx =/= no_deferred ->
-                        {ok, {Dots, CRDT, DeferredT}}=dict:find(Field, Values),
-                        Tombstone = riak_dt_vclock:merge([DefCtx,DeferredT]),
-                        dict:store(Field,{Dots, CRDT, Tombstone},UpdtValues);
+                        dict:update(Field, fun({Dots, CRDT, DeferredT}) ->
+                                                   Tombstone = riak_dt_vclock:merge([DefCtx,DeferredT]),
+                                                   {Dots, CRDT, Tombstone}
+                                           end,UpdtValues);
                     empty ->
                         dict:erase(Field, UpdtValues);
                     CRDT ->
@@ -392,7 +396,7 @@ remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
 ctx_rem_field(_Field, error, _Ctx_, _Clock) ->
     empty;
 
-ctx_rem_field({_, Type}, {ok, {Dots, CRDT,_DeferredT}}, Ctx, MapClock) ->
+ctx_rem_field({_, Type}, {ok, {Dots, CRDT, DeferredT}}, Ctx, MapClock) ->
     %% Drop dominated fields, and update the tombstone.
     %%
     %% If the context is removing a field at dot {a, 1} and the
@@ -411,7 +415,7 @@ ctx_rem_field({_, Type}, {ok, {Dots, CRDT,_DeferredT}}, Ctx, MapClock) ->
             %% Update the tombstone with the GLB clock
             CRDT2 = Type:merge(TS, Type:parent_clock(MapClock, CRDT)),
             %% Always reset to empty clock so we don't duplicate storage
-            {SurvivingDots, Type:parent_clock(?FRESH_CLOCK, CRDT2)}
+            {SurvivingDots, Type:parent_clock(?FRESH_CLOCK, CRDT2), DeferredT}
     end;
 ctx_rem_field(Field, Values, Ctx, MapClock) ->
     ctx_rem_field(Field, dict:find(Field, Values), Ctx, MapClock).
@@ -419,38 +423,44 @@ ctx_rem_field(Field, Values, Ctx, MapClock) ->
 %% Value is a map:
 %% Remove fields that don't have deferred operations.
 %% Get contexts from fields that have and update context tombstones.
-remove_subtree({_, riak_dt_map}, {Dots, {ValueClock, Value0, ValueDef}, DeferredT}, MapClock)->
-    {SubMergedDef, SubEntries} = dict:fold(fun(K, V, {UpdtClock, UpdtEntries}) ->
-                                                   case remove_subtree(K, V, MapClock) of
-                                                    %%ATTENTION: Should remove entries that have no deferred ops.
-                                                    %%Leaving them in place for now. 
-                                                        %%{MapClock, V} ->
-                                                           %%%No deferred context in subtree 
-                                                           %%%   - remove entry
-                                                           %%{UpdtClock, UpdtEntries};
-                                                       {TombstoneClock, Value} -> 
-                                                           %%Some deferred operation in subtree
-                                                           %%    - keep entry, update tombstones  
-                                                           {riak_dt_vclock:merge([TombstoneClock | UpdtClock]), 
-                                                            dict:store(K, Value, UpdtEntries)}
-                                                   end
-                                           end, {riak_dt_vclock:fresh(),dict:new()},Value0),
-    {SubMergedDef, {Dots, {ValueClock, SubEntries, ValueDef}, riak_dt_vclock:merge([SubMergedDef | DeferredT])}};
+remove_subtree({_, riak_dt_map}, {Dots, {ValueClock, Value0, ValueDef}, DeferredT}, MapClock, Ctx)->
+    {SubMergedDef, SubEntries} =
+        dict:fold(fun(K, V, {UpdtClock, UpdtEntries}) ->
+                      case remove_subtree(K, V, MapClock, Ctx) of
+                          {_,empty} ->
+                              {UpdtClock, UpdtEntries};
+                          {TombstoneClock, Value} -> 
+                              %%Some deferred operation in subtree
+                              %%    - keep entry, update tombstones
+                              {riak_dt_vclock:merge([TombstoneClock, UpdtClock]), 
+                               dict:store(K, Value, UpdtEntries)}
+                      end
+              end, {riak_dt_vclock:fresh(),dict:new()},Value0),
+    %Clear map if all entries are empty
+    case dict:size(SubEntries) of
+        0 ->
+            {SubMergedDef,empty};
+        _ -> {SubMergedDef, {Dots, {ValueClock, SubEntries, ValueDef}, 
+                             riak_dt_vclock:merge([SubMergedDef | DeferredT])}}
+    end
+    ;
 
 %% Value is a leaf:
 %% Merge deferred operations' context with MapClock and send it upstream
-remove_subtree(_, {_, {_ValueClock,_Value,ValueDef},_MapEntryDef}=Entry, MapClock) ->
-    %%ATTENTION: Merging the deferred clock with the map clock. 
-    %%  -- Its necessary to detect new updates.
-    %%This operations does not take into account the given context 
-    %%  -- Retrieves any deferred operation in the object
-    %%TODO: What to do with _MapEntryDef?
-    {riak_dt_vclock:merge([MapClock | ValueDef]), Entry};
+remove_subtree(Field, {Clock, {_ValueClock,_Value,ValueDef}=CRDT,TombstoneIn}, MapClock, Ctx) ->
+    %%TODO: What to do when value def is not a list? Execute the deferred op?
+    case ValueDef of
+        [] ->
+            {[], ctx_rem_field(Field, {ok, {Clock, CRDT, []}}, Ctx, MapClock)};
+        _ ->
+            Tombstone = riak_dt_vclock:merge([Clock, TombstoneIn | ValueDef]),
+            {Tombstone, {Clock, CRDT, Tombstone}}
+    end;
 
-remove_subtree(Field, Values, MapClock) ->
+remove_subtree(Field, Values, MapClock, Ctx) ->
     case dict:find(Field, Values) of
         {ok,Value} -> 
-            {UpdtClock,UpdtValue} = remove_subtree(Field, Value, MapClock),
+            {UpdtClock,UpdtValue} = remove_subtree(Field, Value, MapClock, Ctx),
             case UpdtClock of
                 MapClock -> {no_deferred, Values};
                 _ -> {UpdtClock, dict:store(Field, UpdtValue, Values)}
@@ -546,25 +556,35 @@ remove_all(Fields, Map, Ctx) ->
 
 %Eliminates the tombstone context if it has been integrated in the object's clock.
 clear_deferred_tombstones({Clock, Entries, Deferred}) ->
-    %%TODO: check if _CRDT is a map and call the clear recursively
-    FilteredEntries = ?DICT:fold(fun(Type, {Clocki, _CRDT, Tombstone}=Elem,Acc) ->
-                                           case riak_dt_vclock:descends(Clock, Tombstone) of
-                                               false ->
-                                                   %%Clock does not descend from Tombstone - keep all.
-                                                   dict:store(Type, Elem, Acc);
-                                               true ->
-                                                    %%Clock descends from Tombstone,
-                                                    case riak_dt_vclock:descends(Tombstone,Clocki) of
-                                                       false -> 
-                                                           %%Clocki greater than tombstone -- Keep elem, clear tombstone
-                                                           dict:store(Type, {Clocki, _CRDT, []},Acc);
-                                                       true -> 
-                                                           %%Tombstone equal to clocki -- Remove entry
-                                                           Acc
-                                                   end
-                                           end
-                                   end, dict:new(), Entries),
+    FilteredEntries = 
+    ?DICT:fold(fun(Type, Value, Acc) ->
+                       clear_deferred_tombstones_handle(Type,Value,Acc,Clock)
+               end, dict:new(), Entries),
     {Clock,FilteredEntries,Deferred}.
+
+clear_deferred_tombstones_handle({_, riak_dt_map}=Field, {MapDots, {C, CRDT, D}, T}, Acc, MapClock) ->
+    FilteredEntries = 
+    ?DICT:fold(fun(Type, Value, AccMap) ->
+                       clear_deferred_tombstones_handle(Type, Value, AccMap, MapClock)
+               end, dict:new(), CRDT),
+    case dict:size(FilteredEntries) == 0 of
+        true when length(T) > 0 -> Acc;
+        _ -> dict:store(Field, {MapDots, {C,FilteredEntries,D}, T},Acc)
+    end;
+
+clear_deferred_tombstones_handle(Type, {MapDots, CRDT, Tombstone}, Acc, MapClock) ->
+    ObjDominatesTomb = riak_dt_vclock:dominates(MapDots, Tombstone),
+    case ObjDominatesTomb of
+        true ->
+            dict:store(Type, {MapDots, CRDT, []}, Acc);
+        false ->
+            MapDescends = riak_dt_vclock:descends(MapClock, Tombstone),
+            case MapDescends of
+                true -> 
+                    Acc;
+                false -> dict:store(Type, {MapDots, CRDT, Tombstone}, Acc)
+            end
+    end.
 
 %% @doc compare two `map()'s for equality of structure Both schemas
 %% and value list must be equal. Performs a pariwise equals for all
@@ -707,6 +727,7 @@ from_binary(?V2_VERS, <<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
 -ifdef(TEST).
 
 -define(FIELD, {'X', riak_dt_map}).
+-define(FIELD_Y, {'Y', riak_dt_map}).
 -define(FIELD_X, {'X', riak_dt_od_flag}).
 -define(FIELD_A, {'X.A', riak_dt_od_flag}).
 -define(FIELD_B, {'X.B', riak_dt_od_flag}).
@@ -719,6 +740,9 @@ from_binary(?V2_VERS, <<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
 -define(REMOVE_FIELD_X,{update, [{remove, ?FIELD}]}).
 -define(REMOVE_FIELD_XA, {update, [{update, ?FIELD, {update, [{remove, ?FIELD_A}]}}]}).
 -define(REMOVE_FIELD_XB, {update, [{update, ?FIELD, {update, [{remove, ?FIELD_B}]}}]}).
+
+-define(ENABLE_FLAG_XYA, {update, [{update, ?FIELD, {update, [{update, ?FIELD_Y, {update, [{update, ?FIELD_A, enable}]}}]}}]}).
+
 
 
 %% Issue 99 test case
@@ -761,6 +785,17 @@ keep_deferred_with_concurrent_add_test() ->
     {ok, StateB2} = update({update, [{remove, ?FIELD_X}]}, b, StateB1, CtxB1),
     StateAB = merge(StateA2,StateB2),
     ?assertEqual([{{'X',riak_dt_od_flag},true}],value(StateAB)).
+
+%%  Remove using a context that does not descend from the object.
+%%  Remove concurrent with deferred delete --- preserve remove
+keep_deferred_context_test() ->
+    InitialState = riak_dt_map:new(),
+    {ok, {CtxA1, _, _}=StateA1} = update({update, [{update, ?FIELD_X, enable}]}, a, InitialState),
+    {ok, {_, _, _}=StateB1} = update({update, [{update, ?FIELD_X, disable}]}, b, InitialState, CtxA1),
+    {ok, StateB2} = update({update, [{remove, ?FIELD_X}]}, b, StateB1, CtxA1),
+    ?assertEqual([{{'X',riak_dt_od_flag},false}],value(StateB2)),
+    StateAB = merge(StateA1,StateB2),
+    ?assertEqual([{{'X',riak_dt_od_flag},false}],value(StateAB)).
 
 %% Remove a field that is a map with a deferred operation.
 %% Map should be removed in the end
@@ -827,6 +862,38 @@ two_deferred_entries_2_test() ->
     {ok, {_,_,_}=StateAB1} = update(?REMOVE_FIELD_XB, b, StateAB, CtxB3),
     StateABC = merge(StateAB1,StateC1),
     ?assertEqual([{{'X',riak_dt_map},[]}],value(StateABC)).
+
+clear_invisible_after_merge_test() ->
+    InitialState = riak_dt_map:new(),
+    {ok, {CtxA1,_,_}=StateA1} = riak_dt_map:update(?ENABLE_FLAG_A, a, InitialState),
+    {ok, {_,_,_}=StateA2} = riak_dt_map:update(?ENABLE_FLAG_A, a, StateA1),
+    {ok, {CtxB1,_,_}=StateB1} = riak_dt_map:update(?DISABLE_FLAG_A, b, InitialState, CtxA1),
+    {ok, {CtxB2,_,_}=StateB2} = riak_dt_map:update(?ENABLE_FLAG_B, b, StateB1, CtxB1),
+    {ok, {_,_,_}=StateB3} = riak_dt_map:update(?REMOVE_FIELD_X, b, StateB2, CtxB2),
+    StateAB1 = riak_dt_map:merge(StateB3,StateA1),
+    riak_dt_map:value(StateAB1),
+    StateAB2 = riak_dt_map:merge(StateB3,StateA2),
+    riak_dt_map:value(StateAB2).
+
+clear_invisible_after_merge_2_test() ->
+    InitialState = riak_dt_map:new(),
+    {ok, {CtxA1,_,_}=_StateA1} = riak_dt_map:update(?ENABLE_FLAG_A, a, InitialState),
+    {ok, {_CtxB1,_,_}=StateB1} = riak_dt_map:update(?DISABLE_FLAG_B, b, InitialState,CtxA1),
+    {ok, {CtxB2,_,_}=StateB2} = riak_dt_map:update(?ENABLE_FLAG_XYA, b, StateB1),
+    {ok, {_,_,_}=StateB3} = riak_dt_map:update(?REMOVE_FIELD_X, b, StateB2, CtxB2),
+    ?assertEqual([{{'X',riak_dt_map},[{{'X.B',riak_dt_od_flag},false}]}], value(StateB3)).
+
+%%Set should only have element 1.
+%clear_invisible_after_merge_set_test() ->
+%    AddElemToB = fun(Elem) ->
+%                         {update, [{update, ?FIELD, {update, [{update, ?FIELD_B, {add, Elem}}]}}]}
+%                 end,
+%    InitialState = riak_dt_map:new(),
+%    {ok, {CtxA1,_,_}=StateA1} = riak_dt_map:update(?ENABLE_FLAG_A, a, InitialState),
+%    {ok, {CtxB1,_,_}=StateB1} = riak_dt_map:update(?DISABLE_FLAG_A, b, InitialState, CtxA1),       
+%    {ok, {CtxB2,_,_}=StateB2} = riak_dt_map:update(AddElemToB(0), b, StateB1, CtxB1),
+%    {ok, {CtxB3,_,_}=StateB3} = riak_dt_map:update(?REMOVE_FIELD_X, b, StateB2, CtxB2),
+%    {ok, {CtxB4,_,_}=StateB4} = riak_dt_map:update(AddElemToB(1), b, StateB3, CtxB3),
 
 %%TODO: Visibility test; Remove with a context that does not cover a deferred operation;
 
