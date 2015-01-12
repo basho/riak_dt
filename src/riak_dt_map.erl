@@ -180,7 +180,7 @@
 -export([merge/2, equal/2, to_binary/1, from_binary/1]).
 -export([to_binary/2, from_binary/2]).
 -export([precondition_context/1, stats/1, stat/2]).
--export([parent_clock/2]).
+-export([parent_clock/2, get_deferred/1, get_deferred/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -247,6 +247,12 @@ new() ->
 -spec parent_clock(riak_dt_vclock:vclock(), map()) -> map().
 parent_clock(Clock, {_MapClock, Values, Deferred}) ->
     {Clock, Values, Deferred}.
+
+get_deferred({_, _, Deferred}) ->
+    lists:map(fun({Key, _}) -> Key end, ?DICT:to_list(Deferred)).
+
+get_deferred({Clock, Entries, _}=CRDT, Ctx) ->
+    riak_dt:get_deferred({Clock, Entries, get_deferred(CRDT)}, Ctx).
 
 %% @doc get the current set of values for this Map
 -spec value(map()) -> values().
@@ -475,7 +481,7 @@ propagate_remove({_, riak_dt_map}, {Dots, {Clock, Value0, Deferred}, Tombstone},
 %% Value is a leaf:
 %% Merge deferred operations' context with Value clock (Tombstone) and send it upstream
 %% Exclude non-covered dots -- intersection -- how does this relate to the second TODO?
-%% Probably that make it work
+%% Only handles half of the problem.
 propagate_remove(Field, {Clock, {_, _, Deferred}=CRDT, TombstoneIn}, MapClock, Ctx) ->
     %%TODO: What to do when value def is not a list? Execute the deferred op?
 

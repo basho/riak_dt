@@ -22,7 +22,7 @@
 
 -module(riak_dt).
 
--export([to_binary/1, from_binary/1, dict_to_orddict/1]).
+-export([get_deferred/1, get_deferred/2, to_binary/1, from_binary/1, dict_to_orddict/1]).
 -export_type([actor/0, dot/0, crdt/0, context/0]).
 
 -type crdt() :: term().
@@ -44,6 +44,7 @@
 %% given clock as it's own.
 -callback parent_clock(riak_dt_vclock:vclock(), crdt()) ->
      crdt().
+-callback get_deferred(crdt(), riak_dt_vclock:vclock()) -> [riak_dt_vclock:vclock()].
 -callback merge(crdt(), crdt()) -> crdt().
 -callback equal(crdt(), crdt()) -> boolean().
 -callback to_binary(crdt()) -> binary().
@@ -81,3 +82,16 @@ from_binary(Binary) ->
 -spec dict_to_orddict(dict()) -> orddict:orddict().
 dict_to_orddict(Dict) ->
     orddict:from_list(dict:to_list(Dict)).
+
+-spec get_deferred(crdt()) -> [riak_dt_vclock:vclock()].
+get_deferred({_, _, Deferred}) -> Deferred.
+
+-spec get_deferred(crdt(), riak_dt_vclock:vclock()) -> [riak_dt_vclock:vclock()].
+get_deferred({_, _, Deferred}, Ctx) ->
+    lists:filtermap(fun(Def) ->
+                            case riak_dt_vclock:glb(Def,Ctx) of
+                                [] -> false;
+                                Intersect -> {true, Intersect}
+                            end
+                    end, Deferred).
+
