@@ -44,6 +44,7 @@
 %% given clock as it's own.
 -callback parent_clock(riak_dt_vclock:vclock(), crdt()) ->
      crdt().
+-callback get_deferred(crdt()) -> [riak_dt_vclock:vclock()].
 -callback get_deferred(crdt(), riak_dt_vclock:vclock()) -> [riak_dt_vclock:vclock()].
 -callback merge(crdt(), crdt()) -> crdt().
 -callback equal(crdt(), crdt()) -> boolean().
