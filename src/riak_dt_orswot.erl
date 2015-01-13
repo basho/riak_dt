@@ -80,7 +80,7 @@
 -export([to_binary/1, from_binary/1]).
 -export([to_binary/2, from_binary/2]).
 -export([precondition_context/1, stats/1, stat/2]).
--export([parent_clock/2, get_deferred/1, get_deferred/2]).
+-export([parent_clock/2, get_deferred/1, get_deferred/2, clear/1, clear/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -380,6 +380,14 @@ remove_elem({ok, _VClock}, Elem, {Clock, Dict, Deferred}) ->
     {ok, {Clock, ?DICT:erase(Elem, Dict), Deferred}};
 remove_elem(_, Elem, _ORSet) ->
     {error, {precondition, {not_present, Elem}}}.
+
+clear({_, Entries, _}=ORSet) ->
+    Elems = ?DICT:fold(fun(Elem, _, Acc) -> [Elem | Acc] end, [], Entries),
+    remove_all(Elems, undefined, ORSet).
+
+clear({_, Entries, _}=ORSet, Ctx) ->
+    Elems = ?DICT:fold(fun(Elem, _, Acc) -> [Elem | Acc] end, [], Entries),
+    remove_all(Elems, undefined, ORSet, Ctx).
 
 %% @doc the precondition context is a fragment of the CRDT that
 %%  operations requiring certain pre-conditions can be applied with.

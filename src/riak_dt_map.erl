@@ -495,7 +495,8 @@ propagate_remove({_, Type}=Field, {Clock, CRDT, TombstoneIn}, MapClock, Ctx) ->
         _ ->
             Intersection = riak_dt_vclock:glb(Clock,Ctx),
             Tombstone = riak_dt_vclock:merge([Intersection, TombstoneIn | Type:get_deferred(CRDT)]),
-            {Tombstone, {Clock, CRDT, Tombstone}}
+            {ok, ClearedCRDT} = Type:clear(CRDT, Ctx),
+            {Tombstone, {Clock, ClearedCRDT, Tombstone}}
     end;
 
 propagate_remove(Field, Values, MapClock, Ctx) ->

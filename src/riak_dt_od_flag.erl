@@ -30,7 +30,7 @@
 -export([to_binary/1, stats/1, stat/2]).
 -export([to_binary/2, from_binary/2]).
 -export([precondition_context/1]).
--export([parent_clock/2, get_deferred/1, get_deferred/2]).
+-export([parent_clock/2, get_deferred/1, get_deferred/2, clear/1, clear/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -153,6 +153,10 @@ apply_deferred(Clock, Flag, Deferred) ->
                 %% the deferred if they still cannot be executed.
                 {Clock, Flag, []},
                 Deferred).
+
+clear(Flag) -> disable(Flag, undefined).
+
+clear(Flag, Ctx) -> disable(Flag, Ctx).
 
 -spec equal(od_flag(), od_flag()) -> boolean().
 equal({C1,D1, Def1},{C2,D2, Def2}) ->
