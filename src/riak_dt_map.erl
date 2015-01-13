@@ -415,9 +415,9 @@ remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
                     %Element is removed but has deferred operations
                     {ok, empty} when DefCtx =/= no_deferred ->
                         ?DICT:update(Field, fun({Dots, CRDT, Tombstone}) ->
-                                                   Tombstone = riak_dt_vclock:merge([DefCtx,Tombstone]),
-                                                   {Dots, CRDT, Tombstone}
-                                           end,UpdtValues);
+                                                    Tombstone = riak_dt_vclock:merge([DefCtx,Tombstone]),
+                                                    {Dots, CRDT, Tombstone}
+                                            end,UpdtValues);
                     {ok, empty} ->
                         ?DICT:erase(Field, UpdtValues);
                     {ok, CRDT} ->
@@ -474,7 +474,7 @@ propagate_remove({_, riak_dt_map}, {Dots, {Clock, Value0, Deferred}, Tombstone},
     %Clear map if all entries are empty
     case ?DICT:size(SubEntries) of
         0 ->
-            {SubMergedDef,empty};
+            {SubMergedDef, empty};
         _ -> {SubMergedDef, {Dots, {Clock, SubEntries, Deferred}, 
                              riak_dt_vclock:merge([SubMergedDef | Tombstone])}}
     end;
@@ -926,7 +926,6 @@ clear_invisible_after_merge_test() ->
     ?assertEqual([], riak_dt_map:value(StateAB1)),
     ?assertEqual([{{'X',riak_dt_map},[{{'X.A',riak_dt_od_flag},true}]}], value(StateAB2)).
 
-
 clear_invisible_after_merge_2_test() ->
     InitialState = riak_dt_map:new(),
     {ok, {CtxA1,_,_}=_StateA1} = riak_dt_map:update(?ENABLE_FLAG_A, a, InitialState),
@@ -968,6 +967,28 @@ clear_invisible_after_merge_set_2_test() ->
     {ok, {_,_,_}=StateB4} = riak_dt_map:update(AddElemToS(2), b, StateB3, CtxB3),
     StateAB = riak_dt_map:merge(StateA1,StateB4),
     ?assertEqual([{{'X',riak_dt_map}, [{{'X.S',riak_dt_orswot},[2]}]}], value(StateAB)).
+
+transaction_1_test() ->
+    Updt1 = {update, [{update, ?FIELD, {update, [{update, ?FIELD_A, enable}, {update, ?FIELD_B, enable}]}}]},
+    InitialState = riak_dt_map:new(),
+    {ok, {CtxA1,_,_}=StateA1} = riak_dt_map:update(Updt1, a, InitialState),
+    ?assertEqual([{{'X',riak_dt_map},[{{'X.A',riak_dt_od_flag},true}, 
+                                      {{'X.B',riak_dt_od_flag},true}]}], value(StateA1)),
+    {ok, StateB1} = riak_dt_map:update(?REMOVE_FIELD_X, b, InitialState, CtxA1),
+    StateAB = riak_dt_map:merge(StateA1,StateB1),
+    ?assertEqual([], riak_dt_map:value(StateAB)).
+
+transaction_2_test() ->
+    Updt1 = {update, [{update, ?FIELD, {update, [{update, ?FIELD_A, enable}, {update, ?FIELD_B, enable}]}}]},
+    InitialState = riak_dt_map:new(),
+    {ok, {CtxA1,_,_}=StateA1} = riak_dt_map:update(Updt1, a, InitialState),
+    {ok, StateB1} = riak_dt_map:update(?REMOVE_FIELD_XA, b, InitialState, CtxA1),
+    StateAB = riak_dt_map:merge(StateA1,StateB1),
+    ?assertEqual([{{'X',riak_dt_map},[{{'X.B',riak_dt_od_flag},true}]}], value(StateAB)),
+    {ok, StateA2} = riak_dt_map:update(?ENABLE_FLAG_A, a, StateA1),
+    StateA2B = riak_dt_map:merge(StateA2,StateB1),
+    ?assertEqual([{{'X',riak_dt_map},[{{'X.A',riak_dt_od_flag},true}, 
+                                      {{'X.B',riak_dt_od_flag},true}]}], value(StateA2B)).
 
 %% This fails on previous version of riak_dt_map
 assoc_test() ->
