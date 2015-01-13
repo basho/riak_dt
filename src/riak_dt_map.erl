@@ -483,19 +483,18 @@ propagate_remove({_, riak_dt_map}, {Dots, {Clock, Value0, Deferred}, Tombstone},
 %% Exclude non-covered dots -- intersection -- how does this relate to the second TODO?
 %% Only handles half of the problem.
 propagate_remove({_, Type}=Field, {Clock, CRDT, TombstoneIn}, MapClock, Ctx) ->
-    %%TODO: Apply remove for fields that are tombstoned:
-    %%CRDT has deferred {a,1}, a posterior 'add' operation {b,1}. 
-    %%Should remove {b,1} and create the tombstone. Now, it does
-    %%not remove {b,1}, so if the CRDT is not removed afterall, because there
-    %%was a concurrent operation, element with dot {b,1} will be present though
-    %%it was removed.
     case Type:get_deferred(CRDT) of
         [] ->
             {[], ctx_rem_field(Field, {ok, {Clock, CRDT, []}}, Ctx, MapClock)};
         _ ->
             Intersection = riak_dt_vclock:glb(Clock,Ctx),
             Tombstone = riak_dt_vclock:merge([Intersection, TombstoneIn | Type:get_deferred(CRDT)]),
-            {ok, ClearedCRDT} = Type:clear(CRDT, Ctx),
+            
+            %% Clear CRDT
+             TombstoneClock = riak_dt_vclock:glb(MapClock, Ctx),
+             TS = Type:parent_clock(TombstoneClock, Type:new()),
+             ClearedCRDT = Type:merge(TS, Type:parent_clock(TombstoneClock, CRDT)),
+            
             {Tombstone, {Clock, ClearedCRDT, Tombstone}}
     end;
 

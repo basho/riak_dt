@@ -154,6 +154,7 @@ apply_deferred(Clock, Flag, Deferred) ->
                 {Clock, Flag, []},
                 Deferred).
 
+%No longer needed
 clear(Flag) -> disable(Flag, undefined).
 
 clear(Flag, Ctx) -> disable(Flag, Ctx).

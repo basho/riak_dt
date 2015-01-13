@@ -381,6 +381,7 @@ remove_elem({ok, _VClock}, Elem, {Clock, Dict, Deferred}) ->
 remove_elem(_, Elem, _ORSet) ->
     {error, {precondition, {not_present, Elem}}}.
 
+%No longer needed
 clear({_, Entries, _}=ORSet) ->
     Elems = ?DICT:fold(fun(Elem, _, Acc) -> [Elem | Acc] end, [], Entries),
     remove_all(Elems, undefined, ORSet).
