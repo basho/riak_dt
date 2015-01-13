@@ -411,17 +411,19 @@ remove_field(Field, {Clock, Values, Deferred}, undefined) ->
 remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
     Deferred = defer_remove(Clock, Ctx, Field, Deferred0),
     {DefCtx, UpdtValues} = propagate_remove(Field, Values, Clock, Ctx),
-    NewValues = case ctx_rem_field(Field, UpdtValues, Ctx, Clock) of
+    NewValues = case ?DICT:find(Field, UpdtValues) of
                     %Element is removed but has deferred operations
-                    empty when DefCtx =/= no_deferred ->
+                    {ok, empty} when DefCtx =/= no_deferred ->
                         ?DICT:update(Field, fun({Dots, CRDT, Tombstone}) ->
                                                    Tombstone = riak_dt_vclock:merge([DefCtx,Tombstone]),
                                                    {Dots, CRDT, Tombstone}
                                            end,UpdtValues);
-                    empty ->
+                    {ok, empty} ->
                         ?DICT:erase(Field, UpdtValues);
-                    CRDT ->
-                        ?DICT:store(Field, CRDT, UpdtValues)
+                    {ok, CRDT} ->
+                        ?DICT:store(Field, CRDT, UpdtValues);
+                    error ->
+                        UpdtValues
                 end,
     {ok, {Clock, NewValues, Deferred}}.
 
@@ -502,9 +504,11 @@ propagate_remove(Field, Values, MapClock, Ctx) ->
     case ?DICT:find(Field, Values) of
         {ok,Value} -> 
             {UpdtClock,UpdtValue} = propagate_remove(Field, Value, MapClock, Ctx),
-            case UpdtClock of
-                MapClock -> {no_deferred, Values};
-                _ -> {UpdtClock, ?DICT:store(Field, UpdtValue, Values)}
+            case UpdtValue of
+                empty ->
+                    {UpdtClock, ?DICT:erase(Field, Values)};
+                _ ->
+                    {UpdtClock, ?DICT:store(Field, UpdtValue, Values)}
             end;
         error -> {MapClock, Values}
     end.
