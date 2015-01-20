@@ -43,47 +43,46 @@
 
 -export_type([od_flag/0, od_flag_op/0]).
 
--opaque od_flag() :: {riak_dt_vclock:vclock(), [riak_dt:dot()], deferred()}.
+-opaque od_flag() :: {riak_dt_vclock:vclock(), [riak_dt:dot()]}.
 -type od_flag_op() :: enable | disable.
--type deferred() :: ordsets:ordset(riak_dt:context()).
 
 -spec new() -> od_flag().
 new() ->
-    {riak_dt_vclock:fresh(), [], []}.
+    {riak_dt_vclock:fresh(), []}.
 
 %% @doc sets the clock in the flag to that `Clock'. Used by a
 %% containing Map for sub-CRDTs
 -spec parent_clock(riak_dt_vclock:vclock(), od_flag()) -> od_flag().
-parent_clock(Clock, {_SetClock, Flag , Deferred}) ->
-    {Clock, Flag, Deferred}.
+parent_clock(Clock, {_SetClock, Flag}) ->
+    {Clock, Flag}.
 
 -spec value(od_flag()) -> boolean().
-value({_, [], _}) -> false;
-value({_, _, _}) -> true.
+value({_, []}) -> false;
+value({_, _}) -> true.
 
 -spec value(term(), od_flag()) -> boolean().
 value(_, Flag) ->
     value(Flag).
 
 -spec update(od_flag_op(), riak_dt:actor() | riak_dt:dot(), od_flag()) -> {ok, od_flag()}.
-update(enable, Dot, {Clock, Dots, Deferred}) when is_tuple(Dot) ->
+update(enable, Dot, {Clock, Dots}) when is_tuple(Dot) ->
     NewClock = riak_dt_vclock:merge([[Dot], Clock]),
-    {ok, {NewClock, riak_dt_vclock:merge([[Dot], Dots]), Deferred}};
-update(enable, Actor, {Clock, Dots, Deferred}) ->
+    {ok, {NewClock, riak_dt_vclock:merge([[Dot], Dots])}};
+update(enable, Actor, {Clock, Dots}) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
     Dot = [{Actor, riak_dt_vclock:get_counter(Actor, NewClock)}],
-    {ok, {NewClock, riak_dt_vclock:merge([Dot, Dots]), Deferred}};
+    {ok, {NewClock, riak_dt_vclock:merge([Dot, Dots])}};
 update(disable, _Actor, Flag) ->
     disable(Flag, undefined).
 
 -spec disable(od_flag(), riak_dt:context()) ->
     {ok, od_flag()}.
-disable({Clock, _, Deferred}, undefined) ->
-    {ok, {Clock, [], Deferred}};
-disable({Clock, Dots, Deferred}, Ctx) ->
+disable({Clock, _}, undefined) ->
+    {ok, {Clock, []}};
+disable({Clock, Dots}, Ctx) ->
     NewDots = riak_dt_vclock:subtract_dots(Dots, Ctx),
     NewClock = riak_dt_vclock:merge(Clock, Ctx),
-    {ok, {NewClock, NewDots, Deferred}}.
+    {ok, {NewClock, NewDots}}.
 
 %% @doc `update/4' is similar to `update/3' except that it takes a
 %% `context' (obtained from calling `precondition_context/1'). This
@@ -105,10 +104,10 @@ update(disable, _Actor, Flag, Ctx) ->
     disable(Flag, Ctx).
 
 -spec merge(od_flag(), od_flag()) -> od_flag().
-merge({Clock, Entries, Deferred}, {Clock, Entries, Deferred}) ->
+merge({Clock, Entries}, {Clock, Entries}) ->
     %% When they are the same result why merge?
-    {Clock, Entries, Deferred};
-merge({LHSClock, LHSDots, _LHSDeferred}, {RHSClock, RHSDots, _RHSDeferred}) ->
+    {Clock, Entries};
+merge({LHSClock, LHSDots}, {RHSClock, RHSDots}) ->
     NewClock = riak_dt_vclock:merge([LHSClock, RHSClock]),
     %% drop all the LHS dots that are dominated by the rhs clock
     %% drop all the RHS dots that dominated by the LHS clock
@@ -120,27 +119,23 @@ merge({LHSClock, LHSDots, _LHSDeferred}, {RHSClock, RHSDots, _RHSDeferred}) ->
     LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, RHSClock),
     RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, LHSClock),
     Flag = riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]),
-    {NewClock, Flag, []}.
+    {NewClock, Flag}.
 
 -spec equal(od_flag(), od_flag()) -> boolean().
-equal({C1,D1, Def1},{C2,D2, Def2}) ->
+equal({C1,D1},{C2,D2}) ->
     riak_dt_vclock:equal(C1,C2) andalso
-        riak_dt_vclock:equal(D1, D2) andalso
-        Def1 == Def2.
+        riak_dt_vclock:equal(D1, D2).
 
 -spec stats(od_flag()) -> [{atom(), integer()}].
 stats(ODF) ->
     [{actor_count, stat(actor_count, ODF)},
-     {dot_length, stat(dot_length, ODF)},
-     {deferred_length, stat(deferred_length, ODF)}].
+     {dot_length, stat(dot_length, ODF)}].
 
 -spec stat(atom(), od_flag()) -> number() | undefined.
-stat(actor_count, {C, _, _}) ->
+stat(actor_count, {C, _}) ->
     length(C);
-stat(dot_length, {_, D, _}) ->
+stat(dot_length, {_, D}) ->
     length(D);
-stat(deferred_length, {_Clock, _Dots, Deferred}) ->
-    length(Deferred);
 stat(_, _) -> undefined.
 
 -include("riak_dt_tags.hrl").
@@ -161,7 +156,7 @@ to_binary(Flag) ->
 %%
 %% @see update/4
 -spec precondition_context(od_flag()) -> riak_dt:context().
-precondition_context({Clock, _Flag, _Deferred}) ->
+precondition_context({Clock, _Flag}) ->
     Clock.
 
 %% ===================================================================
@@ -271,9 +266,9 @@ stat_test() ->
     {ok, F1} = update(enable, 1, F0),
     {ok, F2} = update(enable, 2, F1),
     {ok, F3} = update(enable, 3, F2),
-    ?assertEqual([{actor_count, 3}, {dot_length, 3}, {deferred_length, 0}], stats(F3)),
+    ?assertEqual([{actor_count, 3}, {dot_length, 3}], stats(F3)),
     {ok, F4} = update(disable, 4, F3), %% Observed-disable doesn't add an actor
-    ?assertEqual([{actor_count, 3}, {dot_length, 0}, {deferred_length, 0}], stats(F4)),
+    ?assertEqual([{actor_count, 3}, {dot_length, 0}], stats(F4)),
     ?assertEqual(3, stat(actor_count, F4)),
     ?assertEqual(undefined, stat(max_dot_length, F4)).
 -endif.
