@@ -37,7 +37,7 @@
 -define(DICT, orddict).
 
 new() ->
-    {riak_dt_vclock:fresh(), orddict:new(), orddict:new(), ?DICT:new()}.
+    {riak_dt_vclock:fresh(), orddict:new(), ordsets:new(), ?DICT:new()}.
 
 value({Clock, Entries, _Seen, _Deferred}) ->
     [K || {K, Dots} <- orddict:to_list(Entries),
@@ -104,9 +104,11 @@ update({update, Ops}, Actor, ORSet, Ctx) ->
 remove_all([], _Actor, ORSet, _Ctx) ->
     {ok, ORSet};
 remove_all([Elem | Rest], Actor, ORSet, Ctx) ->
-    {ok, ORSet2} =  update({remove, Elem}, Actor, ORSet, Ctx),
-    remove_all(Rest, Actor, ORSet2, Ctx).
-
+    case update({remove, Elem}, Actor, ORSet, Ctx) of
+        {ok, ORSet2} -> remove_all(Rest, Actor, ORSet2, Ctx);
+        {error, _} -> remove_all(Rest, Actor, ORSet, Ctx)
+    end.
+    
 remove_elem({ok, Dots}, Elem, {Clock, Dict, Seen, Deferred0}, Ctx) ->
     Deferred = defer_remove(Clock, Ctx, Elem, Deferred0),
     DictUpdt = case riak_dt_vclock:subtract_dots(Dots, Ctx) of
@@ -143,11 +145,21 @@ delta_update({add, Elem}, Actor, {Clock, _Entries, _Seen}) ->
 delta_update({remove, Elem}, _Actor, ORSet) ->
     delta_remove_elem(Elem,ORSet, new());
 
-delta_update({remove_all, Elems}, _Actor, ORSet) ->
-    Delta = lists:foldl(fun(Elem , ORSetAcc) -> 
-                                delta_remove_elem(Elem, ORSet, ORSetAcc)
+delta_update({remove_all, Elems}, _Actor, ORSet0) ->
+    ORSet = lists:foldl(fun(Elem , ORSetAcc) -> 
+                                delta_remove_elem(Elem, ORSet0, ORSetAcc)
                         end, new(), Elems),
-    {ok, Delta}.
+    {ok, ORSet};
+
+delta_update({add_all, Elems}, Actor, {Clock0, _Entries, _Seen, _Deferred}) ->
+    {_, ORSet} = lists:foldl(fun(Elem , {Clock, ORSetAcc}) ->
+                                NewClock = riak_dt_vclock:increment(Actor, Clock),
+                                Counter = riak_dt_vclock:get_counter(Actor, NewClock),
+                                Dot = [{Actor, Counter}],
+                                {ok, Delta} = delta_add_elem(Elem, Dot, ORSetAcc),
+                                {NewClock, Delta}
+                        end, {Clock0, new()}, Elems),
+    {ok, ORSet}.
 
 delta_update({add, Elem}, Actor, {Clock, _Entries, _Seen, _Deferred}, _Ctx) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
@@ -155,50 +167,56 @@ delta_update({add, Elem}, Actor, {Clock, _Entries, _Seen, _Deferred}, _Ctx) ->
     Dot = [{Actor, Counter}],
     delta_add_elem(Elem, Dot, new());
 
-delta_update({add_all, Elems}, Actor, {Clock, _Entries, _Seen, _Deferred}, _Ctx) ->
-    Delta = lists:foldl(fun(Elem , ORSetAcc) -> 
+delta_update({add_all, Elems}, Actor, {Clock0, _Entries, _Seen, _Deferred}, _Ctx) ->
+    {_, ORSet} = lists:foldl(fun(Elem , {Clock, ORSetAcc}) -> 
                                 NewClock = riak_dt_vclock:increment(Actor, Clock),
                                 Counter = riak_dt_vclock:get_counter(Actor, NewClock),
                                 Dot = [{Actor, Counter}],
-                                delta_add_elem(Elem, Dot, ORSetAcc)
-                        end, new(), Elems),
-    {ok, Delta};
+                                {ok, Delta} = delta_add_elem(Elem, Dot, ORSetAcc),
+                                {NewClock,Delta}
+                        end, {Clock0, new()}, Elems),
+    {ok, ORSet};
 
 delta_update({remove, Elem}, _Actor, ORSet, Ctx) ->
     delta_remove_elem(Elem, ORSet, new(), Ctx);
 
-delta_update({remove_all, Elems}, _Actor, ORSet, Ctx) ->
-    Delta = lists:foldl(fun(Elem , ORSetAcc) -> 
-                                delta_remove_elem(Elem, ORSet, ORSetAcc, Ctx)
+delta_update({remove_all, Elems}, _Actor, ORSet0, Ctx) ->
+    ORSet = lists:foldl(fun(Elem , ORSetAcc) -> 
+                                delta_remove_elem(Elem, ORSet0, ORSetAcc, Ctx)
                         end, new(), Elems),
-    {ok, Delta};
+    {ok, ORSet};
 
-delta_update({update, Ops}, Actor, ORSet, Ctx) ->
-    ORSet2 = lists:foldl(fun(Op, Set) ->
-                                 {ok, NewSet} = delta_update(Op, Actor, Set, Ctx),
-                                 NewSet
-                         end,
-                         ORSet,
-                         Ops),
-    {ok, ORSet2}.
+%% Could be more efficient...
+delta_update({update, Ops}, Actor, ORSet0, Ctx) ->
+    ORSet = lists:foldl(fun(Op, Set) ->
+                                {ok, NewSet} = delta_update(Op, Actor, ORSet0, Ctx),
+                                merge(Set, NewSet)
+                        end,
+                        new(),
+                        Ops),
+    {ok, ORSet}.
 
 delta_add_elem(Elem, Dot, {_Clock, Entries, Seen, _Deferred}) ->
-    {ok, {[], orddict:store(Elem, Dot, Entries), lists:append(Dot, Seen), _Deferred}}.
+    {ok, {[], orddict:store(Elem, Dot, Entries), lists:umerge(Dot, Seen), _Deferred}}.
 
 delta_remove_elem(Elem, {_, Entries, _, _}, {_, _, SeenOut, _DeferredOut}) ->
     case orddict:find(Elem, Entries) of
         {ok, Dots} ->
-            {ok, {[], [], lists:append(Dots,SeenOut), _DeferredOut}};
+            {ok, {[], [], ordsets:union(Dots,SeenOut), _DeferredOut}};
         error ->
             {ok, {[], [], SeenOut, _DeferredOut}}
     end.
 
-delta_remove_elem(Elem, {Clock, Entries, _, _}, {_, _, SeenOut, DeferredOut}, Ctx) ->
+delta_remove_elem(Elem, {Clock, Entries, _, _}, {_, EntriesOut, SeenOut, DeferredOut}, Ctx) ->
     Deferred = defer_remove(Clock, Ctx, Elem, DeferredOut),
     case orddict:find(Elem, Entries) of
         {ok, Dots} ->
             Remaining = riak_dt_vclock:subtract_dots(Dots, Ctx),
-            {ok, {[], [], lists:append(Remaining, SeenOut), Deferred}};
+            Removed = lists:subtract(Dots, Remaining),
+            {ok, {[], 
+                  orddict:store(Elem, Remaining, EntriesOut), 
+                  ordsets:union(Removed, SeenOut), Deferred
+                 }};
         error ->
             {ok, {[], [], SeenOut, Deferred}}
     end.
@@ -223,18 +241,14 @@ merge({LHClock, LHEntries, LHSeen, LHDeferred}=LHS, {RHClock, RHEntries, RHSeen,
     LHUnique = sets:subtract(LHKeys, CommonKeys),
     RHUnique = sets:subtract(RHKeys, CommonKeys),
     Entries00 = merge_common_keys(CommonKeys, LHS, RHS),
-
     Entries0 = merge_disjoint_keys(LHUnique, LHEntries, RHClock, RHSeen, Entries00),
     Entries1 = merge_disjoint_keys(RHUnique, RHEntries, LHClock, LHSeen, Entries0),
-
-    Seen0 = lists:umerge(LHSeen, RHSeen),
+    Seen0 = lists:umerge(LHSeen,RHSeen),
     {Clock, Seen} = compress_seen(Clock0, Seen0),
-
     Deferred = ?DICT:merge(fun(_Key, V1, V2) ->
                                      lists:umerge(V1,V2)
                              end, LHDeferred,RHDeferred),
-
-    apply_deferred({Clock, Entries1,Seen, Deferred}).
+    apply_deferred({Clock, Entries1, Seen, Deferred}).
 
 compress_seen(Clock, Seen) ->
     lists:foldl(fun(Node, {ClockAcc, SeenAcc}) ->
@@ -263,7 +277,6 @@ compress(Cnt, [{_A, Cntr} | Rest]) when Cntr - Cnt == 1 ->
 compress(Cnt, Cnts) ->
     {Cnt, Cnts}.
 
-%Reuse the interface operations instead of clearing the dots?
 apply_deferred({_, _Entries, _Seen, Deferred}=ORSet0) ->
     ?DICT:fold(fun(Ctx, Elems, ORSetAcc) ->
                        {ok, ORSet} = update({remove_all, Elems}, undefined, ORSetAcc, Ctx),
@@ -349,9 +362,10 @@ simple_add_test() ->
 
 add_remove_test() ->
     InitialState = new(),
-    {ok, {CtxA1,_,_,_} = D_A1} = ?ADD(a, a, InitialState),
+    {ok, D_A1} = ?ADD(a, a, InitialState),
+    {CtxA1,_,_,_} = A1 = merge(D_A1, InitialState),
     {ok, D_A2} = ?REM(a, a, D_A1, CtxA1),
-    A2 = merge(D_A2, merge(D_A1, InitialState)),
+    A2 = merge(D_A2, A1),
     ?assertEqual([], value(A2)).
 
 concurrent_add_test() ->
@@ -378,6 +392,20 @@ deferred_remove_concurrent_add_test() ->
     {ok, {_CtxB1,_,_,_} = D_B1} = ?REM(a, b, InitialState, CtxA1),
     AB = merge(D_B1, merge(MergedA2, InitialState)),
     ?assertEqual([a], value(AB)).
+
+deferred_remove_ctx_test() ->
+    InitialState = new(),
+    {ok, D_A1} = ?ADD(a, a, InitialState),
+    {CtxA1,_,_,_} = merge(D_A1, InitialState),
+    {ok, D_B1} = ?ADD(a, b, InitialState),
+    {CtxB1,_,_,_} = MergedB1 = merge(D_B1, InitialState),
+    {ok, D_B2} = ?REM(a, b, MergedB1, CtxA1),
+    {_CtxB2, _, _, _}=B2 = merge(D_B2, MergedB1),
+    ?assertEqual([a], value(B2)),
+    A1B2 = merge(D_A1, B2),
+    {ok, D_B3} = ?REM(a, b, A1B2, CtxB1),
+    A1B3 = merge(D_B3, merge(A1B2, D_B3)),
+    ?assertEqual([], value(A1B3)).
 
 %% Added by @asonge from github to catch a bug I added by trying to
 %% bypass merge if one side's clcok dominated the others. The
@@ -470,6 +498,23 @@ batch_order_test() ->
     ?assertEqual([<<"bar">>, <<"baz">>], value(Set3)),
     {ok, Set4} = update({remove, <<"baz">>}, a, Set),
     {ok, Set5} = update({add, <<"baz">>}, a, Set4),
+    ?assertEqual([<<"bar">>, <<"baz">>], value(Set5)).
+
+batch_delta_order_test() ->
+    InitialState = new(),
+    {ok, Set_D} = delta_update({add_all, [<<"bar">>, <<"baz">>]}, a, InitialState),
+    Set = merge(Set_D, InitialState),
+    Context  = precondition_context(Set),
+    {ok, Set2_D} = delta_update({update, [{remove, <<"baz">>}, {add, <<"baz">>}]}, a, Set, Context),
+    Set2 = merge(Set2_D, Set),
+    ?assertEqual([<<"bar">>, <<"baz">>], value(Set2)),
+    {ok, Set3_D} = update({update, [{remove, <<"baz">>}, {add, <<"baz">>}]}, a, Set),
+    Set3 = merge(Set3_D, Set),
+    ?assertEqual([<<"bar">>, <<"baz">>], value(Set3)),
+    {ok, Set4_D} = update({remove, <<"baz">>}, a, Set),
+    Set4 = merge(Set4_D, Set),
+    {ok, Set5_D} = update({add, <<"baz">>}, a, Set4),
+    Set5 = merge(Set5_D, Set4),
     ?assertEqual([<<"bar">>, <<"baz">>], value(Set5)).
 
 -endif.
