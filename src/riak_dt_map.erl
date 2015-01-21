@@ -252,6 +252,8 @@ parent_clock(Clock, {_MapClock, Values, Deferred}) ->
 
 %% @doc get the current set of values for this Map
 -spec value(map()) -> values().
+value({_C, V, _D}=Map) when is_list(V) ->
+    value(to_v2(Map));
 value({_Clock, Values, _Deferred}) ->
     lists:sort(?DICT:fold(fun({Name, Type}, CRDTs, Acc) ->
                                   Merged = merge_crdts(Type, CRDTs),
@@ -268,6 +270,8 @@ merge_field(Field, Values) ->
     merge_field(Field, ?DICT:find(Field, Values)).
 
 %% @private merge the CRDTs of a type
+merge_crdts(Type, {CRDTs, TS}) when is_list(CRDTs) ->
+    merge_crdts(Type, {?DICT:from_list(CRDTs), TS});
 merge_crdts(Type, {CRDTs, TS}) ->
     V = ?DICT:fold(fun(_Dot, CRDT, CRDT0) ->
                              Type:merge(CRDT0, CRDT) end,
@@ -299,6 +303,9 @@ value(_, Map) ->
 %% Atomic, all of `Ops' are performed successfully, or none are.
 -spec update(map_op(), riak_dt:actor() | riak_dt:dot(), map()) ->
                     {ok, map()} | precondition_error().
+update(Op, ActorOrDot, {_C, V, D}=Map) when is_list(V);
+                                            is_list(D) ->
+    update(Op, ActorOrDot, to_v2(Map));
 update(Op, ActorOrDot, Map) ->
     update(Op, ActorOrDot, Map, undefined).
 
@@ -310,6 +317,9 @@ update(Op, ActorOrDot, Map) ->
 %% @see parent_clock/2
 -spec update(map_op(), riak_dt:actor() | riak_dt:dot(), map(), riak_dt:context()) ->
                     {ok, map()}.
+update(Op, ActorOrDot, {_C, V, D}=Map, Ctx) when is_list(V);
+                                                 is_list(D) ->
+    update(Op, ActorOrDot, to_v2(Map), Ctx);
 update({update, Ops}, ActorOrDot, {Clock0, Values, Deferred}, Ctx) ->
     {Dot, Clock} = update_clock(ActorOrDot, Clock0),
     apply_ops(Ops, Dot, {Clock, Values, Deferred}, Ctx).
@@ -445,6 +455,11 @@ defer_remove(Clock, Ctx, Field, Deferred) ->
 
 %% @doc merge two `map()'s.
 -spec merge(map(), map()) -> map().
+merge({_LHSC, LHSE, LHSD}=LHS, {_RHSC, RHSE, RHSD}=RHS) when is_list(LHSE);
+                                                             is_list(LHSD);
+                                                             is_list(RHSD);
+                                                             is_list(RHSE) ->
+    merge(to_v2(LHS), to_v2(RHS));
 merge(Map, Map) ->
     Map;
 %% @TODO is there a way to optimise this, based on clocks maybe?
@@ -462,7 +477,7 @@ merge({LHSClock, LHSEntries, LHSDeferred}, {RHSClock, RHSEntries, RHSDeferred}) 
 -spec filter_unique(set(), entries(), riak_dt_vclock:vclock(), entries()) -> entries().
 filter_unique(FieldSet, Entries, Clock, Acc) ->
     sets:fold(fun({_Name, Type}=Field, Keep) ->
-                      {Dots, TS} = ?DICT:fetch(Field, Entries),
+                      {Dots, TS} = fetch_dots(Entries, Field),
                       KeepDots = ?DICT:filter(fun(Dot, _CRDT) ->
                                                       is_dot_unseen(Dot, Clock)
                                               end,
@@ -523,13 +538,21 @@ filter_dots(Dots, CRDTs, Clock) ->
                    end,
                    CRDTs).
 
+fetch_dots(Dict, Field) ->
+    case ?DICT:fetch(Field, Dict) of
+        {Dots, TS} when is_list(Dots) ->
+            {?DICT:from_list(Dots), TS};
+        V2 ->
+            V2
+    end.
+
 %% @private merge the common fields into a set of surviving dots and a
 %% tombstone per field.  If a dot is on both sides, keep it. If it is
 %% only on one side, drop it if dominated by the otheride's clock.
 merge_common(FieldSet, LHS, RHS, LHSClock , RHSClock, Acc) ->
     sets:fold(fun({_, Type}=Field, Keep) ->
-                      {LHSDots, LHTS} = ?DICT:fetch(Field, LHS),
-                      {RHSDots, RHTS} = ?DICT:fetch(Field, RHS),
+                      {LHSDots, LHTS} = fetch_dots(LHS, Field),
+                      {RHSDots, RHTS} = fetch_dots(RHS, Field),
                       {CommonDots, LHSUniqe, RHSUnique} = key_sets(LHSDots, RHSDots),
                       TS = Type:merge(RHTS, LHTS),
 
@@ -591,6 +614,11 @@ remove_all(Fields, Map, Ctx) ->
 %% and value list must be equal. Performs a pariwise equals for all
 %% values in the value lists
 -spec equal(map(), map()) -> boolean().
+equal({_LHSC, LHSE, LHSD}=LHS, {_RHSC, RHSE, RHSD}=RHS) when is_list(LHSE);
+                                                             is_list(LHSD);
+                                                             is_list(RHSD);
+                                                             is_list(RHSE) ->
+    equal(to_v2(LHS), to_v2(RHS));
 equal({Clock1, Values1, Deferred1}, {Clock2, Values2, Deferred2}) ->
     riak_dt_vclock:equal(Clock1, Clock2) andalso
         Deferred1 == Deferred2 andalso
@@ -636,9 +664,12 @@ precondition_context({Clock, _Field, _Deferred}) ->
 %%                   of lag/staleness.
 -spec stats(map()) -> [{atom(), integer()}].
 stats(Map) ->
-    [ {S, stat(S, Map)} || S <- [actor_count, field_count, duplication, deferred_length]].
+    [ {S, stat(S, to_v2(Map))} || S <- [actor_count, field_count, duplication, deferred_length]].
 
 -spec stat(atom(), map()) -> number() | undefined.
+stat(Stat, {_, E, D}=Map) when is_list(E);
+                               is_list(D) ->
+    stat(Stat, to_v2(Map));
 stat(actor_count, {Clock, _, _}) ->
     length(Clock);
 stat(field_count, {_, Fields, _}) ->

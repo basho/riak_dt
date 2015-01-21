@@ -133,6 +133,8 @@ parent_clock(Clock, {_SetClock, Entries, Deferred}) ->
     {Clock, Entries, Deferred}.
 
 -spec value(orswot()) -> [member()].
+value({_Clock, Entries, _Deferred}) when is_list(Entries) ->
+    [K || {K, _Dots} <- Entries];
 value({_Clock, Entries, _Deferred}) ->
     lists:sort([K || {K, _Dots} <- ?DICT:to_list(Entries)]).
 
@@ -146,6 +148,9 @@ value({contains, Elem}, ORset) ->
 %% NOTE: either _all_ are applied, or _none_ are.
 -spec update(orswot_op(), actor() | dot(), orswot()) -> {ok, orswot()} |
                                                 precondition_error().
+update(Op, Actor, {_Clock, Entries, Deferred}=V1Set) when is_list(Entries);
+                                                          is_list(Deferred) ->
+    update(Op, Actor, to_v2(V1Set));
 update({update, Ops}, Actor, ORSet) ->
     apply_ops(Ops, Actor, ORSet);
 update({add, Elem}, Actor, ORSet) ->
@@ -166,6 +171,9 @@ update({remove_all, Elems}, Actor, ORSet) ->
 
 -spec update(orswot_op(), actor() | dot(), orswot(), riak_dt:context()) ->
                     {ok, orswot()} | precondition_error().
+update(Op, Actor, {_Clock, Entries, Deferred}=V1Set, Ctx) when is_list(Entries);
+                                                               is_list(Deferred) ->
+    update(Op, Actor, to_v2(V1Set), Ctx);
 update(Op, Actor, ORSet, undefined) ->
     update(Op, Actor, ORSet);
 update({add, Elem}, Actor, ORSet, _Ctx) ->
@@ -265,6 +273,11 @@ remove_all([Elem | Rest], Actor, ORSet, Ctx) ->
     remove_all(Rest, Actor, ORSet2, Ctx).
 
 -spec merge(orswot(), orswot()) -> orswot().
+merge({_LHSC, LHSE, LHSD}=LHS, {_RHSC, RHSE, RHSD}=RHS) when is_list(LHSE);
+                                                      is_list(LHSD);
+                                                      is_list(RHSE);
+                                                      is_list(RHSD) ->
+    merge(to_v2(LHS), to_v2(RHS));
 merge({Clock, Entries, Deferred}, {Clock, Entries, Deferred}) ->
     {Clock, Entries, Deferred};
 merge({LHSClock, LHSEntries, LHSDeferred}, {RHSClock, RHSEntries, RHSDeferred}) ->
@@ -340,6 +353,9 @@ apply_deferred(Clock, Entries, Deferred) ->
                Deferred).
 
 -spec equal(orswot(), orswot()) -> boolean().
+equal({_, Entries1, _}=LHS, {_, Entries2, _}=RHS) when is_list(Entries1);
+                                                       is_list(Entries2) ->
+    equal(to_v2(LHS), to_v2(RHS));
 equal({Clock1, Entries1, _}, {Clock2, Entries2, _}) ->
     riak_dt_vclock:equal(Clock1, Clock2) andalso
         lists:sort(?DICT:fetch_keys(Entries1)) == lists:sort(?DICT:fetch_keys(Entries2)) andalso
@@ -389,17 +405,21 @@ precondition_context({Clock, _Entries, _Deferred}) ->
 
 -spec stats(orswot()) -> [{atom(), number()}].
 stats(ORSWOT) ->
-    [ {S, stat(S, ORSWOT)} || S <- [actor_count, element_count, max_dot_length, deferred_length]].
+    OSV2 = to_v2(ORSWOT),
+    [ {S, stat(S, OSV2)} || S <- [actor_count, element_count, max_dot_length, deferred_length]].
 
 -spec stat(atom(), orswot()) -> number() | undefined.
+stat(Stat, {_C, E, D}=S) when is_list(E);
+                              is_list(D) ->
+    stat(Stat, to_v2(S));
 stat(actor_count, {Clock, _Dict, _}) ->
     length(Clock);
 stat(element_count, {_Clock, Dict, _}) ->
     ?DICT:size(Dict);
 stat(max_dot_length, {_Clock, Dict, _}) ->
     ?DICT:fold(fun(_K, Dots, Acc) ->
-                         max(length(Dots), Acc)
-                 end, 0, Dict);
+                       max(length(Dots), Acc)
+               end, 0, Dict);
 stat(deferred_length, {_Clock, _Dict, Deferred}) ->
     ?DICT:size(Deferred);
 stat(_,_) -> undefined.
