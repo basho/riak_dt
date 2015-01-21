@@ -91,7 +91,10 @@
 
 -export_type([orswot/0, orswot_op/0, binary_orswot/0]).
 
--opaque orswot() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
+-type orswot() :: v1_orswot() | v2_orswot().
+-type v2_orswot() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
+-type v1_orswot() :: {riak_dt_vclock:vclock(), {member(), dots()},
+                      {riak_dt_vclock:vclock(), [member()]}}.
 %% Only removes can be deferred, so a list of members to be removed
 %% per context.
 -type deferred() :: dict(riak_dt_vclock:vclock(), [member()]).
