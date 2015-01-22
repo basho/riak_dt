@@ -538,7 +538,7 @@ filter_dots(Dots, CRDTs, Clock) ->
 %% @private prior versions of the Map stored dots in an
 %% orddict. Orddicts are also lists, fetch the dots, and if they are
 %% from an old version "upgrade" to dict.
--spec fetch_dots(field_name(), entries()) -> field_value().
+-spec fetch_dots(entries(), field_name()) -> any(). %% why dialyzer? Why?
 fetch_dots(Dict, Field) ->
     case ?DICT:fetch(Field, Dict) of
         {Dots, TS} when is_list(Dots) ->
