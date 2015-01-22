@@ -132,7 +132,8 @@ new() ->
 %% @doc sets the clock in the Set to that `Clock'. Used by a
 %% containing Map for sub-CRDTs
 -spec parent_clock(riak_dt_vclock:vclock(), orswot()) -> orswot().
-parent_clock(Clock, {_SetClock, Entries, Deferred}) ->
+parent_clock(Clock, Set) ->
+    {_SetClock, Entries, Deferred} = to_v2(Set),
     {Clock, Entries, Deferred}.
 
 -spec value(orswot()) -> [member()].
@@ -151,8 +152,7 @@ value({contains, Elem}, ORset) ->
 %% NOTE: either _all_ are applied, or _none_ are.
 -spec update(orswot_op(), actor() | dot(), orswot()) -> {ok, orswot()} |
                                                 precondition_error().
-update(Op, Actor, {_Clock, Entries, Deferred}=V1Set) when is_list(Entries);
-                                                          is_list(Deferred) ->
+update(Op, Actor, {_Clock, Entries, _Deferred}=V1Set) when is_list(Entries) ->
     update(Op, Actor, to_v2(V1Set));
 update({update, Ops}, Actor, ORSet) ->
     apply_ops(Ops, Actor, ORSet);
@@ -174,8 +174,7 @@ update({remove_all, Elems}, Actor, ORSet) ->
 
 -spec update(orswot_op(), actor() | dot(), orswot(), riak_dt:context()) ->
                     {ok, orswot()} | precondition_error().
-update(Op, Actor, {_Clock, Entries, Deferred}=V1Set, Ctx) when is_list(Entries);
-                                                               is_list(Deferred) ->
+update(Op, Actor, {_Clock, Entries, _Deferred}=V1Set, Ctx) when is_list(Entries) ->
     update(Op, Actor, to_v2(V1Set), Ctx);
 update(Op, Actor, ORSet, undefined) ->
     update(Op, Actor, ORSet);
@@ -276,10 +275,8 @@ remove_all([Elem | Rest], Actor, ORSet, Ctx) ->
     remove_all(Rest, Actor, ORSet2, Ctx).
 
 -spec merge(orswot(), orswot()) -> orswot().
-merge({_LHSC, LHSE, LHSD}=LHS, {_RHSC, RHSE, RHSD}=RHS) when is_list(LHSE);
-                                                      is_list(LHSD);
-                                                      is_list(RHSE);
-                                                      is_list(RHSD) ->
+merge({_LHSC, LHSE, _LHSD}=LHS, {_RHSC, RHSE, _RHSD}=RHS) when is_list(LHSE);
+                                                               is_list(RHSE) ->
     merge(to_v2(LHS), to_v2(RHS));
 merge({Clock, Entries, Deferred}, {Clock, Entries, Deferred}) ->
     {Clock, Entries, Deferred};
@@ -412,8 +409,7 @@ stats(ORSWOT) ->
     [ {S, stat(S, OSV2)} || S <- [actor_count, element_count, max_dot_length, deferred_length]].
 
 -spec stat(atom(), orswot()) -> number() | undefined.
-stat(Stat, {_C, E, D}=S) when is_list(E);
-                              is_list(D) ->
+stat(Stat, {_C, E, _D}=S) when is_list(E) ->
     stat(Stat, to_v2(S));
 stat(actor_count, {Clock, _Dict, _}) ->
     length(Clock);
