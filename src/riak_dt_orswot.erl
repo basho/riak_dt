@@ -81,6 +81,7 @@
 -export([to_binary/2]).
 -export([precondition_context/1, stats/1, stat/2]).
 -export([parent_clock/2]).
+-export([to_version/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -95,6 +96,11 @@
 -type v2_orswot() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
 -type v1_orswot() :: {riak_dt_vclock:vclock(), {member(), dots()},
                       {riak_dt_vclock:vclock(), [member()]}}.
+
+-type any_orswot() :: v2_orswot() | v2ord_orswot().
+
+-type v2ord_orswot() :: {riak_dt_vclock:vclock(), orddict:orddict(), orddict:orddict()}.
+
 %% Only removes can be deferred, so a list of members to be removed
 %% per context.
 -type deferred() :: dict(riak_dt_vclock:vclock(), [member()]).
@@ -449,10 +455,13 @@ to_binary(?V1_VERS, S0) ->
 to_binary(Vers, _S0) ->
     ?UNSUPPORTED_VERSION(Vers).
 
+-spec to_version(pos_integer(), any_orswot()) -> any_orswot().
+to_version(2, Set) -> to_v2(Set);
+to_version(1, Set) -> to_v1(Set);
+to_version(_, Set) -> Set.
+
 %% @private transpose a v1 orswot (orddicts) to a v2 (dicts)
--spec to_v2({riak_dt_vclock:vclock(), orddict:orddict() | dict(),
-             orddict:orddict() | dict()}) ->
-                   {riak_dt_vclock:vclock(), dict(), dict()}.
+-spec to_v2(any_orswot()) -> orswot().
 to_v2({Clock, Entries0, Deferred0}) when is_list(Entries0),
                                          is_list(Deferred0) ->
     %% Turn v1 set into a v2 set
@@ -463,9 +472,7 @@ to_v2(S) ->
     S.
 
 %% @private transpose a v2 orswot (dicts) to a v1 (orddicts)
--spec to_v1({riak_dt_vclock:vclock(), orddict:orddict() | dict(),
-             orddict:orddict() | dict()}) ->
-                   {riak_dt_vclock:vclock(), orddict:orddict(), orddict:orddict()}.
+-spec to_v1(any_orswot()) -> v2ord_orswot().
 to_v1({_Clock, Entries0, Deferred0}=S) when is_list(Entries0),
                                             is_list(Deferred0) ->
     S;

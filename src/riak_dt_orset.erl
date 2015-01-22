@@ -29,6 +29,7 @@
          to_binary/1, from_binary/1, value/2, precondition_context/1, stats/1, stat/2]).
 -export([update/4, parent_clock/2]).
 -export([to_binary/2]).
+-export([to_version/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -205,6 +206,11 @@ from_binary(<<?TAG:8/integer, Vers:8/integer, _Bin/binary>>) ->
     ?UNSUPPORTED_VERSION(Vers);
 from_binary(_B) ->
     ?INVALID_BINARY.
+
+-spec to_version(pos_integer(), orset()) -> orset().
+to_version(_Version, Set) ->
+    Set.
+
 
 %% Private
 add_elem(Elem,Token,ORDict) ->

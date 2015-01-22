@@ -39,6 +39,7 @@
          update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
 -export([to_binary/2, current_version/1, change_versions/3]).
 -export([parent_clock/2, update/4]).
+-export([to_version/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -201,6 +202,14 @@ from_binary(<<?TAG:8/integer, Vers:8/integer, _/binary>>) ->
     ?UNSUPPORTED_VERSION(Vers);
 from_binary(_B) ->
     ?INVALID_BINARY.
+
+-spec to_version(pos_integer(), any_pncounter()) -> any_pncounter().
+to_version(_Version, C) ->
+    %% TODO: This module already has a notion of internal format
+    %% versions and they are not in lock-step with the other
+    %% types. However, its versioning is not affected by the map
+    %% format-upgrade bug.
+    C.
 
 -spec current_version(any_pncounter()) -> version().
 current_version(PNCnt) when is_list(PNCnt) ->

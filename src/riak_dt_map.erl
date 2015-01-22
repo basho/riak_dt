@@ -172,6 +172,7 @@
 -endif.
 
 -ifdef(TEST).
+-compile(export_all).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
@@ -181,6 +182,7 @@
 -export([to_binary/2]).
 -export([precondition_context/1, stats/1, stat/2]).
 -export([parent_clock/2]).
+-export([to_version/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -191,6 +193,8 @@
 
 -type binary_map() :: binary(). %% A binary that from_binary/1 will accept
 -type map() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
+-type ord_map() :: {riak_dt_vclock:vclock(), orddict:orddict(), orddict:orddict()}.
+-type any_map() :: map() | ord_map().
 -type entries() :: dict(field_name(), field_value()).
 -type field() :: {field_name(), field_value()}.
 -type field_name() :: {Name :: binary(), CRDTModule :: crdt_mod()}.
@@ -710,29 +714,31 @@ to_binary(?V1_VERS, Map0) ->
 to_binary(Vers, _Map) ->
     ?UNSUPPORTED_VERSION(Vers).
 
+-spec to_version(pos_integer(), any_map()) -> any_map().
+to_version(2, Map) -> to_v2(Map);
+to_version(1, Map) -> to_v1(Map);
+to_version(_, Map) -> Map.
+
+
 %% @private transpose a v1 map (orddicts) to a v2 (dicts)
--spec to_v2({riak_dt_vclock:vclock(), orddict:orddict() | dict(),
-             orddict:orddict() | dict()}) ->
-                   {riak_dt_vclock:vclock(), dict(), dict()}.
+-spec to_v2(any_map()) -> map().
 to_v2({Clock, Fields0, Deferred0}) when is_list(Fields0),
                                          is_list(Deferred0) ->
-    Fields = ?DICT:from_list(Fields0),
+    Fields = ?DICT:from_list([ field_to_v2(Key, Value) || {Key, Value} <- Fields0]),
     Deferred = ?DICT:from_list(Deferred0),
     {Clock, Fields, Deferred};
 to_v2(S) ->
     S.
 
 %% @private transpose a v2 map (dicts) to a v1 (orddicts)
--spec to_v1({riak_dt_vclock:vclock(), orddict:orddict() | dict(),
-             orddict:orddict() | dict()}) ->
-                   {riak_dt_vclock:vclock(), orddict:orddict(), orddict:orddict()}.
+-spec to_v1(any_map()) -> ord_map().
 to_v1({_Clock, Fields0, Deferred0}=S) when is_list(Fields0),
-                                            is_list(Deferred0) ->
+                                           is_list(Deferred0) ->
     S;
 to_v1({Clock, Fields0, Deferred0}) ->
     %% Must be dicts, there is no is_dict test though
     %% should we use error handling as logic here??
-    Fields = riak_dt:dict_to_orddict(Fields0),
+    Fields = orddict:map(fun field_to_v1/2, riak_dt:dict_to_orddict(Fields0)),
     Deferred = riak_dt:dict_to_orddict(Deferred0),
     {Clock, Fields, Deferred}.
 
@@ -750,6 +756,18 @@ from_binary(<<?TAG:8/integer, Vers:8/integer, _B/binary>>) ->
     ?UNSUPPORTED_VERSION(Vers);
 from_binary(_B) ->
     ?INVALID_BINARY.
+
+field_to_v2({Name, Type}, {CRDTs0, Tombstone0}) ->
+    Tombstone = Type:to_version(2, Tombstone0),
+    CRDTs = dict:from_list([ {Dot, Type:to_version(2, CRDT)} || {Dot, CRDT} <- CRDTs0 ]),
+    {{Name, Type}, {CRDTs, Tombstone}}.
+
+field_to_v1({_Name, Type}, {CRDTs0, Tombstone0}) ->
+    Tombstone = Type:to_version(1, Tombstone0),
+    CRDTs = orddict:map(fun(_Dot, CRDT) ->
+                                Type:to_version(1, CRDT)
+                        end, riak_dt:dict_to_orddict(CRDTs0)),
+    {CRDTs, Tombstone}.
 
 %% ===================================================================
 %% EUnit tests
@@ -934,7 +952,9 @@ invalid_binary_test() ->
 
 -ifdef(EQC).
 -define(NUMTESTS, 1000).
-
+-define(QC_OUT(P),
+        eqc:on_output(fun(Str, Args) ->
+                              io:format(user, Str, Args) end, P)).
 %% ===================================
 %% crdt_statem_eqc callbacks
 %% ===================================
@@ -985,6 +1005,22 @@ gen_field(Size) ->
 gen_field_op({_Name, Type}, Size) ->
     Type:gen_op(Size).
 
+
+v1_downgrade_roundtrip_test_() ->
+    {timeout,
+     120,
+     fun() ->
+             quickcheck(numtests(?NUMTESTS, ?QC_OUT(prop_v1_downgrade_roundtrip())))
+     end}.
+
+
+prop_v1_downgrade_roundtrip() ->
+    ?FORALL(Map, generate(),
+            begin
+                {ok, ConvertedMap} = from_binary(to_binary(to_version(1, Map))),
+                conjunction([{equal, equal(Map, ConvertedMap)},
+                             {not_v1, equals(to_v2(ConvertedMap), ConvertedMap)}])
+            end).
 
 -endif.
 

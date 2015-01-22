@@ -31,6 +31,7 @@
 -export([to_binary/2]).
 -export([precondition_context/1]).
 -export([parent_clock/2]).
+-export([to_version/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -200,6 +201,10 @@ to_binary(Vers, _F) ->
 -spec precondition_context(od_flag()) -> riak_dt:context().
 precondition_context({Clock, _Flag, _Deferred}) ->
     Clock.
+
+-spec to_version(pos_integer(), od_flag()) -> od_flag().
+to_version(_Version, Flag) ->
+    Flag.
 
 %% ===================================================================
 %% EUnit tests

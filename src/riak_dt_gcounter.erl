@@ -39,6 +39,7 @@
 -export([new/0, new/2, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
 -export([update/4, parent_clock/2]).
 -export([to_binary/2]).
+-export([to_version/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -148,6 +149,10 @@ from_binary(<<?TAG:8/integer, Vers:8/integer, _EntriesBin/binary>>) ->
     ?UNSUPPORTED_VERSION(Vers);
 from_binary(_B) ->
     ?INVALID_BINARY.
+
+-spec to_version(pos_integer(), gcounter()) -> gcounter().
+to_version(_Version, C) ->
+    C.
 
 %% ===================================================================
 %% EUnit tests
