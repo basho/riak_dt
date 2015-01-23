@@ -494,7 +494,7 @@ to_v1({Clock, Entries0, Deferred0}) ->
 -spec from_binary(binary_orswot()) -> {ok, orswot()} | ?UNSUPPORTED_VERSION | ?INVALID_BINARY.
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
     S = riak_dt:from_binary(B),
-    %% Now upgrdate the structure to dict from orddict
+    %% Now upgrade the structure to dict from orddict
     {ok, to_v2(S)};
 from_binary(<<?TAG:8/integer, ?V2_VERS:8/integer, B/binary>>) ->
     {ok, riak_dt:from_binary(B)};

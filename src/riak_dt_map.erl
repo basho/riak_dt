@@ -767,22 +767,18 @@ from_binary(<<?TAG:8/integer, Vers:8/integer, _B/binary>>) ->
 from_binary(_B) ->
     ?INVALID_BINARY.
 
-field_to_v2({Name, Type}, {CRDTs0, Tombstone0}) ->
-    {CRDTs, Tombstone} = if
-                             is_list(CRDTs0) ->
-                                 TS = Type:to_version(2, Tombstone0),
-                                 C = dict:from_list([ {Dot, Type:to_version(2, CRDT)} || {Dot, CRDT} <- CRDTs0 ]),
-                                 {C, TS};
-                             true ->
-                                 %% this is a messed up half v1 half v2 map from
-                                 %% the ill fated riak2.0.4 release.  The top level
-                                 %% fields and deferred where written to disk/wire
-                                 %% as lists to be backwards compatible, but
-                                 %% internally it is all v2 still, it doesn't need
-                                 %% recursing over internally.
-                                 CRDTs0
-                         end,
-    {{Name, Type}, {CRDTs, Tombstone}}.
+field_to_v2({Name, Type}, {CRDTs0, Tombstone0}) when is_list(CRDTs0) ->
+    Tombstone = Type:to_version(2, Tombstone0),
+    CRDTs = dict:from_list([ {Dot, Type:to_version(2, CRDT)} || {Dot, CRDT} <- CRDTs0 ]),
+    {{Name, Type}, {CRDTs, Tombstone}};
+field_to_v2(FieldName, FieldValue) ->
+    %% this is a messed up half v1 half v2 map from the ill fated
+    %% riak2.0.4 release.  The top level `fields' and `deferred' were
+    %% written to disk/wire as lists to be backwards compatible with
+    %% v1, but internally it is all v2 still, it doesn't need
+    %% recursing over internally.
+    {FieldName, FieldValue}.
+
 
 field_to_v1({_Name, Type}, {CRDTs0, Tombstone0}) ->
     Tombstone = Type:to_version(1, Tombstone0),
