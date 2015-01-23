@@ -432,6 +432,7 @@ stat(_,_) -> undefined.
 -include("riak_dt_tags.hrl").
 -define(TAG, ?DT_ORSWOT_TAG).
 -define(V1_VERS, 1).
+-define(V2_VERS, 2).
 
 %% @doc returns a binary representation of the provided
 %% `orswot()'. The resulting binary is tagged and versioned for ease
@@ -443,7 +444,7 @@ stat(_,_) -> undefined.
 %% @see `from_binary/1'
 -spec to_binary(orswot()) -> binary_orswot().
 to_binary(S) ->
-    {ok, B} = to_binary(?V1_VERS, S),
+    {ok, B} = to_binary(?V2_VERS, S),
     B.
 
 %% @private encode v1 sets as v2, and vice versa. The first argument
@@ -452,6 +453,9 @@ to_binary(S) ->
 to_binary(?V1_VERS, S0) ->
     S = to_v1(S0),
     {ok, <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(S))/binary>>};
+to_binary(?V2_VERS, S0) ->
+    S = to_v2(S0),
+    {ok, <<?TAG:8/integer, ?V2_VERS:8/integer, (riak_dt:to_binary(S))/binary>>};
 to_binary(Vers, _S0) ->
     ?UNSUPPORTED_VERSION(Vers).
 
@@ -490,8 +494,10 @@ to_v1({Clock, Entries0, Deferred0}) ->
 -spec from_binary(binary_orswot()) -> {ok, orswot()} | ?UNSUPPORTED_VERSION | ?INVALID_BINARY.
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
     S = riak_dt:from_binary(B),
-    %% Now upgrdae the structure to dict from orddict
+    %% Now upgrdate the structure to dict from orddict
     {ok, to_v2(S)};
+from_binary(<<?TAG:8/integer, ?V2_VERS:8/integer, B/binary>>) ->
+    {ok, riak_dt:from_binary(B)};
 from_binary(<<?TAG:8/integer, Vers:8/integer, _B/binary>>) ->
     ?UNSUPPORTED_VERSION(Vers);
 from_binary(_B) ->

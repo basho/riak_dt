@@ -691,6 +691,7 @@ stat(_,_) -> undefined.
 -include("riak_dt_tags.hrl").
 -define(TAG, ?DT_MAP_TAG).
 -define(V1_VERS, 1).
+-define(V2_VERS, 2).
 
 %% @doc returns a binary representation of the provided `map()'. The
 %% resulting binary is tagged and versioned for ease of future
@@ -702,7 +703,7 @@ stat(_,_) -> undefined.
 %% @see `from_binary/1'
 -spec to_binary(map()) -> binary_map().
 to_binary(Map) ->
-    {ok, B} = to_binary(?V1_VERS, Map),
+    {ok, B} = to_binary(?V2_VERS, Map),
     B.
 
 %% @private encode v1 maps as v2, and vice versa. The first argument
@@ -711,6 +712,9 @@ to_binary(Map) ->
 to_binary(?V1_VERS, Map0) ->
     Map = to_v1(Map0),
     {ok, <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(Map))/binary>>};
+to_binary(?V2_VERS, Map0) ->
+    Map = to_v2(Map0),
+    {ok, <<?TAG:8/integer, ?V2_VERS:8/integer, (riak_dt:to_binary(Map))/binary>>};
 to_binary(Vers, _Map) ->
     ?UNSUPPORTED_VERSION(Vers).
 
@@ -749,8 +753,14 @@ to_v1({Clock, Fields0, Deferred0}) ->
 -spec from_binary(binary_map()) -> {ok, map()} | ?UNSUPPORTED_VERSION | ?INVALID_BINARY.
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
     Map = riak_dt:from_binary(B),
-    %% upgrade ondisk v1/v2 structure to v2 term. We use lists of disk
-    %% as tha works fine for both orddict and list
+    %% upgrade ondisk v1 structure to v2 term. This will also handle
+    %% the horrid riak-2.0.4 map that has lists for entries/deferred,
+    %% but dict elsewhere, and v2 types nested!
+    {ok, to_v2(Map)};
+from_binary(<<?TAG:8/integer, ?V2_VERS:8/integer, B/binary>>) ->
+    %% Only fully v2 maps are written as v2, calling to_v2 a paranoid
+    %% waste?
+    Map = riak_dt:from_binary(B),
     {ok, to_v2(Map)};
 from_binary(<<?TAG:8/integer, Vers:8/integer, _B/binary>>) ->
     ?UNSUPPORTED_VERSION(Vers);
@@ -758,8 +768,20 @@ from_binary(_B) ->
     ?INVALID_BINARY.
 
 field_to_v2({Name, Type}, {CRDTs0, Tombstone0}) ->
-    Tombstone = Type:to_version(2, Tombstone0),
-    CRDTs = dict:from_list([ {Dot, Type:to_version(2, CRDT)} || {Dot, CRDT} <- CRDTs0 ]),
+    {CRDTs, Tombstone} = if
+                             is_list(CRDTs0) ->
+                                 TS = Type:to_version(2, Tombstone0),
+                                 C = dict:from_list([ {Dot, Type:to_version(2, CRDT)} || {Dot, CRDT} <- CRDTs0 ]),
+                                 {C, TS};
+                             true ->
+                                 %% this is a messed up half v1 half v2 map from
+                                 %% the ill fated riak2.0.4 release.  The top level
+                                 %% fields and deferred where written to disk/wire
+                                 %% as lists to be backwards compatible, but
+                                 %% internally it is all v2 still, it doesn't need
+                                 %% recursing over internally.
+                                 CRDTs0
+                         end,
     {{Name, Type}, {CRDTs, Tombstone}}.
 
 field_to_v1({_Name, Type}, {CRDTs0, Tombstone0}) ->
