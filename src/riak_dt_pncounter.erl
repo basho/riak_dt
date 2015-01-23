@@ -204,12 +204,8 @@ from_binary(_B) ->
     ?INVALID_BINARY.
 
 -spec to_version(pos_integer(), any_pncounter()) -> any_pncounter().
-to_version(_Version, C) ->
-    %% TODO: This module already has a notion of internal format
-    %% versions and they are not in lock-step with the other
-    %% types. However, its versioning is not affected by the map
-    %% format-upgrade bug.
-    C.
+to_version(ToVer, C) ->
+    change_versions(current_version(C), ToVer, C).
 
 -spec current_version(any_pncounter()) -> version().
 current_version(PNCnt) when is_list(PNCnt) ->
