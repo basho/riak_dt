@@ -29,7 +29,7 @@
 -export([ merge/2, equal/2, from_binary/1]).
 -export([to_binary/1, stats/1, stat/2]).
 -export([precondition_context/1]).
--export([parent_clock/2]).
+-export([parent_clock/2, get_deferred/1]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -43,46 +43,49 @@
 
 -export_type([od_flag/0, od_flag_op/0]).
 
--opaque od_flag() :: {riak_dt_vclock:vclock(), [riak_dt:dot()]}.
+-opaque od_flag() :: {riak_dt_vclock:vclock(), [riak_dt:dot()], deferred()}.
 -type od_flag_op() :: enable | disable.
+-type deferred() :: ordsets:ordset(riak_dt:context()).
 
 -spec new() -> od_flag().
 new() ->
-    {riak_dt_vclock:fresh(), []}.
+    {riak_dt_vclock:fresh(), [], []}.
 
 %% @doc sets the clock in the flag to that `Clock'. Used by a
 %% containing Map for sub-CRDTs
 -spec parent_clock(riak_dt_vclock:vclock(), od_flag()) -> od_flag().
-parent_clock(Clock, {_SetClock, Flag}) ->
-    {Clock, Flag}.
+parent_clock(Clock, {_SetClock, Flag , Deferred}) ->
+    {Clock, Flag, Deferred}.
+
+get_deferred({_,_,Deferred}) -> Deferred.
 
 -spec value(od_flag()) -> boolean().
-value({_, []}) -> false;
-value({_, _}) -> true.
+value({_, [], _}) -> false;
+value({_, _, _}) -> true.
 
 -spec value(term(), od_flag()) -> boolean().
 value(_, Flag) ->
     value(Flag).
 
 -spec update(od_flag_op(), riak_dt:actor() | riak_dt:dot(), od_flag()) -> {ok, od_flag()}.
-update(enable, Dot, {Clock, Dots}) when is_tuple(Dot) ->
+update(enable, Dot, {Clock, Dots, Deferred}) when is_tuple(Dot) ->
     NewClock = riak_dt_vclock:merge([[Dot], Clock]),
-    {ok, {NewClock, riak_dt_vclock:merge([[Dot], Dots])}};
-update(enable, Actor, {Clock, Dots}) ->
+    {ok, {NewClock, riak_dt_vclock:merge([[Dot], Dots]), Deferred}};
+update(enable, Actor, {Clock, Dots, Deferred}) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
     Dot = [{Actor, riak_dt_vclock:get_counter(Actor, NewClock)}],
-    {ok, {NewClock, riak_dt_vclock:merge([Dot, Dots])}};
+    {ok, {NewClock, riak_dt_vclock:merge([Dot, Dots]), Deferred}};
 update(disable, _Actor, Flag) ->
     disable(Flag, undefined).
 
 -spec disable(od_flag(), riak_dt:context()) ->
     {ok, od_flag()}.
-disable({Clock, _}, undefined) ->
-    {ok, {Clock, []}};
-disable({Clock, Dots}, Ctx) ->
+disable({Clock, _, Deferred}, undefined) ->
+    {ok, {Clock, [], Deferred}};
+disable({Clock, Dots, Deferred}, Ctx) ->
     NewDots = riak_dt_vclock:subtract_dots(Dots, Ctx),
-    NewClock = riak_dt_vclock:merge(Clock, Ctx),
-    {ok, {NewClock, NewDots}}.
+    NewDeferred = defer_disable(Clock, Ctx, Deferred),
+    {ok, {Clock, NewDots, NewDeferred}}.
 
 %% @doc `update/4' is similar to `update/3' except that it takes a
 %% `context' (obtained from calling `precondition_context/1'). This
@@ -103,25 +106,38 @@ update(enable, Actor, Flag, _Ctx) ->
 update(disable, _Actor, Flag, Ctx) ->
     disable(Flag, Ctx).
 
+%% @private Determine if a `disable' operation needs to be deferred,
+%% or if it is complete.
+-spec defer_disable(riak_dt_vclock:vclock(), riak_dt_vclock:vclock(), deferred()) ->
+                           deferred().
+defer_disable(Clock, Ctx, Deferred) ->
+    case riak_dt_vclock:descends(Clock, Ctx) of
+        true ->
+            Deferred;
+        false ->
+            ordsets:add_element(Ctx, Deferred)
+    end.
+
 -spec delta_update(od_flag_op(), riak_dt:actor() | riak_dt:dot(), od_flag()) -> {ok, od_flag()}.
-delta_update(enable, Dot, {Clock, _Dots}) when is_tuple(Dot) ->
+delta_update(enable, Dot, {Clock, _Dots, _Def}) when is_tuple(Dot) ->
     NewClock = riak_dt_vclock:merge([[Dot], Clock]),
-    {ok, {NewClock, [Dot]}};
-delta_update(enable, Actor, {Clock, _Dots}) ->
+    {ok, {NewClock, [Dot], []}};
+delta_update(enable, Actor, {Clock, _Dots, _Def}) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
     Dot = [{Actor, riak_dt_vclock:get_counter(Actor, NewClock)}],
-    {ok, {NewClock, Dot}};
+    {ok, {NewClock, Dot, []}};
 delta_update(disable, _Actor, Flag) ->
     delta_disable(Flag, undefined).
 
 -spec delta_disable(od_flag(), riak_dt:context()) ->
     {ok, od_flag()}.
-delta_disable({Clock, _}, undefined) ->
-    {ok, {Clock, []}};
-delta_disable({Clock, Dots}, Ctx) ->
+delta_disable({Clock, _, Deferred}, undefined) ->
+    {ok, {Clock, [], Deferred}};
+delta_disable({Clock, Dots, _Deferred}, Ctx) ->
     NewDots = riak_dt_vclock:subtract_dots(Dots, Ctx),
     NewClock = riak_dt_vclock:merge([Clock, Ctx]),
-    {ok, {NewClock, NewDots}}.
+    NewDeferred = defer_disable(Clock, Ctx, []),
+    {ok, {NewClock, NewDots, NewDeferred}}.
 
 %% @doc `update/4' is similar to `update/3' except that it takes a
 %% `context' (obtained from calling `precondition_context/1'). This
@@ -143,10 +159,10 @@ delta_update(disable, _Actor, Flag, Ctx) ->
     delta_disable(Flag, Ctx).
 
 -spec merge(od_flag(), od_flag()) -> od_flag().
-merge({Clock, Entries}, {Clock, Entries}) ->
+merge({Clock, Entries, Deferred}, {Clock, Entries, Deferred}) ->
     %% When they are the same result why merge?
-    {Clock, Entries};
-merge({LHSClock, LHSDots}, {RHSClock, RHSDots}) ->
+    {Clock, Entries, Deferred};
+merge({LHSClock, LHSDots, LHSDeferred}, {RHSClock, RHSDots, RHSDeferred}) ->
     NewClock = riak_dt_vclock:merge([LHSClock, RHSClock]),
     %% drop all the LHS dots that are dominated by the rhs clock
     %% drop all the RHS dots that dominated by the LHS clock
@@ -158,23 +174,40 @@ merge({LHSClock, LHSDots}, {RHSClock, RHSDots}) ->
     LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, RHSClock),
     RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, LHSClock),
     Flag = riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]),
-    {NewClock, Flag}.
+    Deferred = ordsets:union(LHSDeferred, RHSDeferred),
+
+    apply_deferred(NewClock, Flag, Deferred).
+
+apply_deferred(Clock, Flag, Deferred) ->
+    lists:foldl(fun(Ctx, ODFlag) ->
+                        {ok, ODFlag2} = disable(ODFlag, Ctx),
+                        ODFlag2
+                end,
+                %% start with an empty deferred list, those
+                %% non-descended ctx operations will be re-added to
+                %% the deferred if they still cannot be executed.
+                {Clock, Flag, []},
+                Deferred).
 
 -spec equal(od_flag(), od_flag()) -> boolean().
-equal({C1,D1},{C2,D2}) ->
+equal({C1,D1, Def1},{C2,D2, Def2}) ->
     riak_dt_vclock:equal(C1,C2) andalso
-        riak_dt_vclock:equal(D1, D2).
+        riak_dt_vclock:equal(D1, D2) andalso
+        Def1 == Def2.
 
 -spec stats(od_flag()) -> [{atom(), integer()}].
 stats(ODF) ->
     [{actor_count, stat(actor_count, ODF)},
-     {dot_length, stat(dot_length, ODF)}].
+     {dot_length, stat(dot_length, ODF)},
+     {deferred_length, stat(deferred_length, ODF)}].
 
 -spec stat(atom(), od_flag()) -> number() | undefined.
-stat(actor_count, {C, _}) ->
+stat(actor_count, {C, _, _}) ->
     length(C);
-stat(dot_length, {_, D}) ->
+stat(dot_length, {_, D, _}) ->
     length(D);
+stat(deferred_length, {_Clock, _Dots, Deferred}) ->
+    length(Deferred);
 stat(_, _) -> undefined.
 
 -include("riak_dt_tags.hrl").
@@ -195,7 +228,7 @@ to_binary(Flag) ->
 %%
 %% @see update/4
 -spec precondition_context(od_flag()) -> riak_dt:context().
-precondition_context({Clock, _Flag}) ->
+precondition_context({Clock, _Flag, _Deferred}) ->
     Clock.
 
 %% ===================================================================
@@ -305,9 +338,9 @@ stat_test() ->
     {ok, F1} = update(enable, 1, F0),
     {ok, F2} = update(enable, 2, F1),
     {ok, F3} = update(enable, 3, F2),
-    ?assertEqual([{actor_count, 3}, {dot_length, 3}], stats(F3)),
+    ?assertEqual([{actor_count, 3}, {dot_length, 3}, {deferred_length, 0}], stats(F3)),
     {ok, F4} = update(disable, 4, F3), %% Observed-disable doesn't add an actor
-    ?assertEqual([{actor_count, 3}, {dot_length, 0}], stats(F4)),
+    ?assertEqual([{actor_count, 3}, {dot_length, 0}, {deferred_length, 0}], stats(F4)),
     ?assertEqual(3, stat(actor_count, F4)),
     ?assertEqual(undefined, stat(max_dot_length, F4)).
 
@@ -384,4 +417,8 @@ delta_old_enable_no_effect_test() ->
     {ok, D22} = delta_update(disable, 1, F3),
     F4 = merge(F3, D22),
     ?assertEqual(F4, merge(F4, D21)).
+
+
+
 -endif.
+
