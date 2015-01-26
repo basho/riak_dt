@@ -120,7 +120,7 @@ delta_disable({Clock, _}, undefined) ->
     {ok, {Clock, []}};
 delta_disable({Clock, Dots}, Ctx) ->
     NewDots = riak_dt_vclock:subtract_dots(Dots, Ctx),
-    NewClock = riak_dt_vclock:merge(Clock, Ctx),
+    NewClock = riak_dt_vclock:merge([Clock, Ctx]),
     {ok, {NewClock, NewDots}}.
 
 %% @doc `update/4' is similar to `update/3' except that it takes a
