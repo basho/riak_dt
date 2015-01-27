@@ -619,7 +619,7 @@ clear_tombstones_handle({_, riak_dt_map}=Field, {{Dots, _S, Tombstone}, {Clock, 
                        clear_tombstones_handle(Field_i, Value_i, FilteredEntriesAcc, MapClock)
                end, ?DICT:new(), CRDT),
     %%Distinguish between empty map and removed map.
-    case ?DICT:size(FilteredEntries) == 0 of
+    case ?DICT:size(FilteredEntries) == 0 andalso riak_dt_vclock:descends(MapClock, Tombstone) of    
         true when length(Tombstone) > 0 -> NewMap;
         _ -> ?DICT:store(Field, {{Dots, _S, Tombstone}, {Clock, FilteredEntries, Deferred}}, NewMap)
     end;
@@ -628,12 +628,12 @@ clear_tombstones_handle(Field, {{Dots, _S, Tombstone}, CRDT}=Value, NewMap, MapC
     TombstoneCovered = riak_dt_vclock:descends(MapClock, Tombstone),
     case TombstoneCovered of
         true ->
-            ReceivedUpdates = riak_dt_vclock:dominates(Dots, Tombstone),
+            ReceivedUpdates = riak_dt_vclock:subtract_dots(Dots, Tombstone),
             case ReceivedUpdates of
-                true -> 
-                    ?DICT:store(Field, {{Dots, _S, []}, CRDT}, NewMap);
-                false ->
-                    NewMap
+                [] -> 
+                    NewMap;
+                _ ->
+                    ?DICT:store(Field, {{Dots, _S, []}, CRDT}, NewMap)
             end;
         false -> 
             ?DICT:store(Field, Value, NewMap)
