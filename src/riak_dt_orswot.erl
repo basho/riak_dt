@@ -81,6 +81,7 @@
 -export([to_binary/2]).
 -export([precondition_context/1, stats/1, stat/2]).
 -export([parent_clock/2]).
+-export([to_version/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -91,7 +92,15 @@
 
 -export_type([orswot/0, orswot_op/0, binary_orswot/0]).
 
--opaque orswot() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
+-type orswot() :: v1_orswot() | v2_orswot().
+-type v2_orswot() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
+-type v1_orswot() :: {riak_dt_vclock:vclock(), {member(), dots()},
+                      {riak_dt_vclock:vclock(), [member()]}}.
+
+-type any_orswot() :: v2_orswot() | v2ord_orswot().
+
+-type v2ord_orswot() :: {riak_dt_vclock:vclock(), orddict:orddict(), orddict:orddict()}.
+
 %% Only removes can be deferred, so a list of members to be removed
 %% per context.
 -type deferred() :: dict(riak_dt_vclock:vclock(), [member()]).
@@ -129,10 +138,13 @@ new() ->
 %% @doc sets the clock in the Set to that `Clock'. Used by a
 %% containing Map for sub-CRDTs
 -spec parent_clock(riak_dt_vclock:vclock(), orswot()) -> orswot().
-parent_clock(Clock, {_SetClock, Entries, Deferred}) ->
+parent_clock(Clock, Set) ->
+    {_SetClock, Entries, Deferred} = to_v2(Set),
     {Clock, Entries, Deferred}.
 
 -spec value(orswot()) -> [member()].
+value({_Clock, Entries, _Deferred}) when is_list(Entries) ->
+    [K || {K, _Dots} <- Entries];
 value({_Clock, Entries, _Deferred}) ->
     lists:sort([K || {K, _Dots} <- ?DICT:to_list(Entries)]).
 
@@ -146,6 +158,8 @@ value({contains, Elem}, ORset) ->
 %% NOTE: either _all_ are applied, or _none_ are.
 -spec update(orswot_op(), actor() | dot(), orswot()) -> {ok, orswot()} |
                                                 precondition_error().
+update(Op, Actor, {_Clock, Entries, _Deferred}=V1Set) when is_list(Entries) ->
+    update(Op, Actor, to_v2(V1Set));
 update({update, Ops}, Actor, ORSet) ->
     apply_ops(Ops, Actor, ORSet);
 update({add, Elem}, Actor, ORSet) ->
@@ -166,6 +180,8 @@ update({remove_all, Elems}, Actor, ORSet) ->
 
 -spec update(orswot_op(), actor() | dot(), orswot(), riak_dt:context()) ->
                     {ok, orswot()} | precondition_error().
+update(Op, Actor, {_Clock, Entries, _Deferred}=V1Set, Ctx) when is_list(Entries) ->
+    update(Op, Actor, to_v2(V1Set), Ctx);
 update(Op, Actor, ORSet, undefined) ->
     update(Op, Actor, ORSet);
 update({add, Elem}, Actor, ORSet, _Ctx) ->
@@ -265,6 +281,9 @@ remove_all([Elem | Rest], Actor, ORSet, Ctx) ->
     remove_all(Rest, Actor, ORSet2, Ctx).
 
 -spec merge(orswot(), orswot()) -> orswot().
+merge({_LHSC, LHSE, _LHSD}=LHS, {_RHSC, RHSE, _RHSD}=RHS) when is_list(LHSE);
+                                                               is_list(RHSE) ->
+    merge(to_v2(LHS), to_v2(RHS));
 merge({Clock, Entries, Deferred}, {Clock, Entries, Deferred}) ->
     {Clock, Entries, Deferred};
 merge({LHSClock, LHSEntries, LHSDeferred}, {RHSClock, RHSEntries, RHSDeferred}) ->
@@ -340,6 +359,9 @@ apply_deferred(Clock, Entries, Deferred) ->
                Deferred).
 
 -spec equal(orswot(), orswot()) -> boolean().
+equal({_, Entries1, _}=LHS, {_, Entries2, _}=RHS) when is_list(Entries1);
+                                                       is_list(Entries2) ->
+    equal(to_v2(LHS), to_v2(RHS));
 equal({Clock1, Entries1, _}, {Clock2, Entries2, _}) ->
     riak_dt_vclock:equal(Clock1, Clock2) andalso
         lists:sort(?DICT:fetch_keys(Entries1)) == lists:sort(?DICT:fetch_keys(Entries2)) andalso
@@ -389,17 +411,20 @@ precondition_context({Clock, _Entries, _Deferred}) ->
 
 -spec stats(orswot()) -> [{atom(), number()}].
 stats(ORSWOT) ->
-    [ {S, stat(S, ORSWOT)} || S <- [actor_count, element_count, max_dot_length, deferred_length]].
+    OSV2 = to_v2(ORSWOT),
+    [ {S, stat(S, OSV2)} || S <- [actor_count, element_count, max_dot_length, deferred_length]].
 
 -spec stat(atom(), orswot()) -> number() | undefined.
+stat(Stat, {_C, E, _D}=S) when is_list(E) ->
+    stat(Stat, to_v2(S));
 stat(actor_count, {Clock, _Dict, _}) ->
     length(Clock);
 stat(element_count, {_Clock, Dict, _}) ->
     ?DICT:size(Dict);
 stat(max_dot_length, {_Clock, Dict, _}) ->
     ?DICT:fold(fun(_K, Dots, Acc) ->
-                         max(length(Dots), Acc)
-                 end, 0, Dict);
+                       max(length(Dots), Acc)
+               end, 0, Dict);
 stat(deferred_length, {_Clock, _Dict, Deferred}) ->
     ?DICT:size(Deferred);
 stat(_,_) -> undefined.
@@ -407,6 +432,7 @@ stat(_,_) -> undefined.
 -include("riak_dt_tags.hrl").
 -define(TAG, ?DT_ORSWOT_TAG).
 -define(V1_VERS, 1).
+-define(V2_VERS, 2).
 
 %% @doc returns a binary representation of the provided
 %% `orswot()'. The resulting binary is tagged and versioned for ease
@@ -418,7 +444,7 @@ stat(_,_) -> undefined.
 %% @see `from_binary/1'
 -spec to_binary(orswot()) -> binary_orswot().
 to_binary(S) ->
-    {ok, B} = to_binary(?V1_VERS, S),
+    {ok, B} = to_binary(?V2_VERS, S),
     B.
 
 %% @private encode v1 sets as v2, and vice versa. The first argument
@@ -427,13 +453,19 @@ to_binary(S) ->
 to_binary(?V1_VERS, S0) ->
     S = to_v1(S0),
     {ok, <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(S))/binary>>};
+to_binary(?V2_VERS, S0) ->
+    S = to_v2(S0),
+    {ok, <<?TAG:8/integer, ?V2_VERS:8/integer, (riak_dt:to_binary(S))/binary>>};
 to_binary(Vers, _S0) ->
     ?UNSUPPORTED_VERSION(Vers).
 
+-spec to_version(pos_integer(), any_orswot()) -> any_orswot().
+to_version(2, Set) -> to_v2(Set);
+to_version(1, Set) -> to_v1(Set);
+to_version(_, Set) -> Set.
+
 %% @private transpose a v1 orswot (orddicts) to a v2 (dicts)
--spec to_v2({riak_dt_vclock:vclock(), orddict:orddict() | dict(),
-             orddict:orddict() | dict()}) ->
-                   {riak_dt_vclock:vclock(), dict(), dict()}.
+-spec to_v2(any_orswot()) -> orswot().
 to_v2({Clock, Entries0, Deferred0}) when is_list(Entries0),
                                          is_list(Deferred0) ->
     %% Turn v1 set into a v2 set
@@ -444,9 +476,7 @@ to_v2(S) ->
     S.
 
 %% @private transpose a v2 orswot (dicts) to a v1 (orddicts)
--spec to_v1({riak_dt_vclock:vclock(), orddict:orddict() | dict(),
-             orddict:orddict() | dict()}) ->
-                   {riak_dt_vclock:vclock(), orddict:orddict(), orddict:orddict()}.
+-spec to_v1(any_orswot()) -> v2ord_orswot().
 to_v1({_Clock, Entries0, Deferred0}=S) when is_list(Entries0),
                                             is_list(Deferred0) ->
     S;
@@ -464,8 +494,10 @@ to_v1({Clock, Entries0, Deferred0}) ->
 -spec from_binary(binary_orswot()) -> {ok, orswot()} | ?UNSUPPORTED_VERSION | ?INVALID_BINARY.
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
     S = riak_dt:from_binary(B),
-    %% Now upgrdae the structure to dict from orddict
+    %% Now upgrade the structure to dict from orddict
     {ok, to_v2(S)};
+from_binary(<<?TAG:8/integer, ?V2_VERS:8/integer, B/binary>>) ->
+    {ok, riak_dt:from_binary(B)};
 from_binary(<<?TAG:8/integer, Vers:8/integer, _B/binary>>) ->
     ?UNSUPPORTED_VERSION(Vers);
 from_binary(_B) ->

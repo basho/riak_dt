@@ -172,6 +172,7 @@
 -endif.
 
 -ifdef(TEST).
+-compile(export_all).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
@@ -181,6 +182,7 @@
 -export([to_binary/2]).
 -export([precondition_context/1, stats/1, stat/2]).
 -export([parent_clock/2]).
+-export([to_version/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -191,6 +193,8 @@
 
 -type binary_map() :: binary(). %% A binary that from_binary/1 will accept
 -type map() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
+-type ord_map() :: {riak_dt_vclock:vclock(), orddict:orddict(), orddict:orddict()}.
+-type any_map() :: map() | ord_map().
 -type entries() :: dict(field_name(), field_value()).
 -type field() :: {field_name(), field_value()}.
 -type field_name() :: {Name :: binary(), CRDTModule :: crdt_mod()}.
@@ -247,11 +251,14 @@ new() ->
 %% @doc sets the clock in the map to that `Clock'. Used by a
 %% containing Map for sub-CRDTs
 -spec parent_clock(riak_dt_vclock:vclock(), map()) -> map().
-parent_clock(Clock, {_MapClock, Values, Deferred}) ->
+parent_clock(Clock, Map) ->
+    {_MapClock, Values, Deferred} = to_v2(Map),
     {Clock, Values, Deferred}.
 
 %% @doc get the current set of values for this Map
 -spec value(map()) -> values().
+value({_C, V, _D}=Map) when is_list(V) ->
+    value(to_v2(Map));
 value({_Clock, Values, _Deferred}) ->
     lists:sort(?DICT:fold(fun({Name, Type}, CRDTs, Acc) ->
                                   Merged = merge_crdts(Type, CRDTs),
@@ -299,6 +306,8 @@ value(_, Map) ->
 %% Atomic, all of `Ops' are performed successfully, or none are.
 -spec update(map_op(), riak_dt:actor() | riak_dt:dot(), map()) ->
                     {ok, map()} | precondition_error().
+update(Op, ActorOrDot, {_C, V, _D}=Map) when is_list(V) ->
+    update(Op, ActorOrDot, to_v2(Map));
 update(Op, ActorOrDot, Map) ->
     update(Op, ActorOrDot, Map, undefined).
 
@@ -310,6 +319,8 @@ update(Op, ActorOrDot, Map) ->
 %% @see parent_clock/2
 -spec update(map_op(), riak_dt:actor() | riak_dt:dot(), map(), riak_dt:context()) ->
                     {ok, map()}.
+update(Op, ActorOrDot, {_C, V, _D}=Map, Ctx) when is_list(V) ->
+    update(Op, ActorOrDot, to_v2(Map), Ctx);
 update({update, Ops}, ActorOrDot, {Clock0, Values, Deferred}, Ctx) ->
     {Dot, Clock} = update_clock(ActorOrDot, Clock0),
     apply_ops(Ops, Dot, {Clock, Values, Deferred}, Ctx).
@@ -445,6 +456,9 @@ defer_remove(Clock, Ctx, Field, Deferred) ->
 
 %% @doc merge two `map()'s.
 -spec merge(map(), map()) -> map().
+merge({_LHSC, LHSE, _LHSD}=LHS, {_RHSC, RHSE, _RHSD}=RHS) when is_list(LHSE);
+                                                               is_list(RHSE) ->
+    merge(to_v2(LHS), to_v2(RHS));
 merge(Map, Map) ->
     Map;
 %% @TODO is there a way to optimise this, based on clocks maybe?
@@ -525,8 +539,8 @@ filter_dots(Dots, CRDTs, Clock) ->
 
 %% @private merge the common fields into a set of surviving dots and a
 %% tombstone per field.  If a dot is on both sides, keep it. If it is
-%% only on one side, drop it if dominated by the otheride's clock.
-merge_common(FieldSet, LHS, RHS, LHSClock , RHSClock, Acc) ->
+%% only on one side, drop it if dominated by the otherside's clock.
+merge_common(FieldSet, LHS, RHS, LHSClock, RHSClock, Acc) ->
     sets:fold(fun({_, Type}=Field, Keep) ->
                       {LHSDots, LHTS} = ?DICT:fetch(Field, LHS),
                       {RHSDots, RHTS} = ?DICT:fetch(Field, RHS),
@@ -591,6 +605,9 @@ remove_all(Fields, Map, Ctx) ->
 %% and value list must be equal. Performs a pariwise equals for all
 %% values in the value lists
 -spec equal(map(), map()) -> boolean().
+equal({_LHSC, LHSE, _LHSD}=LHS, {_RHSC, RHSE, _RHSD}=RHS) when is_list(LHSE);
+                                                               is_list(RHSE) ->
+    equal(to_v2(LHS), to_v2(RHS));
 equal({Clock1, Values1, Deferred1}, {Clock2, Values2, Deferred2}) ->
     riak_dt_vclock:equal(Clock1, Clock2) andalso
         Deferred1 == Deferred2 andalso
@@ -636,9 +653,11 @@ precondition_context({Clock, _Field, _Deferred}) ->
 %%                   of lag/staleness.
 -spec stats(map()) -> [{atom(), integer()}].
 stats(Map) ->
-    [ {S, stat(S, Map)} || S <- [actor_count, field_count, duplication, deferred_length]].
+    [ {S, stat(S, to_v2(Map))} || S <- [actor_count, field_count, duplication, deferred_length]].
 
 -spec stat(atom(), map()) -> number() | undefined.
+stat(Stat, {_, E, _D}=Map) when is_list(E) ->
+    stat(Stat, to_v2(Map));
 stat(actor_count, {Clock, _, _}) ->
     length(Clock);
 stat(field_count, {_, Fields, _}) ->
@@ -658,6 +677,7 @@ stat(_,_) -> undefined.
 -include("riak_dt_tags.hrl").
 -define(TAG, ?DT_MAP_TAG).
 -define(V1_VERS, 1).
+-define(V2_VERS, 2).
 
 %% @doc returns a binary representation of the provided `map()'. The
 %% resulting binary is tagged and versioned for ease of future
@@ -669,7 +689,7 @@ stat(_,_) -> undefined.
 %% @see `from_binary/1'
 -spec to_binary(map()) -> binary_map().
 to_binary(Map) ->
-    {ok, B} = to_binary(?V1_VERS, Map),
+    {ok, B} = to_binary(?V2_VERS, Map),
     B.
 
 %% @private encode v1 maps as v2, and vice versa. The first argument
@@ -678,32 +698,37 @@ to_binary(Map) ->
 to_binary(?V1_VERS, Map0) ->
     Map = to_v1(Map0),
     {ok, <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(Map))/binary>>};
+to_binary(?V2_VERS, Map0) ->
+    Map = to_v2(Map0),
+    {ok, <<?TAG:8/integer, ?V2_VERS:8/integer, (riak_dt:to_binary(Map))/binary>>};
 to_binary(Vers, _Map) ->
     ?UNSUPPORTED_VERSION(Vers).
 
+-spec to_version(pos_integer(), any_map()) -> any_map().
+to_version(2, Map) -> to_v2(Map);
+to_version(1, Map) -> to_v1(Map);
+to_version(_, Map) -> Map.
+
+
 %% @private transpose a v1 map (orddicts) to a v2 (dicts)
--spec to_v2({riak_dt_vclock:vclock(), orddict:orddict() | dict(),
-             orddict:orddict() | dict()}) ->
-                   {riak_dt_vclock:vclock(), dict(), dict()}.
+-spec to_v2(any_map()) -> map().
 to_v2({Clock, Fields0, Deferred0}) when is_list(Fields0),
                                          is_list(Deferred0) ->
-    Fields = ?DICT:from_list(Fields0),
+    Fields = ?DICT:from_list([ field_to_v2(Key, Value) || {Key, Value} <- Fields0]),
     Deferred = ?DICT:from_list(Deferred0),
     {Clock, Fields, Deferred};
 to_v2(S) ->
     S.
 
 %% @private transpose a v2 map (dicts) to a v1 (orddicts)
--spec to_v1({riak_dt_vclock:vclock(), orddict:orddict() | dict(),
-             orddict:orddict() | dict()}) ->
-                   {riak_dt_vclock:vclock(), orddict:orddict(), orddict:orddict()}.
+-spec to_v1(any_map()) -> ord_map().
 to_v1({_Clock, Fields0, Deferred0}=S) when is_list(Fields0),
-                                            is_list(Deferred0) ->
+                                           is_list(Deferred0) ->
     S;
 to_v1({Clock, Fields0, Deferred0}) ->
     %% Must be dicts, there is no is_dict test though
     %% should we use error handling as logic here??
-    Fields = riak_dt:dict_to_orddict(Fields0),
+    Fields = orddict:map(fun field_to_v1/2, riak_dt:dict_to_orddict(Fields0)),
     Deferred = riak_dt:dict_to_orddict(Deferred0),
     {Clock, Fields, Deferred}.
 
@@ -714,13 +739,39 @@ to_v1({Clock, Fields0, Deferred0}) ->
 -spec from_binary(binary_map()) -> {ok, map()} | ?UNSUPPORTED_VERSION | ?INVALID_BINARY.
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
     Map = riak_dt:from_binary(B),
-    %% upgrade ondisk v1/v2 structure to v2 term. We use lists of disk
-    %% as tha works fine for both orddict and list
+    %% upgrade ondisk v1 structure to v2 term. This will also handle
+    %% the horrid riak-2.0.4 map that has lists for entries/deferred,
+    %% but dict elsewhere, and v2 types nested!
+    {ok, to_v2(Map)};
+from_binary(<<?TAG:8/integer, ?V2_VERS:8/integer, B/binary>>) ->
+    %% Only fully v2 maps are written as v2, calling to_v2 a paranoid
+    %% waste?
+    Map = riak_dt:from_binary(B),
     {ok, to_v2(Map)};
 from_binary(<<?TAG:8/integer, Vers:8/integer, _B/binary>>) ->
     ?UNSUPPORTED_VERSION(Vers);
 from_binary(_B) ->
     ?INVALID_BINARY.
+
+field_to_v2({Name, Type}, {CRDTs0, Tombstone0}) when is_list(CRDTs0) ->
+    Tombstone = Type:to_version(2, Tombstone0),
+    CRDTs = dict:from_list([ {Dot, Type:to_version(2, CRDT)} || {Dot, CRDT} <- CRDTs0 ]),
+    {{Name, Type}, {CRDTs, Tombstone}};
+field_to_v2(FieldName, FieldValue) ->
+    %% this is a messed up half v1 half v2 map from the ill fated
+    %% riak2.0.4 release.  The top level `fields' and `deferred' were
+    %% written to disk/wire as lists to be backwards compatible with
+    %% v1, but internally it is all v2 still, it doesn't need
+    %% recursing over internally.
+    {FieldName, FieldValue}.
+
+
+field_to_v1({_Name, Type}, {CRDTs0, Tombstone0}) ->
+    Tombstone = Type:to_version(1, Tombstone0),
+    CRDTs = orddict:map(fun(_Dot, CRDT) ->
+                                Type:to_version(1, CRDT)
+                        end, riak_dt:dict_to_orddict(CRDTs0)),
+    {CRDTs, Tombstone}.
 
 %% ===================================================================
 %% EUnit tests
@@ -905,7 +956,9 @@ invalid_binary_test() ->
 
 -ifdef(EQC).
 -define(NUMTESTS, 1000).
-
+-define(QC_OUT(P),
+        eqc:on_output(fun(Str, Args) ->
+                              io:format(user, Str, Args) end, P)).
 %% ===================================
 %% crdt_statem_eqc callbacks
 %% ===================================
@@ -956,6 +1009,22 @@ gen_field(Size) ->
 gen_field_op({_Name, Type}, Size) ->
     Type:gen_op(Size).
 
+
+v1_downgrade_roundtrip_test_() ->
+    {timeout,
+     120,
+     fun() ->
+             quickcheck(numtests(?NUMTESTS, ?QC_OUT(prop_v1_downgrade_roundtrip())))
+     end}.
+
+
+prop_v1_downgrade_roundtrip() ->
+    ?FORALL(Map, generate(),
+            begin
+                {ok, ConvertedMap} = from_binary(to_binary(to_version(1, Map))),
+                conjunction([{equal, equal(Map, ConvertedMap)},
+                             {not_v1, equals(to_v2(ConvertedMap), ConvertedMap)}])
+            end).
 
 -endif.
 

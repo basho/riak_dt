@@ -58,6 +58,8 @@
 -callback stats(crdt()) -> [{atom(), number()}].
 -callback stat(atom(), crdt()) -> number() | undefined.
 
+-callback to_version(pos_integer(), crdt()) -> crdt().
+
 -ifdef(EQC).
 % Extra callbacks for any crdt_statem_eqc tests
 

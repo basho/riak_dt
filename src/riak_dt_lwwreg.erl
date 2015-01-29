@@ -35,6 +35,7 @@
          equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
 -export([parent_clock/2, update/4]).
 -export([to_binary/2]).
+-export([to_version/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -154,6 +155,10 @@ from_binary(<<?TAG:8/integer, Vers:8/integer, _Bin/binary>>) ->
     ?UNSUPPORTED_VERSION(Vers);
 from_binary(_B) ->
     ?INVALID_BINARY.
+
+-spec to_version(pos_integer(), lwwreg()) -> lwwreg().
+to_version(_Version, LWW) ->
+    LWW.
 
 %% ===================================================================
 %% EUnit tests

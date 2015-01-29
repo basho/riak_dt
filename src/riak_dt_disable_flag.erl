@@ -32,6 +32,7 @@
 -export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1, stats/1, stat/2]).
 -export([update/4, parent_clock/2]).
 -export([to_binary/2]).
+-export([to_version/2]).
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -export([gen_op/0, init_state/0, update_expected/3, eqc_state_value/1]).
@@ -104,6 +105,11 @@ stats(_) -> [].
 
 -spec stat(atom(), disable_flag()) -> number() | undefined.
 stat(_, _) -> undefined.
+
+-spec to_version(pos_integer(), disable_flag()) -> disable_flag().
+to_version(_Version, Flag) ->
+    Flag.
+
 
 %% priv
 flag_and(on, on) ->

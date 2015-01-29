@@ -39,6 +39,7 @@
          update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
 -export([to_binary/2, current_version/1, change_versions/3]).
 -export([parent_clock/2, update/4]).
+-export([to_version/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -201,6 +202,10 @@ from_binary(<<?TAG:8/integer, Vers:8/integer, _/binary>>) ->
     ?UNSUPPORTED_VERSION(Vers);
 from_binary(_B) ->
     ?INVALID_BINARY.
+
+-spec to_version(pos_integer(), any_pncounter()) -> any_pncounter().
+to_version(ToVer, C) ->
+    change_versions(current_version(C), ToVer, C).
 
 -spec current_version(any_pncounter()) -> version().
 current_version(PNCnt) when is_list(PNCnt) ->

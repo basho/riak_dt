@@ -28,6 +28,7 @@
 -export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1, stats/1, stat/2]).
 -export([update/4, parent_clock/2]).
 -export([to_binary/2]).
+-export([to_version/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -141,6 +142,10 @@ stats(OEF) ->
 stat(actor_count, {C, _}) ->
     length(C);
 stat(_, _) -> undefined.
+
+-spec to_version(pos_integer(), oe_flag()) -> oe_flag().
+to_version(_Version, Flag) ->
+    Flag.
 
 
 %% ===================================================================
