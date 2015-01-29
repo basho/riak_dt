@@ -275,8 +275,6 @@ merge_field(Field, Values) ->
     merge_field(Field, ?DICT:find(Field, Values)).
 
 %% @private merge the CRDTs of a type
-merge_crdts(Type, {CRDTs, TS}) when is_list(CRDTs) ->
-    merge_crdts(Type, {?DICT:from_list(CRDTs), TS});
 merge_crdts(Type, {CRDTs, TS}) ->
     V = ?DICT:fold(fun(_Dot, CRDT, CRDT0) ->
                              Type:merge(CRDT0, CRDT) end,
@@ -478,7 +476,7 @@ merge({LHSClock, LHSEntries, LHSDeferred}, {RHSClock, RHSEntries, RHSDeferred}) 
 -spec filter_unique(set(), entries(), riak_dt_vclock:vclock(), entries()) -> entries().
 filter_unique(FieldSet, Entries, Clock, Acc) ->
     sets:fold(fun({_Name, Type}=Field, Keep) ->
-                      {Dots, TS} = fetch_dots(Entries, Field),
+                      {Dots, TS} = ?DICT:fetch(Field, Entries),
                       KeepDots = ?DICT:filter(fun(Dot, _CRDT) ->
                                                       is_dot_unseen(Dot, Clock)
                                               end,
@@ -539,25 +537,13 @@ filter_dots(Dots, CRDTs, Clock) ->
                    end,
                    CRDTs).
 
-%% @private prior versions of the Map stored dots in an
-%% orddict. Orddicts are also lists, fetch the dots, and if they are
-%% from an old version "upgrade" to dict.
--spec fetch_dots(entries(), field_name()) -> any(). %% why dialyzer? Why?
-fetch_dots(Dict, Field) ->
-    case ?DICT:fetch(Field, Dict) of
-        {Dots, TS} when is_list(Dots) ->
-            {?DICT:from_list(Dots), TS};
-        V2 ->
-            V2
-    end.
-
 %% @private merge the common fields into a set of surviving dots and a
 %% tombstone per field.  If a dot is on both sides, keep it. If it is
-%% only on one side, drop it if dominated by the otheride's clock.
-merge_common(FieldSet, LHS, RHS, LHSClock , RHSClock, Acc) ->
+%% only on one side, drop it if dominated by the otherside's clock.
+merge_common(FieldSet, LHS, RHS, LHSClock, RHSClock, Acc) ->
     sets:fold(fun({_, Type}=Field, Keep) ->
-                      {LHSDots, LHTS} = fetch_dots(LHS, Field),
-                      {RHSDots, RHTS} = fetch_dots(RHS, Field),
+                      {LHSDots, LHTS} = ?DICT:fetch(Field, LHS),
+                      {RHSDots, RHTS} = ?DICT:fetch(Field, RHS),
                       {CommonDots, LHSUniqe, RHSUnique} = key_sets(LHSDots, RHSDots),
                       TS = Type:merge(RHTS, LHTS),
 
