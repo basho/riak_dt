@@ -180,7 +180,9 @@
 -export([merge/2, equal/2, to_binary/1, from_binary/1]).
 -export([to_binary/2, from_binary/2]).
 -export([precondition_context/1, stats/1, stat/2]).
--export([parent_clock/2, get_deferred/1, get_deferred/2]).
+-export([parent_clock/2, get_deferred/1]).
+
+%, get_deferred/2
 
 %% EQC API
 -ifdef(EQC).
@@ -197,33 +199,12 @@
 -type field_meta() :: {riak_dt_vclock:vclock(), seen(), tombstone()}.
 -type field_value() :: crdt().
 
-%%-type crdts() :: [entry()].
-%%-type entry() :: {riak_dt:dot(), crdt()}.
-
-%% Only for present fields, ensures removes propogate
-%%-type tombstone() :: crdt().
-
-%% Only field removals can be deferred. CRDTs stored in the map may
-%% have contexts and deferred operations, but as these are part of the
-%% state, they are stored under the field as an update like any other.
-
 -type seen() :: dots().
 -type deferred() :: [{context(), [field()]}].
 -type tombstone() :: riak_dt_vclock:vclock().
 
 -type dots() :: [dot()].
 -type dot() :: riak_dt:dot().
-
-
-%%-type crdts() :: [entry()].
-%%-type entry() :: {riak_dt:dot(), crdt()}.
-
-%% Only for present fields, ensures removes propogate
-%%-type tombstone() :: crdt().
-
-%% Only field removals can be deferred. CRDTs stored in the map may
-%% have contexts and deferred operations, but as these are part of the
-%% state, they are stored under the field as an update like any other.
 
 %% limited to only those mods that support both a shared causal
 %% context, and by extension, the reset-remove semantic.
@@ -232,8 +213,7 @@ riak_dt_od_flag |
 riak_dt_map | riak_dt_delta_map | riak_dt_orswot.
 
 -type crdt()  ::  riak_dt_emcntr:emcntr() | riak_dt_od_flag:od_flag() |
-riak_dt_lwwreg:lwwreg() |
-riak_dt_orswot:orswot() |
+riak_dt_lwwreg:lwwreg() | riak_dt_orswot:orswot() |
 riak_dt_map:map() | riak_dt_delta_map:map().
 
 -type map_op() :: {update, [map_field_update() | map_field_op()]}.
@@ -242,14 +222,15 @@ riak_dt_map:map() | riak_dt_delta_map:map().
 -type map_field_update() :: {update, field(), crdt_op()}.
 
 -type crdt_op() :: riak_dt_emcntr:emcntr_op() |
-riak_dt_lwwreg:lwwreg_op() |
-riak_dt_orswot:orswot_op() | riak_dt_od_flag:od_flag_op() |
-riak_dt_map:map_op() | riak_dt_delta_map:map_op().
+riak_dt_lwwreg:lwwreg_op() | riak_dt_orswot:orswot_op() |
+riak_dt_od_flag:od_flag_op() | riak_dt_map:map_op() | riak_dt_delta_map:map_op().
 
 -type context() :: riak_dt_vclock:vclock() | undefined.
 
 -type values() :: [value()].
--type value() :: {field(), riak_dt_delta_map:values() | integer() | [term()] | boolean() | term()}.
+-type value() :: {field(), riak_dt_delta_map:values() | integer() |
+                  [term()] | boolean() | term()}.
+
 -type precondition_error() :: {error, {precondition, {not_present, field()}}}.
 
 -define(FRESH_CLOCK, riak_dt_vclock:fresh()).
@@ -260,50 +241,36 @@ riak_dt_map:map_op() | riak_dt_delta_map:map_op().
 new() ->
     {riak_dt_vclock:fresh(), ?DICT:new(), ?DICT:new()}.
 
-%% @doc sets the clock in the map to that `Clock'. Used by a
-%% containing Map for sub-CRDTs
--spec parent_clock(riak_dt_vclock:vclock(), map()) -> map().
-parent_clock(Clock, {_MapClock, Values, Deferred}) ->
-    {Clock, Values, Deferred}.
-
-get_deferred({_, _, Deferred}) ->
-    lists:map(fun({Key, _}) -> Key end, ?DICT:to_list(Deferred)).
-
-get_deferred({Clock, Entries, _}=CRDT, Ctx) ->
-    riak_dt:get_deferred({Clock, Entries, get_deferred(CRDT)}, Ctx).
-
 %% @doc get the current set of values for this Map
 -spec value(map()) -> values().
-value({_Clock, Values, _Deferred}) ->
-    %%Selects the visible elements from the map
+value({Clock, Values, _Deferred}) ->
     lists:sort(?DICT:fold(
-                 fun({Name, Type}, {{Dots, _,Tombstone}, CRDT}, Acc) ->
-                         case Tombstone of
-                             [] -> [{{Name, Type}, Type:value(CRDT)} | Acc];
-                             _ -> 
-                                 case riak_dt_vclock:descends(Tombstone, Dots) of
-                                     %No new dots in this branch
-                                     true -> 
-                                         Acc;
-                                     %Dots in the branch
-                                     false -> 
-                                         case Type of
-                                             %Recursive search
-                                             riak_dt_delta_map -> 
-                                                 SubTree = value(CRDT),
-                                                 case SubTree of
-                                                     [] -> 
-                                                         Acc;
-                                                     _ -> [{{Name, Type}, Type:value(CRDT)} | Acc]
-                                                 end;
-                                             _ ->
-                                                 [{{Name, Type}, Type:value(CRDT)} | Acc]
-                                         end
-                                 end
-                         end
-                 end,
-                 [],
-                 Values)).
+                  fun({Name, Type}, {{Dots, _, Tombstone}, CRDT0}, Acc) ->
+                          %%TODO: Add this change to the normal map
+                          CRDT = Type:parent_clock(Clock, CRDT0),
+                          case Tombstone of
+                              [] -> [{{Name, Type}, Type:value(CRDT)} | Acc];
+                              _ -> 
+                                  case riak_dt_vclock:descends(Tombstone, Dots) of
+                                      true -> 
+                                          Acc;
+                                      false -> 
+                                          case Type of
+                                              riak_dt_delta_map -> 
+                                                  SubTree = value(CRDT),
+                                                  case SubTree of
+                                                      [] -> 
+                                                          Acc;
+                                                      _ -> [{{Name, Type}, Type:value(CRDT)} | Acc]
+                                                  end;
+                                              _ ->
+                                                  [{{Name, Type}, Type:value(CRDT)} | Acc]
+                                          end
+                                  end
+                          end
+                  end,
+                  [],
+                  Values)).
 
 %% @doc query map (not implemented yet)
 %%
@@ -344,49 +311,6 @@ update({update, Ops}, ActorOrDot, {Clock0, Values, Deferred}, Ctx) ->
     {Dot, Clock} = update_clock(ActorOrDot, Clock0),
     apply_ops(Ops, Dot, {Clock, Values, Deferred}, Ctx).
 
-%% @private update the clock, and get a dot for the operations. This
-%% means that field removals increment the clock too.
--spec update_clock(riak_dt:actor() | riak_dt:dot(),
-                   riak_dt_vclock:vclock()) ->
-    {riak_dt:dot(), riak_dt_vclock:vclock()}.
-update_clock(Dot, Clock) when is_tuple(Dot) ->
-    NewClock = riak_dt_vclock:merge([[Dot], Clock]),
-    {Dot, NewClock};
-update_clock(Actor, Clock) ->
-    NewClock = riak_dt_vclock:increment(Actor, Clock),
-    Dot = {Actor, riak_dt_vclock:get_counter(Actor, NewClock)},
-    {Dot, NewClock}.
-
--spec delta_update(map_op(), riak_dt:actor() | riak_dt:dot(), map()) ->
-    {ok, map()} | precondition_error().
-delta_update(Op, ActorOrDot, {Clock0, _, _}=Map) ->
-    {Dot, _Clock} = update_clock(ActorOrDot, Clock0),
-    delta_update(Op, Dot, Map, undefined).
-
--spec delta_update(map_op(), riak_dt:actor() | riak_dt:dot(), map(), riak_dt:context()) ->
-    {ok, map()}.
-delta_update({update, Ops}, Actor, {Clock0, _, _}=Map, Ctx) ->
-    {Dot, _Clock} = update_clock(Actor, Clock0),
-    delta_apply_ops(Ops, Dot, Map, new(), Ctx).
-
-get({_Name, Type}=Field, Fields, Clock) ->
-    CRDT = case ?DICT:find(Field, Fields) of
-               {ok, {{_, _, _},CRDT0}} ->
-                   CRDT0;
-               error ->
-                   Type:new()
-           end,
-    Type:parent_clock(Clock, CRDT).
-
-get_entry({_Name, Type}=Field, Fields, Clock) ->
-    {{Dots, _S, Tombstone}, CRDT} = case ?DICT:find(Field, Fields) of
-                                 {ok, Entry} ->
-                                     Entry;
-                                 error ->
-                                     {{[], [], riak_dt_vclock:fresh()}, Type:new()}
-                             end,
-    {{Dots, _S, Tombstone}, Type:parent_clock(Clock, CRDT)}.
-
 %% @private
 -spec apply_ops([map_field_update() | map_field_op()], riak_dt:dot(),
                 {riak_dt_vclock:vclock(), entries() , deferred()}, context()) ->
@@ -394,7 +318,7 @@ get_entry({_Name, Type}=Field, Fields, Clock) ->
 apply_ops([], _Dot, Map, _Ctx) ->
     {ok, Map};
 apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock, Values, Deferred}, Ctx) ->
-    CRDT = get(Field, Values, Clock),
+    {_,CRDT} = get_entry(Field, Values, Clock),
     case Type:update(Op, Dot, CRDT, Ctx) of
         {ok, Updated0} ->
             Updated = Type:parent_clock(?FRESH_CLOCK, Updated0),
@@ -415,66 +339,6 @@ apply_ops([{remove, Field} | Rest], Dot, Map, Ctx) ->
         E ->
             E
     end.
-
-%% How to accept multiple operations for the same object?
-%%  Always execute operation over original state, merge deltas.
-%% For now, just support update operations.
-
-%% @private
--spec delta_apply_ops([map_field_update() | map_field_op()], riak_dt:dot(),
-                {riak_dt_vclock:vclock(), entries() , deferred()}, 
-                {riak_dt_vclock:vclock(), entries() , deferred()}, context()) ->
-    {ok, map()} | precondition_error().
-delta_apply_ops([], _Dot, _Map, Delta, _Ctx) ->
-    {ok, Delta};
-delta_apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock0, Values, Deferred}, {DClock, DValues, DDef}, Ctx) ->
-    CRDT = get(Field, DValues, Clock0),
-    case Type:delta_update(Op, Dot, CRDT, Ctx) of
-        {ok, Updated0} ->
-            Updated = Type:parent_clock(?FRESH_CLOCK, Updated0),
-            NewDValues = case ?DICT:find(Field,DValues) of
-                             {ok, {{Dots, Seen, _}, _}} ->
-                                 ?DICT:store(Field, {
-                                               {ordsets:add_element(Dot, Dots),
-                                                ordsets:add_element(Dot, Seen),
-                                                DDef
-                                               }, Updated}, DValues );
-                             error ->
-                                ?DICT:store(Field, {{[Dot], [Dot], riak_dt_vclock:fresh()}, Updated}, DValues)
-                        end,
-            delta_apply_ops(Rest, Dot, {Clock0, Values, Deferred}, {DClock, NewDValues, DDef}, Ctx);
-        Error ->
-            Error
-    end;
-
-%% Store tombstone for any operation... optimisation later.
-%% Isolation may be broken, the clock that is stored in the deferred 
-%% operation does not descend from the updates generated by the delta.
-delta_apply_ops([{remove, {_, Type}=Field} | Rest], _Dot, {Clock0, CRDT, Def}, {_DC, DCRDT, DDeferred0}, Ctx) ->
-    DDeferred = defer_remove(Clock0, Ctx, Field, DDeferred0),
-    UpdtCRDT = ?DICT:update(Field, fun(Value) -> 
-                                           delta_apply_remove(Field, Value, Ctx) end,
-                            {{[], [], Ctx}, Type:new()},
-                            CRDT),
-    UpdtDCRDT = ?DICT:store(Field, ?DICT:fetch(Field, UpdtCRDT), DCRDT),
-    delta_apply_ops(Rest, _Dot, {Clock0, CRDT, Def}, {_DC, UpdtDCRDT, DDeferred}, Ctx).
-
-
-delta_apply_remove({_, Type}, {{Active, _Seen, Tombstone}, CRDT}, Ctx) ->
-    SurvivingDots = riak_dt_vclock:subtract_dots(Active, Ctx),
-    NewCRDT = case Type of
-                   riak_dt_delta_map -> 
-                       {_C, Value, _D} = CRDT,
-                       {_C, ?DICT:map(fun(FieldI, ValueI) -> 
-                                         delta_apply_remove(FieldI, ValueI, Ctx) end, Value), _D};
-                   _ -> 
-                      Type:new()
-               end,
-    DeferredOps = Type:get_deferred(CRDT),
-    %%Putting everything in the delta tombstone... maybe too conservative
-    NewTombstone = riak_dt_vclock:merge([Tombstone, Ctx | DeferredOps]),
-    {{[], lists:subtract(Active, SurvivingDots), NewTombstone}, NewCRDT}.
-
 
 %% @private when context is undefined, we simply remove all instances
 %% of Field, regardless of their dot. If the field is not present then
@@ -504,10 +368,11 @@ remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
     NewValues = case ?DICT:find(Field, UpdtValues) of
                     %Element is removed but has deferred operations
                     {ok, empty} when DefCtx =/= no_deferred ->
-                        ?DICT:update(Field, fun({{Dots, _S, Tombstone}, CRDT}) ->
-                                                    Tombstone = riak_dt_vclock:merge([DefCtx, Tombstone]),
-                                                    {{Dots, _S, Tombstone}, CRDT}
-                                            end,UpdtValues);
+                        ?DICT:update(Field, 
+                                     fun({{Dots, _S, Tombstone}, CRDT}) ->
+                                             Tombstone = riak_dt_vclock:merge([DefCtx, Tombstone]),
+                                             {{Dots, _S, Tombstone}, CRDT}
+                                     end,UpdtValues);
                     {ok, empty} ->
                         ?DICT:erase(Field, UpdtValues);
                     {ok, CRDT} ->
@@ -585,7 +450,6 @@ propagate_remove({_, Type}=Field, {{Clock, _S, TombstoneIn}, CRDT}, MapClock, Ct
              TombstoneClock = riak_dt_vclock:glb(MapClock, Ctx),
              TS = Type:parent_clock(TombstoneClock, Type:new()),
              ClearedCRDT = Type:merge(TS, Type:parent_clock(TombstoneClock, CRDT)),
-            
             {Tombstone, {{Clock, _S, Tombstone}, ClearedCRDT}}
     end;
 
@@ -628,42 +492,126 @@ defer_remove(Clock, Ctx, Field, Deferred) ->
                                 Deferred)
     end.
 
+-spec delta_update(map_op(), riak_dt:actor() | riak_dt:dot(), map()) ->
+    {ok, map()} | precondition_error().
+delta_update(Op, ActorOrDot, {Clock0, _, _}=Map) ->
+    {Dot, _Clock} = update_clock(ActorOrDot, Clock0),
+    delta_update(Op, Dot, Map, undefined).
+
+-spec delta_update(map_op(), riak_dt:actor() | riak_dt:dot(), map(), riak_dt:context()) ->
+    {ok, map()}.
+delta_update({update, Ops}, Actor, {Clock0, _, _}=Map, Ctx) ->
+    {Dot, _Clock} = update_clock(Actor, Clock0),
+    delta_apply_ops(Ops, Dot, Map, new(), Ctx).
+
+%% How to accept multiple operations for the same object?
+%%  Always execute operation over original state, merge deltas.
+%% For now, just support update operations.
+
+%% @private
+-spec delta_apply_ops([map_field_update() | map_field_op()], riak_dt:dot(),
+                {riak_dt_vclock:vclock(), entries() , deferred()}, 
+                {riak_dt_vclock:vclock(), entries() , deferred()}, context()) ->
+    {ok, map()} | precondition_error().
+delta_apply_ops([], _Dot, _Map, Delta, _Ctx) ->
+    {ok, Delta};
+delta_apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock0, Values, Deferred}, {DClock, DValues, DDef}, Ctx) ->
+    {_, CRDT} = get_entry(Field, DValues, Clock0),
+    case Type:delta_update(Op, Dot, CRDT, Ctx) of
+        {ok, Updated0} ->
+            Updated = Type:parent_clock(?FRESH_CLOCK, Updated0),
+            NewDValues = case ?DICT:find(Field,DValues) of
+                             {ok, {{Dots, Seen, _}, _}} ->
+                                 ?DICT:store(Field, {
+                                               {ordsets:add_element(Dot, Dots),
+                                                ordsets:add_element(Dot, Seen),
+                                                DDef
+                                               }, Updated}, DValues );
+                             error ->
+                                ?DICT:store(Field, {{[Dot], [Dot], riak_dt_vclock:fresh()}, Updated}, DValues)
+                        end,
+            delta_apply_ops(Rest, Dot, {Clock0, Values, Deferred}, {DClock, NewDValues, DDef}, Ctx);
+        Error ->
+            Error
+    end;
+
+%% Store tombstone for any operation. 
+%% - can we remove branches that don't have deferred operations immediatly?
+delta_apply_ops([{remove, {_, Type}=Field} | Rest], _Dot, {Clock0, CRDT, Def}, {_DC, DCRDT, DDeferred0}, Ctx) ->
+    DDeferred = defer_remove(Clock0, Ctx, Field, DDeferred0),
+    UpdtCRDT = ?DICT:update(Field, fun(Value) -> 
+                                           delta_apply_remove(Field, Value, Clock0, Ctx) end,
+                            {{[], [], Ctx}, Type:new()},
+                            CRDT),
+    UpdtDCRDT = ?DICT:store(Field, ?DICT:fetch(Field, UpdtCRDT), DCRDT),
+    delta_apply_ops(Rest, _Dot, {Clock0, CRDT, Def}, {_DC, UpdtDCRDT, DDeferred}, Ctx).
+
+delta_apply_remove({_, Type}=Field, {{Active, _Seen, Tombstone}, CRDT}, Clock, Ctx) ->
+    SurvivingDots = riak_dt_vclock:subtract_dots(Active, Ctx),
+    NewCRDT = case Type of
+                  riak_dt_delta_map -> 
+                      {_C, Value, _D} = CRDT,
+                      NewValue = ?DICT:map(fun(FieldI, ValueI) -> 
+                                                   delta_apply_remove(FieldI, ValueI, Clock, Ctx)
+                                           end, Value),
+                      {_C, NewValue, _D};
+                  _ ->
+                      %% Trick to clear the value.
+                      %% Set the clock in the empty object.
+                      %% This only works because the parent_clock is doing a merge
+                      %% The solution should use a clear operation.
+                      Type:parent_clock(Clock, Type:new())
+              end,
+    DeferredOps = Type:get_deferred(CRDT),
+    ChildTombstone = get_tombstone(Field, NewCRDT),
+    %%Putting everything in the delta tombstone... maybe too conservative
+    NewTombstone = riak_dt_vclock:merge([Tombstone, ChildTombstone, Ctx | DeferredOps]),
+    {{[], lists:subtract(Active, SurvivingDots), NewTombstone}, NewCRDT}.
+
 merge({LHSClock, LHSEntries, LHSDeferred}, {RHSClock, RHSEntries, RHSDeferred}) ->
-    Clock0 = riak_dt_vclock:merge([LHSClock, RHSClock]),
     Fields = lists:umerge(?DICT:fetch_keys(LHSEntries), ?DICT:fetch_keys(RHSEntries)),
-    {AllDots, Entries} = lists:foldl(fun({_Name, Type}=Field, {DotsAcc, Acc}) ->
-                                             {{LHSDots, LHSS, LHSTomb}, LHSCRDT} = get_entry(Field, LHSEntries, LHSClock),
-                                             {{RHSDots, RHSS, RHSTomb}, RHSCRDT} = get_entry(Field, RHSEntries, RHSClock),
-                                             case keep_dots(LHSDots, RHSDots, LHSClock, RHSClock, LHSS, RHSS) of
-                                                 [] ->
-                                                     case riak_dt_vclock:merge([LHSTomb, RHSTomb]) of
-                                                         [] -> 
-                                                             {DotsAcc, Acc};
-                                                         Tomb ->
-                                                             MergedCRDT = Type:merge(LHSCRDT, RHSCRDT),
-                                                             MergedTomb = riak_dt_vclock:merge([Tomb | Type:get_deferred(MergedCRDT)]),
-                                                             {DotsAcc, ?DICT:store(Field, {{[], [], MergedTomb},                                                                                         Type:parent_clock(?FRESH_CLOCK, MergedCRDT)}, Acc)}
-                                                     end;
-                                                 Dots ->
-                                                     MergedCRDT = Type:merge(LHSCRDT, RHSCRDT),
-                                                     MergedTombstone = riak_dt_vclock:merge([LHSTomb, RHSTomb | Type:get_deferred(MergedCRDT)]),
-                                                     MergedSeen = lists:umerge(LHSS, RHSS),
-                                                     %% Yes! Reset the clock, again
-                                                     {
-                                                      lists:umerge(MergedSeen, DotsAcc), 
-                                                      ?DICT:store(Field, {{Dots, MergedSeen, MergedTombstone}, 
-                                                                          Type:parent_clock(?FRESH_CLOCK, MergedCRDT)}, Acc)}
-                                             end
-                                     end,
-                                     {[], ?DICT:new()},
-                                     Fields),
-    {Clock, _Seen} = compress_seen(Clock0, AllDots),
+    {AllDots, Entries} = lists:foldl(fun(Field, {DotsAcc, Acc}) ->
+                        LHSEntry= get_entry(Field, LHSEntries, LHSClock),
+                        RHSEntry = get_entry(Field, RHSEntries, RHSClock),
+                        case update_entry(Field, LHSClock, LHSEntry, RHSClock, RHSEntry) of
+                            empty -> {DotsAcc, Acc};
+                            {{_, Seen, _},_} = NewEntry ->
+                                NewDots = lists:umerge(Seen, DotsAcc),
+                                {NewDots, ?DICT:store(Field, NewEntry, Acc)}
+                        end
+                end,
+                {[], ?DICT:new()},
+                Fields),
+    {Clock, _Seen} = compress_seen(riak_dt_vclock:merge([LHSClock, RHSClock]), AllDots),
     Deferred = merge_deferred(LHSDeferred, RHSDeferred),
     CRDT0 = apply_deferred(Clock, Entries, Deferred),
     CRDT = clear_seen(Clock, CRDT0),
-    CRDT1 = clear_tombstones(CRDT),
-    CRDT1.
-    
+    clear_tombstones(CRDT).
+
+update_entry({_, Type}, LHSClock, LHSEntry, RHSClock, RHSEntry) ->
+    {{LHSDots, LHSS, LHSTomb}, LHSCRDT} = LHSEntry,
+    {{RHSDots, RHSS, RHSTomb}, RHSCRDT} = RHSEntry,
+        case keep_dots(LHSDots, RHSDots, LHSClock, RHSClock, LHSS, RHSS) of
+        [] ->
+            case riak_dt_vclock:merge([LHSTomb, RHSTomb]) of
+                [] -> empty;
+                Tomb ->
+                    %% This is wrong, this clock assumes both sides have seen the same dots
+                    %% it might work, but it does not respect the semantics 
+                    %Clock0 = riak_dt_vclock:merge([LHSClock, RHSClock]),
+                    %L = Type:parent_clock(Clock0, LHSCRDT),
+                    %R = Type:parent_clock(Clock0,RHSCRDT),
+                    %MergedCRDT = Type:merge(L, R),
+                    MergedCRDT = Type:merge(LHSCRDT, RHSCRDT),
+                    MergedTomb = riak_dt_vclock:merge([Tomb | Type:get_deferred(MergedCRDT)]),
+                    {{[], [], MergedTomb}, Type:parent_clock(?FRESH_CLOCK, MergedCRDT)}
+            end;
+        Dots ->
+            MergedCRDT = Type:merge(LHSCRDT, RHSCRDT),
+            MergedTombstone = riak_dt_vclock:merge([LHSTomb, RHSTomb | Type:get_deferred(MergedCRDT)]),
+            MergedSeen = lists:umerge(LHSS, RHSS),
+            {{Dots, MergedSeen, MergedTombstone}, Type:parent_clock(?FRESH_CLOCK, MergedCRDT)}
+    end.
 
 keep_dots(LHSDots, RHSDots, LHSClock, RHSClock, LHSeen, RHSeen) ->
     CommonDots = sets:intersection(sets:from_list(LHSDots), sets:from_list(RHSDots)),
@@ -673,8 +621,7 @@ keep_dots(LHSDots, RHSDots, LHSClock, RHSClock, LHSeen, RHSeen) ->
     RHRemoved = ordsets:subtract(RHSeen, RHSDots),
     LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, lists:umerge(RHRemoved, RHSClock)),
     RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, lists:umerge(LHRemoved, LHSClock)),
-    Merged = riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]),
-    Merged.
+    riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]).
 
 %% @private
 -spec merge_deferred(deferred(), deferred()) -> deferred().
@@ -758,10 +705,20 @@ clear_tombstones_handle({_, riak_dt_delta_map}=Field, {{Dots, _S, Tombstone}, {C
                        clear_tombstones_handle(Field_i, Value_i, FilteredEntriesAcc, MapClock)
                end, ?DICT:new(), CRDT),
     %%Distinguish between empty map and removed map. --- this was changed, maybe do the same to map.
-    case ?DICT:size(FilteredEntries) == 0 andalso riak_dt_vclock:descends(MapClock, Tombstone) of
-        true when length(Tombstone) > 0 -> NewMap;
-        _ ->
-            ?DICT:store(Field, {{Dots, _S, Tombstone}, {Clock, FilteredEntries, Deferred}}, NewMap)
+    case ?DICT:size(FilteredEntries) == 0 of
+        true when length(Tombstone) > 0 -> 
+            case riak_dt_vclock:descends(MapClock, Tombstone) of
+                true -> NewMap;
+                false -> ?DICT:store(Field, {{Dots, _S, Tombstone}, {Clock, FilteredEntries, Deferred}}, NewMap)
+            end;
+        true -> ?DICT:store(Field, {{Dots, _S, []}, {Clock, FilteredEntries, Deferred}}, NewMap);
+        false -> 
+            case riak_dt_vclock:descends(MapClock, Tombstone) of
+                true ->
+                    ?DICT:store(Field, {{Dots, _S, []}, {Clock, FilteredEntries, Deferred}}, NewMap);
+                false ->
+                    ?DICT:store(Field, {{Dots, _S, Tombstone}, {Clock, FilteredEntries, Deferred}}, NewMap)
+            end
     end;
 
 clear_tombstones_handle(Field, {{Dots,  _S, Tombstone}, CRDT}=Value, NewMap, MapClock) ->
@@ -803,6 +760,44 @@ pairwise_equals([{{Name, Type}, {{Dots1, S1, Tombstone1}, CRDT1}}|Rest1], [{{Nam
     end;
 pairwise_equals(_, _) ->
     false.
+
+%% @doc sets the clock in the map to that `Clock'. Used by a
+%% containing Map for sub-CRDTs
+-spec parent_clock(riak_dt_vclock:vclock(), map()) -> map().
+parent_clock(Clock, {MapClock, Values, Deferred}) ->
+    {riak_dt_vclock:merge([MapClock, Clock]), Values, Deferred}.
+
+get_deferred({_, _, Deferred}) ->
+    lists:map(fun({Key, _}) -> Key end, ?DICT:to_list(Deferred)).
+
+get_tombstone({_, riak_dt_delta_map}, {_, Value, _}) ->
+    ?DICT:fold(fun(_, {{_, _, Tomb},_}, Acc) -> 
+                       riak_dt_vclock:merge([Tomb, Acc])
+               end, [], Value);
+
+get_tombstone(_, _) -> [].
+
+get_entry({_Name, Type}=Field, Fields, Clock) ->
+    {{Dots, _S, Tombstone}, CRDT} = case ?DICT:find(Field, Fields) of
+                                 {ok, Entry} ->
+                                     Entry;
+                                 error ->
+                                     {{[], [], riak_dt_vclock:fresh()}, Type:new()}
+                             end,
+    {{Dots, _S, Tombstone}, Type:parent_clock(Clock, CRDT)}.
+
+%% @private update the clock, and get a dot for the operations. This
+%% means that field removals increment the clock too.
+-spec update_clock(riak_dt:actor() | riak_dt:dot(),
+                   riak_dt_vclock:vclock()) ->
+    {riak_dt:dot(), riak_dt_vclock:vclock()}.
+update_clock(Dot, Clock) when is_tuple(Dot) ->
+    NewClock = riak_dt_vclock:merge([[Dot], Clock]),
+    {Dot, NewClock};
+update_clock(Actor, Clock) ->
+    NewClock = riak_dt_vclock:increment(Actor, Clock),
+    Dot = {Actor, riak_dt_vclock:get_counter(Actor, NewClock)},
+    {Dot, NewClock}.
 
 %% @doc an opaque context that can be passed to `update/4' to ensure
 %% that only seen fields are removed. If a field removal operation has
@@ -1069,34 +1064,34 @@ clear_invisible_after_merge_2_test() ->
     {ok, {_,_,_}=StateB3} = ?UPDT_MERGE(?REMOVE_FIELD_X, b, StateB2, CtxB2),
     ?assertEqual([], value(StateB3)).
 
-%clear_invisible_after_merge_set_test() ->
-%    AddElemToS = fun(Elem) ->
-%                         {update, [{update, ?FIELD, {update, [{update, ?FIELD_S, {add, Elem}}]}}]}
-%                 end,
-%    InitialState = new(),
-%    {ok, {CtxA1,_,_}=StateA1} = ?UPDT_MERGE(?ENABLE_FLAG_A, a, InitialState),
-%    {ok, {CtxB1,_,_}=StateB1} = ?UPDT_MERGE(?DISABLE_FLAG_A, b, InitialState, CtxA1),       
-%    {ok, {CtxB2,_,_}=StateB2} = ?UPDT_MERGE(AddElemToS(0), b, StateB1, CtxB1),
-%    {ok, {CtxB3,_,_}=StateB3} = ?UPDT_MERGE(?REMOVE_FIELD_X, b, StateB2, CtxB2),
-%    {ok, {_,_,_}=StateB4} = ?UPDT_MERGE(AddElemToS(1), b, StateB3, CtxB3),
-%    StateAB = merge(StateA1,StateB4),
-%    ?assertEqual([{{'X',riak_dt_delta_map}, [{{'X.S',riak_dt_delta_orswot},[1]}]}], value(StateAB)).
+clear_invisible_after_merge_set_test() ->
+    AddElemToS = fun(Elem) ->
+                         {update, [{update, ?FIELD, {update, [{update, ?FIELD_S, {add, Elem}}]}}]}
+                 end,
+    InitialState = new(),
+    {ok, {CtxA1,_,_}=StateA1} = ?UPDT_MERGE(?ENABLE_FLAG_A, a, InitialState),
+    {ok, {CtxB1,_,_}=StateB1} = ?UPDT_MERGE(?DISABLE_FLAG_A, b, InitialState, CtxA1),       
+    {ok, {CtxB2,_,_}=StateB2} = ?UPDT_MERGE(AddElemToS(0), b, StateB1, CtxB1),
+    {ok, {CtxB3,_,_}=StateB3} = ?UPDT_MERGE(?REMOVE_FIELD_X, b, StateB2, CtxB2),
+    {ok, {_,_,_}=StateB4} = ?UPDT_MERGE(AddElemToS(1), b, StateB3, CtxB3),
+    StateAB = merge(StateA1,StateB4),
+    ?assertEqual([{{'X',riak_dt_delta_map}, [{{'X.S',riak_dt_delta_orswot},[1]}]}], value(StateAB)).
 
-%clear_invisible_after_merge_set_2_test() ->
-%    AddElemToS = fun(Elem) ->
-%                         {update, [{update, ?FIELD, {update, [{update, ?FIELD_S, {add, Elem}}]}}]}
-%                 end,
-%    RemElemFromS = fun(Elem) ->
-%                         {update, [{update, ?FIELD, {update, [{update, ?FIELD_S, {remove, Elem}}]}}]}
-%                 end,
-%    InitialState = new(),
-%    {ok, {CtxA1,_,_}=StateA1} = ?UPDT_MERGE(AddElemToS(0), a, InitialState),
-%    {ok, {CtxB1,_,_}=StateB1} = ?UPDT_MERGE(RemElemFromS(0), b, InitialState, CtxA1),
-%    {ok, {CtxB2,_,_}=StateB2} = ?UPDT_MERGE(AddElemToS(1), b, StateB1, CtxB1),
-%    {ok, {CtxB3,_,_}=StateB3} = ?UPDT_MERGE(?REMOVE_FIELD_X, b, StateB2, CtxB2),
-%    {ok, {_,_,_}=StateB4} = ?UPDT_MERGE(AddElemToS(2), b, StateB3, CtxB3),
-%    StateAB = merge(StateA1,StateB4),
-%    ?assertEqual([{{'X',riak_dt_delta_map}, [{{'X.S',riak_dt_delta_orswot},[2]}]}], value(StateAB)).
+clear_invisible_after_merge_set_2_test() ->
+    AddElemToS = fun(Elem) ->
+                         {update, [{update, ?FIELD, {update, [{update, ?FIELD_S, {add, Elem}}]}}]}
+                 end,
+    RemElemFromS = fun(Elem) ->
+                         {update, [{update, ?FIELD, {update, [{update, ?FIELD_S, {remove, Elem}}]}}]}
+                 end,
+    InitialState = new(),
+    {ok, {CtxA1,_,_}=StateA1} = ?UPDT_MERGE(AddElemToS(0), a, InitialState),
+    {ok, {CtxB1,_,_}=StateB1} = ?UPDT_MERGE(RemElemFromS(0), b, InitialState, CtxA1),
+    {ok, {CtxB2,_,_}=StateB2} = ?UPDT_MERGE(AddElemToS(1), b, StateB1, CtxB1),
+    {ok, {CtxB3,_,_}=StateB3} = ?UPDT_MERGE(?REMOVE_FIELD_X, b, StateB2, CtxB2),
+    {ok, {_,_,_}=StateB4} = ?UPDT_MERGE(AddElemToS(2), b, StateB3, CtxB3),
+    StateAB = merge(StateA1,StateB4),
+    ?assertEqual([{{'X',riak_dt_delta_map}, [{{'X.S',riak_dt_delta_orswot},[2]}]}], value(StateAB)).
 
 transaction_1_test() ->
     Updt1 = {update, [{update, ?FIELD, {update, [{update, ?FIELD_A, enable}, {update, ?FIELD_B, enable}]}}]},

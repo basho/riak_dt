@@ -26,7 +26,7 @@
 -export([new/0, value/1]).
 -export([update/3, update/4, merge/2]).
 -export([delta_update/3]).
--export([precondition_context/1]).
+-export([precondition_context/1, parent_clock/2, get_deferred/1]).
 
 -compile(export_all).
 
@@ -61,20 +61,19 @@ update({add_all, Elems}, Actor, ORSet) ->
 update({update, Ops}, Actor, ORSet) ->
     apply_ops(Ops, Actor, ORSet).
 
-add_elem(Dot, {Clock, Entries, Seen, _Deferred}, Elem) when is_tuple(Dot) ->
-    {ok, {riak_dt_vclock:merge([Clock, [Dot]]), orddict:store(Elem, [Dot], Entries), Seen, _Deferred}};
-add_elem(Actor, {Clock, Entries, Seen, _Deferred}, Elem) ->
-    NewClock = riak_dt_vclock:increment(Actor, Clock),
-    Dot = [{Actor, riak_dt_vclock:get_counter(Actor, NewClock)}],
-    {ok, {NewClock, orddict:store(Elem, Dot, Entries), Seen, _Deferred}}.
+add_elem(ActorOrDot, {Clock, Entries, Seen, _Deferred}, Elem) ->
+    {Dot, NewClock} = update_clock(ActorOrDot, Clock),
+    {ok, {NewClock, orddict:store(Elem, [Dot], Entries), Seen, _Deferred}}.
 
 remove_elem({ok, _VClock}, Elem, {Clock, Dict, Seen, _Deferred}) ->
     {ok, {Clock, orddict:erase(Elem, Dict), Seen, _Deferred}};
+
 remove_elem(_, Elem, _ORSet) ->
     {error, {precondition, {not_present, Elem}}}.
 
 remove_all([], _Actor, ORSet) ->
     {ok, ORSet};
+
 remove_all([Elem | Rest], Actor, ORSet) ->
     case update({remove, Elem}, Actor, ORSet) of
         {ok, ORSet2} ->
@@ -83,18 +82,22 @@ remove_all([Elem | Rest], Actor, ORSet) ->
             Error
     end.
 
-update({add, Elem}, Actor, ORSet, _Ctx) ->
-    add_elem(Actor, ORSet, Elem);
+update({add, Elem}, ActorOrDot, ORSet, _Ctx) ->
+    add_elem(ActorOrDot, ORSet, Elem);
+
 update({remove, Elem}, _Actor, ORSet, Ctx) ->
     {_Clock, Entries, _Seen, _Deferred} = ORSet,
     remove_elem(orddict:find(Elem, Entries), Elem, ORSet, Ctx);
+
 update({remove_all, Elems}, Actor, ORSet, Ctx) ->
     remove_all(Elems, Actor, ORSet, Ctx);
-update({add_all, Elems}, Actor, ORSet, _Ctx) ->
-    update({add_all, Elems}, Actor, ORSet);
-update({update, Ops}, Actor, ORSet, Ctx) ->
+
+update({add_all, Elems}, ActorOrDot, ORSet, _Ctx) ->
+    update({add_all, Elems}, ActorOrDot, ORSet);
+
+update({update, Ops}, ActorOrDot, ORSet, Ctx) ->
     ORSet2 = lists:foldl(fun(Op, Set) ->
-                                 {ok, NewSet} = update(Op, Actor, Set, Ctx),
+                                 {ok, NewSet} = update(Op, ActorOrDot, Set, Ctx),
                                  NewSet
                          end,
                          ORSet,
@@ -103,6 +106,7 @@ update({update, Ops}, Actor, ORSet, Ctx) ->
 
 remove_all([], _Actor, ORSet, _Ctx) ->
     {ok, ORSet};
+
 remove_all([Elem | Rest], Actor, ORSet, Ctx) ->
     case update({remove, Elem}, Actor, ORSet, Ctx) of
         {ok, ORSet2} -> remove_all(Rest, Actor, ORSet2, Ctx);
@@ -127,19 +131,17 @@ remove_elem(_, Elem, {Clock, _Dict, _Seen, Deferred0}, Ctx) ->
 
 apply_ops([], _Actor, ORSet) ->
     {ok, ORSet};
-apply_ops([Op | Rest], Actor, ORSet) ->
-    case update(Op, Actor, ORSet) of
+apply_ops([Op | Rest], ActorOrDot, ORSet) ->
+    case update(Op, ActorOrDot, ORSet) of
         {ok, ORSet2} ->
-            apply_ops(Rest, Actor, ORSet2);
+            apply_ops(Rest, ActorOrDot, ORSet2);
         Error ->
             Error
     end.
 
-delta_update({add, Elem}, Actor, {Clock, _Entries, _Seen}) ->
-    NewClock = riak_dt_vclock:increment(Actor, Clock),
-    Counter = riak_dt_vclock:get_counter(Actor, NewClock),
+delta_update({add, Elem}, Actor, {Clock, _Entries, _Seen, _Def}) ->
+    {Dot, _NewClock} = update_clock(Actor, Clock),
     Delta = new(),
-    Dot = [{Actor, Counter}],
     delta_add_elem(Elem, Dot, Delta);
 
 delta_update({remove, Elem}, _Actor, ORSet) ->
@@ -151,30 +153,32 @@ delta_update({remove_all, Elems}, _Actor, ORSet0) ->
                         end, new(), Elems),
     {ok, ORSet};
 
+%Batches of operations do not compose with the map... because operations have to reuse map's dot.
+%Must add what elements were removed to the seen to make it work with just one dot.
+delta_update({add_all, _Elems}, Actor, {_Clock0, _Entries, _Seen, _Deferred}) when is_tuple(Actor)->
+    {error, not_implemented};
+
 delta_update({add_all, Elems}, Actor, {Clock0, _Entries, _Seen, _Deferred}) ->
     {_, ORSet} = lists:foldl(fun(Elem , {Clock, ORSetAcc}) ->
-                                NewClock = riak_dt_vclock:increment(Actor, Clock),
-                                Counter = riak_dt_vclock:get_counter(Actor, NewClock),
-                                Dot = [{Actor, Counter}],
-                                {ok, Delta} = delta_add_elem(Elem, Dot, ORSetAcc),
-                                {NewClock, Delta}
-                        end, {Clock0, new()}, Elems),
+                                     {Dot, NewClock} = update_clock(Actor, Clock),
+                                     {ok, Delta} = delta_add_elem(Elem, Dot, ORSetAcc),
+                                     {NewClock, Delta}
+                             end, {Clock0, new()}, Elems),
     {ok, ORSet}.
 
-delta_update({add, Elem}, Actor, {Clock, _Entries, _Seen, _Deferred}, _Ctx) ->
-    NewClock = riak_dt_vclock:increment(Actor, Clock),
-    Counter = riak_dt_vclock:get_counter(Actor, NewClock),
-    Dot = [{Actor, Counter}],
+delta_update({add, Elem}, ActorOrDot, {Clock, _Entries, _Seen, _Deferred}, _Ctx) ->
+    {Dot, _} = update_clock(ActorOrDot, Clock),
     delta_add_elem(Elem, Dot, new());
 
-delta_update({add_all, Elems}, Actor, {Clock0, _Entries, _Seen, _Deferred}, _Ctx) ->
+delta_update({add_all, _Elems}, Actor, {_Clock0, _Entries, _Seen, _Deferred}, _Ctx) when is_tuple(Actor) ->
+    {error, not_implemented};
+
+delta_update({add_all, Elems}, ActorOrDot, {Clock0, _Entries, _Seen, _Deferred}, _Ctx) ->
     {_, ORSet} = lists:foldl(fun(Elem , {Clock, ORSetAcc}) -> 
-                                NewClock = riak_dt_vclock:increment(Actor, Clock),
-                                Counter = riak_dt_vclock:get_counter(Actor, NewClock),
-                                Dot = [{Actor, Counter}],
-                                {ok, Delta} = delta_add_elem(Elem, Dot, ORSetAcc),
-                                {NewClock,Delta}
-                        end, {Clock0, new()}, Elems),
+                                     {Dot, NewClock} = update_clock(ActorOrDot, Clock),
+                                     {ok, Delta} = delta_add_elem(Elem, Dot, ORSetAcc),
+                                     {NewClock,Delta}
+                             end, {Clock0, new()}, Elems),
     {ok, ORSet};
 
 delta_update({remove, Elem}, _Actor, ORSet, Ctx) ->
@@ -186,10 +190,9 @@ delta_update({remove_all, Elems}, _Actor, ORSet0, Ctx) ->
                         end, new(), Elems),
     {ok, ORSet};
 
-%% Could be more efficient...
-delta_update({update, Ops}, Actor, ORSet0, Ctx) ->
+delta_update({update, Ops}, ActorOrDot, ORSet0, Ctx) -> 
     ORSet = lists:foldl(fun(Op, Set) ->
-                                {ok, NewSet} = delta_update(Op, Actor, ORSet0, Ctx),
+                                {ok, NewSet} = delta_update(Op, ActorOrDot, ORSet0, Ctx),
                                 merge(Set, NewSet)
                         end,
                         new(),
@@ -197,8 +200,8 @@ delta_update({update, Ops}, Actor, ORSet0, Ctx) ->
     {ok, ORSet}.
 
 delta_add_elem(Elem, Dot, {_Clock, Entries, Seen, _Deferred}) ->
-    {ok, {[], orddict:store(Elem, Dot, Entries), lists:umerge(Dot, Seen), _Deferred}}.
-
+    {ok, {[], orddict:store(Elem, [Dot], Entries), lists:umerge([Dot], Seen), _Deferred}}.
+    
 delta_remove_elem(Elem, {_, Entries, _, _}, {_, _, SeenOut, _DeferredOut}) ->
     case orddict:find(Elem, Entries) of
         {ok, Dots} ->
@@ -234,7 +237,6 @@ defer_remove(Clock, Ctx, Elem, Deferred) ->
 
 merge({LHClock, LHEntries, LHSeen, LHDeferred}=LHS, {RHClock, RHEntries, RHSeen, RHDeferred}=RHS) ->
     Clock0 = riak_dt_vclock:merge([LHClock, RHClock]),
-
     LHKeys = sets:from_list(orddict:fetch_keys(LHEntries)),
     RHKeys = sets:from_list(orddict:fetch_keys(RHEntries)),
     CommonKeys = sets:intersection(LHKeys, RHKeys),
@@ -341,6 +343,24 @@ merge_common_keys(CommonKeys, {LHSClock, LHSEntries, LHSeen, _LHDef}, {RHSClock,
 
 precondition_context({Clock, _Entries, _Seen, _Deferred}) ->
     Clock.
+
+parent_clock(Clock, {_, Entries, Seen, Deferred}) -> {Clock, Entries, Seen, Deferred}.
+
+get_deferred({_, _, _, Deferred}) ->
+    lists:map(fun({Key, _}) -> Key end, ?DICT:to_list(Deferred)).
+
+%% @private update the clock, and get a dot for the operations. This
+%% means that field removals increment the clock too.
+-spec update_clock(riak_dt:actor() | riak_dt:dot(),
+                   riak_dt_vclock:vclock()) ->
+    {riak_dt:dot(), riak_dt_vclock:vclock()}.
+update_clock(Dot, Clock) when is_tuple(Dot) ->
+    NewClock = riak_dt_vclock:merge([[Dot], Clock]),
+    {Dot, NewClock};
+update_clock(Actor, Clock) ->
+    NewClock = riak_dt_vclock:increment(Actor, Clock),
+    Dot = {Actor, riak_dt_vclock:get_counter(Actor, NewClock)},
+    {Dot, NewClock}.
 
 %% ===================================================================
 %% EUnit tests
