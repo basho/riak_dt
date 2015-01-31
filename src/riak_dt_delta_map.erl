@@ -496,7 +496,7 @@ defer_remove(Clock, Ctx, Field, Deferred) ->
     {ok, map()} | precondition_error().
 delta_update(Op, ActorOrDot, {Clock0, _, _}=Map) ->
     {Dot, _Clock} = update_clock(ActorOrDot, Clock0),
-    delta_update(Op, Dot, Map, undefined).
+    delta_update(Op, Dot, Map, Clock0).
 
 -spec delta_update(map_op(), riak_dt:actor() | riak_dt:dot(), map(), riak_dt:context()) ->
     {ok, map()}.
@@ -515,6 +515,10 @@ delta_update({update, Ops}, Actor, {Clock0, _, _}=Map, Ctx) ->
     {ok, map()} | precondition_error().
 delta_apply_ops([], _Dot, _Map, Delta, _Ctx) ->
     {ok, Delta};
+
+delta_apply_ops(Ops, Dot, {Clock0, _, _}=CRDT, Delta, undefined) ->
+    delta_apply_ops(Ops, Dot, CRDT, Delta, Clock0);
+
 delta_apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock0, Values, Deferred}, {DClock, DValues, DDef}, Ctx) ->
     {_, CRDT} = get_entry(Field, DValues, Clock0),
     case Type:delta_update(Op, Dot, CRDT, Ctx) of
@@ -711,8 +715,7 @@ clear_tombstones_handle({_, riak_dt_delta_map}=Field, {{Dots, _S, Tombstone}, {C
                 true -> NewMap;
                 false -> ?DICT:store(Field, {{Dots, _S, Tombstone}, {Clock, FilteredEntries, Deferred}}, NewMap)
             end;
-        true -> ?DICT:store(Field, {{Dots, _S, []}, {Clock, FilteredEntries, Deferred}}, NewMap);
-        false -> 
+        _  -> 
             case riak_dt_vclock:descends(MapClock, Tombstone) of
                 true ->
                     ?DICT:store(Field, {{Dots, _S, []}, {Clock, FilteredEntries, Deferred}}, NewMap);
@@ -1116,37 +1119,37 @@ transaction_2_test() ->
                                       {{'X.B',riak_dt_delta_od_flag},true}]}], value(StateA2B)).
 
 
-%assoc_test() ->
-%    Field = {'X', riak_dt_orswot},
-%    {ok, A} = ?UPDT_MERGE({update, [{update, Field, {add, 0}}]}, a, new()),
-%    {ok, B} = ?UPDT_MERGE({update, [{update, Field, {add, 0}}]}, b, new()),
-%    {ok, B2} = ?UPDT_MERGE({update, [{update, Field, {remove, 0}}]}, b, B),
-%    C = A,
-%    {ok, C3} = ?UPDT_MERGE({update, [{remove, Field}]}, c, C),
-%    ?assertEqual(merge(A, merge(B2, C3)), merge(merge(A, B2), C3)),
-%    ?assertEqual(value(merge(merge(A, C3), B2)), value(merge(merge(A, B2), C3))),
-%    ?assertEqual(merge(merge(A, C3), B2),  merge(merge(A, B2), C3)).
+assoc_test() ->
+    Field = {'X', riak_dt_delta_orswot},
+    {ok, A} = ?UPDT_MERGE({update, [{update, Field, {add, 0}}]}, a, new()),
+    {ok, B} = ?UPDT_MERGE({update, [{update, Field, {add, 0}}]}, b, new()),
+    {ok, B2} = ?UPDT_MERGE({update, [{update, Field, {remove, 0}}]}, b, B),
+    C = A,
+    {ok, C3} = ?UPDT_MERGE({update, [{remove, Field}]}, c, C),
+    ?assertEqual(merge(A, merge(B2, C3)), merge(merge(A, B2), C3)),
+    ?assertEqual(value(merge(merge(A, C3), B2)), value(merge(merge(A, B2), C3))),
+    ?assertEqual(merge(merge(A, C3), B2),  merge(merge(A, B2), C3)).
 
-%clock_test() ->
-%    Field = {'X', riak_dt_orswot},
-%    {ok, A} = ?UPDT_MERGE({update, [{update, Field, {add, 0}}]}, a, new()),
-%    B = A,
-%    {ok, B2} = ?UPDT_MERGE({update, [{update, Field, {add, 1}}]}, b, B),
-%    {ok, A2} = ?UPDT_MERGE({update, [{update, Field, {remove, 0}}]}, a, A),
-%    {ok, A3} = ?UPDT_MERGE({update, [{remove, Field}]}, a, A2),
-%    {ok, A4} = up?UPDT_MERGE({update, [{update, Field, {add, 2}}]}, a, A3),
-%    AB = merge(A4, B2),
-%    ?assertEqual([{Field, [1, 2]}], value(AB)).
+clock_test() ->
+    Field = {'X', riak_dt_delta_orswot},
+    {ok, A} = ?UPDT_MERGE({update, [{update, Field, {add, 0}}]}, a, new()),
+    B = A,
+    {ok, B2} = ?UPDT_MERGE({update, [{update, Field, {add, 1}}]}, b, B),
+    {ok, A2} = ?UPDT_MERGE({update, [{update, Field, {remove, 0}}]}, a, A),
+    {ok, A3} = ?UPDT_MERGE({update, [{remove, Field}]}, a, A2),
+    {ok, A4} = ?UPDT_MERGE({update, [{update, Field, {add, 2}}]}, a, A3),
+    AB = merge(A4, B2),
+    ?assertEqual([{Field, [1, 2]}], value(AB)).
 
-%remfield_test() ->
-%    Field = {'X', riak_dt_orswot},
-%    {ok, A} = ?UPDT_MERGE({update, [{update, Field, {add, 0}}]}, a, new()),
-%    B = A,
-%    {ok, A2} = ?UPDT_MERGE({update, [{update, Field, {remove, 0}}]}, a, A),
-%    {ok, A3} = ?UPDT_MERGE({update, [{remove, Field}]}, a, A2),
-%    {ok, A4} = ?UPDT_MERGE({update, [{update, Field, {add, 2}}]}, a, A3),
-%    AB = merge(A4, B),
-%    ?assertEqual([{Field, [2]}], value(AB)).
+remfield_test() ->
+    Field = {'X', riak_dt_delta_orswot},
+    {ok, A} = ?UPDT_MERGE({update, [{update, Field, {add, 0}}]}, a, new()),
+    B = A,
+    {ok, A2} = ?UPDT_MERGE({update, [{update, Field, {remove, 0}}]}, a, A),
+    {ok, A3} = ?UPDT_MERGE({update, [{remove, Field}]}, a, A2),
+    {ok, A4} = ?UPDT_MERGE({update, [{update, Field, {add, 2}}]}, a, A3),
+    AB = merge(A4, B),
+    ?assertEqual([{Field, [2]}], value(AB)).
 
 %present_but_removed_test() ->
 %    F = {'X', riak_dt_lwwreg},
@@ -1161,7 +1164,6 @@ transaction_2_test() ->
 %                        A3,
 %                        [C, B2]),
 %   ?assertEqual([], value(Merged)).
-
 
 %no_dots_left_test() ->
 %    F = {'Z', riak_dt_lwwreg},
@@ -1178,25 +1180,25 @@ transaction_2_test() ->
 %                         [B3, C]),
 %    ?assertEqual([], value(Merged)).
 
-%tombstone_remove_test() ->
-%    F = {'X', riak_dt_orswot},
-%    A=B=new(),
-%    {ok, A1} = ?UPDT_MERGE({update, [{update, F, {add, 0}}]}, a, A),
-%    B1 = merge(A1, B),
-%    {ok, A2} = ?UPDT_MERGE({update, [{remove, F}]}, a, A1),
-%    {ok, B2} = ?UPDT_MERGE({update, [{update, F, {add, 1}}]}, b, B1),
-%    A3 = merge(A2, B2),
-%    ?assertEqual([{F, [1]}], value(A3)),
-%    {ok, B3} = ?UPDT_MERGE({update, [{update, F, {add, 2}}]}, b, B2),
-%    A4 = merge(A3, B3),
-%    Final = merge(A4, B3),
-%    ?assertEqual([{F, [1,2]}], value(Final)).
+tombstone_remove_test() ->
+    F = {'X', riak_dt_delta_orswot},
+    A=B=new(),
+    {ok, A1} = ?UPDT_MERGE({update, [{update, F, {add, 0}}]}, a, A),
+    B1 = merge(A1, B),
+    {ok, A2} = ?UPDT_MERGE({update, [{remove, F}]}, a, A1),
+    {ok, B2} = ?UPDT_MERGE({update, [{update, F, {add, 1}}]}, b, B1),
+    A3 = merge(A2, B2),
+    ?assertEqual([{F, [1]}], value(A3)),
+    {ok, B3} = ?UPDT_MERGE({update, [{update, F, {add, 2}}]}, b, B2),
+    A4 = merge(A3, B3),
+    Final = merge(A4, B3),
+    ?assertEqual([{F, [1,2]}], value(Final)).
 
-%dot_key_test() ->
-%    {ok, A} = ?UPDT_MERGE({update, [{update, {'X', riak_dt_orswot}, {add, <<"a">>}}, {update, {'X', riak_dt_od_flag}, enable}]}, a, new()),
-%    B = A,
-%    {ok, A2} = ?UPDT_MERGE({update, [{remove, {'X', riak_dt_od_flag}}]}, a, A),
-%    ?assertEqual([{{'X', riak_dt_orswot}, [<<"a">>]}], value(merge(B, A2))).
+dot_key_test() ->
+    {ok, A} = ?UPDT_MERGE({update, [{update, {'X', riak_dt_delta_orswot}, {add, <<"a">>}}, {update, {'X', riak_dt_delta_od_flag}, enable}]}, a, new()),
+    B = A,
+    {ok, A2} = ?UPDT_MERGE({update, [{remove, {'X', riak_dt_delta_od_flag}}]}, a, A),
+    ?assertEqual([{{'X', riak_dt_delta_orswot}, [<<"a">>]}], value(merge(B, A2))).
 
 -ifdef(EQC).
 -define(NUMTESTS, 1000).
