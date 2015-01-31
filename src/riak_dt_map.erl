@@ -262,10 +262,11 @@ get_deferred({Clock, Entries, _}=CRDT, Ctx) ->
 
 %% @doc get the current set of values for this Map
 -spec value(map()) -> values().
-value({_Clock, Values, _Deferred}) ->
+value({Clock, Values, _Deferred}) ->
     %%Selects the visible elements from the map
     lists:sort(?DICT:fold(
-                 fun({Name, Type}, {{Dots, _, Tombstone}, CRDT}, Acc) ->
+                 fun({Name, Type}, {{Dots, _, Tombstone}, CRDT0}, Acc) ->
+                         CRDT = parent_clock(Clock, CRDT0),
                          case Tombstone of
                              [] -> [{{Name, Type}, Type:value(CRDT)} | Acc];
                              _ -> 
@@ -345,15 +346,6 @@ update_clock(Actor, Clock) ->
     Dot = {Actor, riak_dt_vclock:get_counter(Actor, NewClock)},
     {Dot, NewClock}.
 
-get({_Name, Type}=Field, Fields, Clock) ->
-    CRDT = case ?DICT:find(Field, Fields) of
-               {ok, {{_Dots, _, _},CRDT0}} ->
-                   CRDT0;
-               error ->
-                   Type:new()
-           end,
-    Type:parent_clock(Clock, CRDT).
-
 get_entry({_Name, Type}=Field, Fields, Clock) ->
     {{Dots, _S, Tombstone}, CRDT} = case ?DICT:find(Field, Fields) of
                                  {ok, Entry} ->
@@ -370,7 +362,7 @@ get_entry({_Name, Type}=Field, Fields, Clock) ->
 apply_ops([], _Dot, Map, _Ctx) ->
     {ok, Map};
 apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock, Values, Deferred}, Ctx) ->
-    CRDT = get(Field, Values, Clock),
+    {_, CRDT} = get_entry(Field, Values, Clock),
     case Type:update(Op, Dot, CRDT, Ctx) of
         {ok, Updated0} ->
             Updated = Type:parent_clock(?FRESH_CLOCK, Updated0),
@@ -618,10 +610,22 @@ clear_tombstones_handle({_, riak_dt_map}=Field, {{Dots, _S, Tombstone}, {Clock, 
     ?DICT:fold(fun(Field_i, Value_i, FilteredEntriesAcc) ->
                        clear_tombstones_handle(Field_i, Value_i, FilteredEntriesAcc, MapClock)
                end, ?DICT:new(), CRDT),
-    %%Distinguish between empty map and removed map.
-    case ?DICT:size(FilteredEntries) == 0 andalso riak_dt_vclock:descends(MapClock, Tombstone) of    
-        true when length(Tombstone) > 0 -> NewMap;
-        _ -> ?DICT:store(Field, {{Dots, _S, Tombstone}, {Clock, FilteredEntries, Deferred}}, NewMap)
+    %%Distinguish between empty map and removed map. --- this was changed, maybe do the same to map.
+    TombstoneCovered = riak_dt_vclock:descends(MapClock, Tombstone),
+    case ?DICT:size(FilteredEntries) == 0 of
+        true when length(Tombstone) > 0 andalso TombstoneCovered  ->
+                % No childs, a tombstone was set (remove executed) and the clock dominates tombstone
+                NewMap;
+        _ ->
+            case TombstoneCovered of
+                true ->
+                    % New entries were added to the map - keep entries, clear tomb
+                    ?DICT:store(Field, {{Dots, _S, []}, {Clock, FilteredEntries, Deferred}}, NewMap);
+                false ->
+                    % No childs, a tombstone was set, but the tombstone is still newer
+                    % No childs, but no tombstonte was set (empty field) - keep all
+                    ?DICT:store(Field, {{Dots, _S, Tombstone}, {Clock, FilteredEntries, Deferred}}, NewMap)
+            end
     end;
 
 clear_tombstones_handle(Field, {{Dots, _S, Tombstone}, CRDT}=Value, NewMap, MapClock) ->
