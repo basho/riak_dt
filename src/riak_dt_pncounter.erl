@@ -38,7 +38,7 @@
 -export([new/0, new/2, value/1, value/2,
          update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
 -export([to_binary/2, from_binary/2, current_version/1, change_versions/3]).
--export([update/4, parent_clock/2, get_deferred/1, get_deferred/2]).
+-export([update/4, parent_clock/2, get_deferred/1]).
 
 %% EQC API
 -ifdef(EQC).
@@ -81,9 +81,8 @@ new(_Actor, _Zero) ->
 parent_clock(_Clock, Cntr) ->
     Cntr.
 
+-spec get_deferred(pncounter()) -> [].
 get_deferred(_CRDT) -> [].
-
-get_deferred(_CRDT, _Ctx) -> [].
 
 %% @doc The single, total value of a `pncounter()'
 -spec value(pncounter()) -> integer().

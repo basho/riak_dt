@@ -80,7 +80,7 @@
 -export([to_binary/1, from_binary/1]).
 -export([to_binary/2, from_binary/2]).
 -export([precondition_context/1, stats/1, stat/2]).
--export([parent_clock/2, get_deferred/1, get_deferred/2, clear/1, clear/2]).
+-export([parent_clock/2, get_deferred/1, clear/1, clear/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -132,11 +132,9 @@ new() ->
 parent_clock(Clock, {_SetClock, Entries, Deferred}) ->
     {Clock, Entries, Deferred}.
 
+-spec get_deferred(orswot()) -> [riak_dt:context()].
 get_deferred({_, _, Deferred}) ->
     lists:map(fun({Key, _}) -> Key end, ?DICT:to_list(Deferred)).
-
-get_deferred({Clock, Entries, _}=CRDT, Ctx) ->
-    riak_dt:get_deferred({Clock, Entries, get_deferred(CRDT)}, Ctx).
 
 -spec value(orswot()) -> [member()].
 value({_Clock, Entries, _Deferred}) ->

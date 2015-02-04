@@ -30,7 +30,7 @@
 -export([to_binary/1, stats/1, stat/2]).
 -export([to_binary/2, from_binary/2]).
 -export([precondition_context/1]).
--export([parent_clock/2, get_deferred/1, get_deferred/2, clear/1, clear/2]).
+-export([parent_clock/2, get_deferred/1, clear/1, clear/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -58,11 +58,8 @@ new() ->
 parent_clock(Clock, {_SetClock, Flag , Deferred}) ->
     {Clock, Flag, Deferred}.
 
-get_deferred(CRDT) ->
-    riak_dt:get_deferred(CRDT).
-
-get_deferred(CRDT, Ctx) ->
-    riak_dt:get_deferred(CRDT, Ctx).
+-spec get_deferred(od_flag()) -> [riak_dt:context()].
+get_deferred({_, _, Deferred}) -> Deferred.
 
 -spec value(od_flag()) -> boolean().
 value({_, [], _}) -> false;

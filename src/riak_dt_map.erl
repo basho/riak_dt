@@ -200,7 +200,7 @@
 %% have contexts and deferred operations, but as these are part of the
 %% state, they are stored under the field as an update like any other.
 -type seen() :: dots().
--type deferred() :: dict(context(), [field_name()]).
+-type deferred() :: dict(riak_dt:context(), [field_name()]).
 -type tombstone() :: riak_dt_vclock:vclock().
 
 -type dots() :: [dot()].
@@ -212,8 +212,7 @@
 riak_dt_od_flag | riak_dt_map | riak_dt_orswot.
 
 -type crdt()  ::  riak_dt_emcntr:emcntr() | riak_dt_od_flag:od_flag() |
-riak_dt_lwwreg:lwwreg() | riak_dt_orswot:orswot() | riak_dt_map:map() |
-riak_dt_delta_map:map().
+riak_dt_lwwreg:lwwreg() | riak_dt_orswot:orswot() | riak_dt_map:map().
 
 -type map_op() :: {update, [map_field_update() | map_field_op()]}.
 
@@ -224,8 +223,6 @@ riak_dt_delta_map:map().
 riak_dt_lwwreg:lwwreg_op() |
 riak_dt_orswot:orswot_op() | riak_dt_od_flag:od_flag_op() |
 riak_dt_map:map_op() | riak_dt_map:map_op().
-
--type context() :: riak_dt_vclock:vclock() | undefined.
 
 -type values() :: [value()].
 -type value() :: {field_name(), riak_dt_map:values() | integer() | [term()] | boolean() | term()}.
@@ -248,11 +245,10 @@ new() ->
 parent_clock(Clock, {_MapClock, Values, Deferred}) ->
     {Clock, Values, Deferred}.
 
-
 %% @doc get all deferred operations for the map.
 %% Does not evaluate recursively - I think this is not necessary right now,
 %% because we do not compose map with other data-types than maps.
--spec get_deferred(map()) -> [context()].
+-spec get_deferred(map()) -> [riak_dt:context()].
 get_deferred({_, _, Deferred}) ->
     lists:map(fun({Key, _}) -> Key end, ?DICT:to_list(Deferred)).
 
@@ -355,7 +351,7 @@ get_entry({_Name, Type}=Field, Fields, Clock) ->
 
 %% @private
 -spec apply_ops([map_field_update() | map_field_op()], riak_dt:dot(),
-                {riak_dt_vclock:vclock(), entries() , deferred()}, context()) ->
+                {riak_dt_vclock:vclock(), entries() , deferred()}, riak_dt:context()) ->
     {ok, map()} | precondition_error().
 apply_ops([], _Dot, Map, _Ctx) ->
     {ok, Map};
@@ -394,7 +390,7 @@ apply_ops([{remove, Field} | Rest], Dot, Map, Ctx) ->
 %%
 %% @see defer_remove/4 for handling of removes of fields that are
 %% _not_ present
--spec remove_field(field_name(), map(), context()) ->
+-spec remove_field(field_name(), map(), riak_dt:context()) ->
     {ok, map()} | precondition_error().
 remove_field(Field, {Clock, Values, Deferred}, undefined) ->
     case ?DICT:find(Field, Values) of
@@ -415,7 +411,7 @@ remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
                                                         {{Dots, _S, Tombstone}, CRDT} ->
                                                             Tombstone = riak_dt_vclock:merge([DefCtx, Tombstone]),
                                                             {{Dots, _S, Tombstone}, CRDT};
-                                                        error -> do_nothing
+                                                        error -> UpdtValues
                                                     end
                                             end,UpdtValues);
                     {ok, empty} ->
@@ -428,7 +424,7 @@ remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
     {ok, {Clock, NewValues, Deferred}}.
 
 %% @private drop dominated fields
--spec ctx_rem_field(field_name(), {field_meta(), field_value()} , context(), riak_dt_vclock:vclock()) -> empty | {field_meta(), field_value()}.
+-spec ctx_rem_field(field_name(), {field_meta(), field_value()} , riak_dt:context(), riak_dt_vclock:vclock()) -> empty | {field_meta(), field_value()}.
 ctx_rem_field({_, Type}, {{Dots, _S, Tombstone}, CRDT}, Ctx, MapClock) ->
     %% Drop dominated fields, and update the tombstone.
     %%
@@ -454,7 +450,7 @@ ctx_rem_field({_, Type}, {{Dots, _S, Tombstone}, CRDT}, Ctx, MapClock) ->
 %% Value is a map:
 %% Remove fields that don't have deferred operations;
 %% Compute the removal tombstone for this field.
--spec propagate_remove(field_name(), entries() | {field_meta(), field_value()}, riak_dt_vclock:vclock(), context()) -> {riak_dt_vclock:vclock(), entries() | empty}.
+-spec propagate_remove(field_name(), entries() | {field_meta(), field_value()}, riak_dt_vclock:vclock(), riak_dt:context()) -> {riak_dt_vclock:vclock(), entries() | empty}.
 propagate_remove({_, riak_dt_map}, {{Dots, _S, Tombstone}, {Clock, Value0, Deferred}}, MapClock, Ctx)->
     {SubMergedDef, SubEntries} =
     ?DICT:fold(fun(K, V, {UpdtClock, UpdtEntries}) ->
@@ -475,11 +471,8 @@ propagate_remove({_, riak_dt_map}, {{Dots, _S, Tombstone}, {Clock, Value0, Defer
         _ -> {SubMergedDef, {{Dots, _S, riak_dt_vclock:merge([SubMergedDef | Tombstone])}, {Clock, SubEntries, Deferred}}}
     end;
 
-
 %% Value is a leaf:
 %% Merge deferred operations' context with Value clock (Tombstone) and send it upstream
-%% Exclude non-covered dots -- intersection -- how does this relate to the second TODO?
-%% Only handles half of the problem.
 propagate_remove({_, Type}=Field, {{Dots, _S, TombstoneIn}, CRDT}, MapClock, Ctx) ->
     case Type:get_deferred(CRDT) of
         [] ->
@@ -587,7 +580,7 @@ apply_deferred(Clock, Entries, Deferred) ->
                Deferred).
 
 %% @private
--spec remove_all([field_name()], map(), context()) ->
+-spec remove_all([field_name()], map(), riak_dt:context()) ->
                         map().
 remove_all(Fields, Map, Ctx) ->
     lists:foldl(fun(Field, MapAcc) ->
@@ -654,7 +647,7 @@ equal({Clock1, Values1, Deferred1}, {Clock2, Values2, Deferred2}) ->
         pairwise_equals(lists:sort(?DICT:to_list(Values1)),
                         lists:sort(?DICT:to_list(Values2))).
 
--spec pairwise_equals(entries(), entries()) -> boolean().
+-spec pairwise_equals(entries() | [], entries() | []) -> boolean().
 pairwise_equals([], []) ->
     true;
 pairwise_equals([{{Name, Type}, {{Dots1, S1, Tombstone1}, CRDT1}}|Rest1], [{{Name, Type}, {{Dots2, S2, Tombstone2}, CRDT2}}|Rest2]) ->
@@ -663,9 +656,7 @@ pairwise_equals([{{Name, Type}, {{Dots1, S1, Tombstone1}, CRDT1}}|Rest1], [{{Nam
             pairwise_equals(Rest1, Rest2);
         _ ->
             false
-    end;
-pairwise_equals(_, _) ->
-    false.
+    end.
 
 %% @doc an opaque context that can be passed to `update/4' to ensure
 %% that only seen fields are removed. If a field removal operation has

@@ -33,7 +33,7 @@
 
 -export([new/0, value/1, value/2, update/3, merge/2,
          equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
--export([update/4, parent_clock/2, get_deferred/1, get_deferred/2]).
+-export([update/4, parent_clock/2, get_deferred/1]).
 -export([to_binary/2, from_binary/2]).
 
 %% EQC API
@@ -63,9 +63,8 @@ new() ->
 parent_clock(_Clock, Reg) ->
     Reg.
 
+-spec get_deferred(lwwreg()) -> [].
 get_deferred(_CRDT) -> [].
-
-get_deferred(_CRDT, _Ctx) -> [].
 
 %% @doc The single total value of a `gcounter()'.
 -spec value(lwwreg()) -> term().
