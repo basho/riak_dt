@@ -191,10 +191,10 @@
 
 -type binary_map() :: binary(). %% A binary that from_binary/1 will accept
 -type map() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
--type entries() :: dict(field_name(), {field_meta(), field_value()}).
+-type entries() :: dict(field_name(), field_value()).
 -type field_name() :: {Name :: binary(), CRDTModule :: crdt_mod()}.
 -type field_meta() :: {riak_dt_vclock:vclock(), seen(), tombstone()}.
--type field_value() :: crdt().
+-type field_value() :: {field_meta(), crdt()}.
 
 %% Only field removals can be deferred. CRDTs stored in the map may
 %% have contexts and deferred operations, but as these are part of the
@@ -339,7 +339,7 @@ update_clock(Actor, Clock) ->
     {Dot, NewClock}.
 
 -spec get_entry(field_name(), entries(), riak_dt_vclock:vclock()) ->
-    {field_meta(), field_value()}.
+    field_value().
 get_entry({_Name, Type}=Field, Fields, Clock) ->
     {{Dots, _S, Tombstone}, CRDT} = case ?DICT:find(Field, Fields) of
                                  {ok, Entry} ->
@@ -424,7 +424,7 @@ remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
     {ok, {Clock, NewValues, Deferred}}.
 
 %% @private drop dominated fields
--spec ctx_rem_field(field_name(), {field_meta(), field_value()} , riak_dt:context(), riak_dt_vclock:vclock()) -> empty | {field_meta(), field_value()}.
+-spec ctx_rem_field(field_name(), field_value(), riak_dt:context(), riak_dt_vclock:vclock()) -> empty | field_value().
 ctx_rem_field({_, Type}, {{Dots, _S, Tombstone}, CRDT}, Ctx, MapClock) ->
     %% Drop dominated fields, and update the tombstone.
     %%
@@ -450,7 +450,7 @@ ctx_rem_field({_, Type}, {{Dots, _S, Tombstone}, CRDT}, Ctx, MapClock) ->
 %% Value is a map:
 %% Remove fields that don't have deferred operations;
 %% Compute the removal tombstone for this field.
--spec propagate_remove(field_name(), entries() | {field_meta(), field_value()}, riak_dt_vclock:vclock(), riak_dt:context()) -> {riak_dt_vclock:vclock(), entries() | empty}.
+-spec propagate_remove(field_name(), entries() | field_value(), riak_dt_vclock:vclock(), riak_dt:context()) -> {riak_dt_vclock:vclock(), entries() | empty}.
 propagate_remove({_, riak_dt_map}, {{Dots, _S, Tombstone}, {Clock, Value0, Deferred}}, MapClock, Ctx)->
     {SubMergedDef, SubEntries} =
     ?DICT:fold(fun(K, V, {UpdtClock, UpdtEntries}) ->
