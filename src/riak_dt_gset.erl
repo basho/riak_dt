@@ -36,7 +36,7 @@
 %% API
 -export([new/0, value/1, update/3, merge/2, equal/2,
          to_binary/1, from_binary/1, value/2, stats/1, stat/2]).
--export([update/4, parent_clock/2]).
+-export([update/4, parent_clock/2, get_deferred/1]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -91,6 +91,9 @@ update(Op, Actor, GSet, _Ctx) ->
 -spec parent_clock(riak_dt_vclock:vclock(), gset()) -> gset().
 parent_clock(_Clock, GSet) ->
     GSet.
+
+-spec get_deferred(gset()) -> [riak_dt:context()].
+get_deferred(_CRDT) -> [].
 
 -spec merge(gset(), gset()) -> gset().
 merge(GSet1, GSet2) ->

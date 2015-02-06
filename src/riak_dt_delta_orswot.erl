@@ -25,10 +25,38 @@
 %% API
 -export([new/0, value/1]).
 -export([update/3, update/4, merge/2]).
--export([delta_update/3]).
+-export([delta_update/3, delta_update/4]).
 -export([precondition_context/1, parent_clock/2, get_deferred/1]).
 
--compile(export_all).
+
+-opaque delta_orswot() :: {riak_dt_vclock:vclock(), entries(), seen(), deferred()}.
+%% Only removes can be deferred, so a list of members to be removed
+%% per context.
+-type seen() :: dots().
+-type deferred() :: [{riak_dt_vclock:vclock(), [member()]}].
+-type binary_orswot() :: binary(). %% A binary that from_binary/1 will operate on.
+
+-type orswot_op() ::  {add, member()} | {remove, member()} |
+                      {add_all, [member()]} | {remove_all, [member()]} |
+                      {update, [orswot_op()]}.
+
+-type actor() :: riak_dt:actor().
+
+%% a dict of member() -> minimal_clock() mappings.  The
+%% `minimal_clock()' is a more effecient way of storing knowledge
+%% about adds / removes than a UUID per add.
+-type entries() :: [{member(), minimal_clock()}].
+
+%% a minimal clock is just the dots for the element, each dot being an
+%% actor and event counter for when the element was added.
+-type minimal_clock() :: [dot()].
+-type dot() :: riak_dt:dot().
+-type dots() :: [dot()].
+-type member() :: term().
+
+-type precondition_error() :: {error, {precondition ,{not_present, member()}}}.
+
+-export_type([delta_orswot/0, orswot_op/0, binary_orswot/0]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -36,13 +64,17 @@
 
 -define(DICT, orddict).
 
+-spec new() -> delta_orswot().
 new() ->
     {riak_dt_vclock:fresh(), orddict:new(), ordsets:new(), ?DICT:new()}.
 
+-spec value(delta_orswot()) -> [member()].
 value({Clock, Entries, _Seen, _Deferred}) ->
     [K || {K, Dots} <- orddict:to_list(Entries),
         riak_dt_vclock:subtract_dots(Dots, Clock) == []].
 
+-spec update(orswot_op(), actor() | dot(), delta_orswot()) -> {ok, delta_orswot()} |
+                                                precondition_error().
 update({add, Elem}, Actor, ORSet) ->
     add_elem(Actor, ORSet, Elem);
 update({remove, Elem}, _Actor, ORSet) ->
@@ -82,6 +114,8 @@ remove_all([Elem | Rest], Actor, ORSet) ->
             Error
     end.
 
+-spec update(orswot_op(), actor() | dot(), delta_orswot(), riak_dt:context()) ->
+    {ok, delta_orswot()} | precondition_error().
 update({add, Elem}, ActorOrDot, ORSet, _Ctx) ->
     add_elem(ActorOrDot, ORSet, Elem);
 
@@ -103,7 +137,7 @@ update({update, Ops}, ActorOrDot, ORSet, Ctx) ->
                          ORSet,
                          Ops),
     {ok, ORSet2}.
-
+-spec remove_all([orswot_op()], actor(), delta_orswot(), riak_dt:context()) -> {ok, delta_orswot} | precondition_error().
 remove_all([], _Actor, ORSet, _Ctx) ->
     {ok, ORSet};
 
@@ -112,7 +146,7 @@ remove_all([Elem | Rest], Actor, ORSet, Ctx) ->
         {ok, ORSet2} -> remove_all(Rest, Actor, ORSet2, Ctx);
         {error, _} -> remove_all(Rest, Actor, ORSet, Ctx)
     end.
-    
+
 remove_elem({ok, Dots}, Elem, {Clock, Dict, Seen, Deferred0}, Ctx) ->
     Deferred = defer_remove(Clock, Ctx, Elem, Deferred0),
     DictUpdt = case riak_dt_vclock:subtract_dots(Dots, Ctx) of
@@ -123,12 +157,14 @@ remove_elem({ok, Dots}, Elem, {Clock, Dict, Seen, Deferred0}, Ctx) ->
 
 remove_elem(_, Elem, {Clock, _Dict, _Seen, Deferred0}, Ctx) ->
     case defer_remove(Clock, Ctx, Elem, Deferred0) of
-        Deferred0 -> 
+        Deferred0 ->
             {error, {precondition, {not_present, Elem}}};
         Deferred ->
             {ok, {Clock, _Dict, _Seen, Deferred}}
     end.
 
+-spec apply_ops([orswot_op], actor() | dot(), delta_orswot()) ->
+                       {ok, delta_orswot()} | precondition_error().
 apply_ops([], _Actor, ORSet) ->
     {ok, ORSet};
 apply_ops([Op | Rest], ActorOrDot, ORSet) ->
@@ -139,6 +175,8 @@ apply_ops([Op | Rest], ActorOrDot, ORSet) ->
             Error
     end.
 
+-spec delta_update(orswot_op(), actor() | dot(), delta_orswot(), riak_dt:context()) ->
+    {ok, delta_orswot()} | {error, not_implemented}.
 delta_update({add, Elem}, Actor, {Clock, _Entries, _Seen, _Def}) ->
     {Dot, _NewClock} = update_clock(Actor, Clock),
     Delta = new(),
@@ -148,7 +186,7 @@ delta_update({remove, Elem}, _Actor, ORSet) ->
     delta_remove_elem(Elem,ORSet, new());
 
 delta_update({remove_all, Elems}, _Actor, ORSet0) ->
-    ORSet = lists:foldl(fun(Elem , ORSetAcc) -> 
+    ORSet = lists:foldl(fun(Elem , ORSetAcc) ->
                                 delta_remove_elem(Elem, ORSet0, ORSetAcc)
                         end, new(), Elems),
     {ok, ORSet};
@@ -174,7 +212,7 @@ delta_update({add_all, _Elems}, Actor, {_Clock0, _Entries, _Seen, _Deferred}, _C
     {error, not_implemented};
 
 delta_update({add_all, Elems}, ActorOrDot, {Clock0, _Entries, _Seen, _Deferred}, _Ctx) ->
-    {_, ORSet} = lists:foldl(fun(Elem , {Clock, ORSetAcc}) -> 
+    {_, ORSet} = lists:foldl(fun(Elem , {Clock, ORSetAcc}) ->
                                      {Dot, NewClock} = update_clock(ActorOrDot, Clock),
                                      {ok, Delta} = delta_add_elem(Elem, Dot, ORSetAcc),
                                      {NewClock,Delta}
@@ -185,12 +223,12 @@ delta_update({remove, Elem}, _Actor, ORSet, Ctx) ->
     delta_remove_elem(Elem, ORSet, new(), Ctx);
 
 delta_update({remove_all, Elems}, _Actor, ORSet0, Ctx) ->
-    ORSet = lists:foldl(fun(Elem , ORSetAcc) -> 
+    ORSet = lists:foldl(fun(Elem , ORSetAcc) ->
                                 delta_remove_elem(Elem, ORSet0, ORSetAcc, Ctx)
                         end, new(), Elems),
     {ok, ORSet};
 
-delta_update({update, Ops}, ActorOrDot, ORSet0, Ctx) -> 
+delta_update({update, Ops}, ActorOrDot, ORSet0, Ctx) ->
     ORSet = lists:foldl(fun(Op, Set) ->
                                 {ok, NewSet} = delta_update(Op, ActorOrDot, ORSet0, Ctx),
                                 merge(Set, NewSet)
@@ -199,9 +237,11 @@ delta_update({update, Ops}, ActorOrDot, ORSet0, Ctx) ->
                         Ops),
     {ok, ORSet}.
 
+-spec delta_add_elem(orswot_op(), dot(), delta_orswot()) -> {ok, delta_orswot()}.
 delta_add_elem(Elem, Dot, {_Clock, Entries, Seen, _Deferred}) ->
     {ok, {[], orddict:store(Elem, [Dot], Entries), lists:umerge([Dot], Seen), _Deferred}}.
-    
+
+-spec delta_remove_elem(orswot_op(), delta_orswot(), delta_orswot()) -> {ok, delta_orswot()}.
 delta_remove_elem(Elem, {_, Entries, _, _}, {_, _, SeenOut, _DeferredOut}) ->
     case orddict:find(Elem, Entries) of
         {ok, Dots} ->
@@ -210,20 +250,23 @@ delta_remove_elem(Elem, {_, Entries, _, _}, {_, _, SeenOut, _DeferredOut}) ->
             {ok, {[], [], SeenOut, _DeferredOut}}
     end.
 
+-spec delta_remove_elem(orswot_op(), delta_orswot(), delta_orswot(), riak_dt_vclock:vclock()) -> {ok, delta_orswot()}.
 delta_remove_elem(Elem, {Clock, Entries, _, _}, {_, EntriesOut, SeenOut, DeferredOut}, Ctx) ->
     Deferred = defer_remove(Clock, Ctx, Elem, DeferredOut),
     case orddict:find(Elem, Entries) of
         {ok, Dots} ->
             Remaining = riak_dt_vclock:subtract_dots(Dots, Ctx),
             Removed = lists:subtract(Dots, Remaining),
-            {ok, {[], 
-                  orddict:store(Elem, Remaining, EntriesOut), 
+            {ok, {[],
+                  orddict:store(Elem, Remaining, EntriesOut),
                   ordsets:union(Removed, SeenOut), Deferred
                  }};
         error ->
             {ok, {[], [], SeenOut, Deferred}}
     end.
 
+-spec defer_remove(riak_dt_vclock:vclock(), riak_dt_vclock:vclock(), orswot_op(), deferred()) ->
+                      deferred().
 defer_remove(Clock, Ctx, Elem, Deferred) ->
     case riak_dt_vclock:descends(Clock, Ctx) of
         %% no need to save this remove, we're done
@@ -235,6 +278,7 @@ defer_remove(Clock, Ctx, Elem, Deferred) ->
                                 Deferred)
     end.
 
+-spec merge(delta_orswot(), delta_orswot()) -> delta_orswot().
 merge({LHClock, LHEntries, LHSeen, LHDeferred}=LHS, {RHClock, RHEntries, RHSeen, RHDeferred}=RHS) ->
     Clock0 = riak_dt_vclock:merge([LHClock, RHClock]),
     LHKeys = sets:from_list(orddict:fetch_keys(LHEntries)),
@@ -252,6 +296,7 @@ merge({LHClock, LHEntries, LHSeen, LHDeferred}=LHS, {RHClock, RHEntries, RHSeen,
                              end, LHDeferred,RHDeferred),
     apply_deferred({Clock, Entries1, Seen, Deferred}).
 
+-spec compress_seen(riak_dt:vclock(), seen()) -> {riak_dt_vclock:vclock(), seen()}.
 compress_seen(Clock, Seen) ->
     lists:foldl(fun(Node, {ClockAcc, SeenAcc}) ->
                         Cnt = riak_dt_vclock:get_counter(Node, Clock),
@@ -344,8 +389,10 @@ merge_common_keys(CommonKeys, {LHSClock, LHSEntries, LHSeen, _LHDef}, {RHSClock,
 precondition_context({Clock, _Entries, _Seen, _Deferred}) ->
     Clock.
 
+-spec parent_clock(riak_dt_vclock:vclock(), delta_orswot()) -> delta_orswot().
 parent_clock(Clock, {_, Entries, Seen, Deferred}) -> {Clock, Entries, Seen, Deferred}.
 
+-spec get_deferred(delta_orswot()) -> [riak_dt:context()].
 get_deferred({_, _, _, Deferred}) ->
     lists:map(fun({Key, _}) -> Key end, ?DICT:to_list(Deferred)).
 

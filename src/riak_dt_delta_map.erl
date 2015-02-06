@@ -189,18 +189,17 @@
 -export([gen_op/0, gen_op/1, gen_field/0, gen_field/1,  generate/0, size/1]).
 -endif.
 
--export_type([map/0, binary_map/0, map_op/0]).
+-export_type([delta_map/0, binary_map/0, map_op/0]).
 
 -type binary_map() :: binary(). %% A binary that from_binary/1 will accept
--type map() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
--type entries() :: [field()].
--type field() :: {field_name(), {field_meta(), field_value()}}.
+-type delta_map() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
+-type entries() :: dict(field_name(), field_value()).
+-type field_value() :: {field_meta(), crdt()}.
 -type field_name() :: {Name :: binary(), CRDTModule :: crdt_mod()}.
 -type field_meta() :: {riak_dt_vclock:vclock(), seen(), tombstone()}.
--type field_value() :: crdt().
 
 -type seen() :: dots().
--type deferred() :: [{context(), [field()]}].
+-type deferred() :: dict(riak_dt:context(), [field_name()]).
 -type tombstone() :: riak_dt_vclock:vclock().
 
 -type dots() :: [dot()].
@@ -208,41 +207,41 @@
 
 %% limited to only those mods that support both a shared causal
 %% context, and by extension, the reset-remove semantic.
--type crdt_mod() :: riak_dt_emcntr | riak_dt_lwwreg |
-riak_dt_od_flag |
-riak_dt_map | riak_dt_delta_map | riak_dt_orswot.
+-type crdt_mod() :: rak_dt_delta_orswot | riak_dt_delta_map |
+riak_dt_delta_od_flag | riak_dt_delta_emcntr | riak_dt_delta_lwwreg.
 
--type crdt()  ::  riak_dt_emcntr:emcntr() | riak_dt_od_flag:od_flag() |
-riak_dt_lwwreg:lwwreg() | riak_dt_orswot:orswot() |
-riak_dt_map:map() | riak_dt_delta_map:map().
+-type crdt()  :: riak_dt_delta_orswot:delta_orswot() |
+riak_dt_delta_map:delta_map() | riak_dt_delta_emcntr:delta_counter() |
+riak_dt_delta_lwwreg:delta_lwwreg().
 
 -type map_op() :: {update, [map_field_update() | map_field_op()]}.
 
--type map_field_op() ::  {remove, field()}.
--type map_field_update() :: {update, field(), crdt_op()}.
+-type map_field_op() ::  {remove, field_name()}.
+-type map_field_update() :: {update, field_name(), crdt_op()}.
 
 -type crdt_op() :: riak_dt_emcntr:emcntr_op() |
 riak_dt_lwwreg:lwwreg_op() | riak_dt_orswot:orswot_op() |
 riak_dt_od_flag:od_flag_op() | riak_dt_map:map_op() | riak_dt_delta_map:map_op().
 
--type context() :: riak_dt_vclock:vclock() | undefined.
-
 -type values() :: [value()].
--type value() :: {field(), riak_dt_delta_map:values() | integer() |
+-type value() :: {field_name(), riak_dt_delta_map:values() | integer() |
                   [term()] | boolean() | term()}.
 
--type precondition_error() :: {error, {precondition, {not_present, field()}}}.
+-type precondition_error() :: {error, {precondition, {not_present, field_name()}}}.
+
+%% used until we move to erlang 17 and can use dict:dict/2
+-type dict(_A, _B) :: dict().
 
 -define(FRESH_CLOCK, riak_dt_vclock:fresh()).
 -define(DICT, dict).
 
 %% @doc Create a new, empty Map.
--spec new() -> map().
+-spec new() -> delta_map().
 new() ->
-    {riak_dt_vclock:fresh(), ?DICT:new(), ?DICT:new()}.
+    {?FRESH_CLOCK, ?DICT:new(), ?DICT:new()}.
 
 %% @doc get the current set of values for this Map
--spec value(map()) -> values().
+-spec value(delta_map()) -> values().
 value({Clock, Values, _Deferred}) ->
     lists:sort(?DICT:fold(
                   fun({Name, Type}, {{Dots, _, Tombstone}, CRDT0}, Acc) ->
@@ -274,7 +273,7 @@ value({Clock, Values, _Deferred}) ->
 
 %% @doc query map (not implemented yet)
 %%
--spec value(term(), map()) -> values().
+-spec value(term(), delta_map()) -> values().
 value(_, Map) ->
     value(Map).
 
@@ -294,8 +293,8 @@ value(_, Map) ->
 %%  still present, and it's value will contain the concurrent update.
 %%
 %% Atomic, all of `Ops' are performed successfully, or none are.
--spec update(map_op(), riak_dt:actor() | riak_dt:dot(), map()) ->
-    {ok, map()} | precondition_error().
+-spec update(map_op(), riak_dt:actor() | riak_dt:dot(), delta_map()) ->
+    {ok, delta_map()} | precondition_error().
 update(Op, ActorOrDot, Map) ->
     update(Op, ActorOrDot, Map, undefined).
 
@@ -305,16 +304,16 @@ update(Op, ActorOrDot, Map) ->
 %% types. hence the common clock.
 %%
 %% @see parent_clock/2
--spec update(map_op(), riak_dt:actor() | riak_dt:dot(), map(), riak_dt:context()) ->
-    {ok, map()}.
+-spec update(map_op(), riak_dt:actor() | riak_dt:dot(), delta_map(), riak_dt:context()) ->
+    {ok, delta_map()}.
 update({update, Ops}, ActorOrDot, {Clock0, Values, Deferred}, Ctx) ->
     {Dot, Clock} = update_clock(ActorOrDot, Clock0),
     apply_ops(Ops, Dot, {Clock, Values, Deferred}, Ctx).
 
 %% @private
 -spec apply_ops([map_field_update() | map_field_op()], riak_dt:dot(),
-                {riak_dt_vclock:vclock(), entries() , deferred()}, context()) ->
-    {ok, map()} | precondition_error().
+                {riak_dt_vclock:vclock(), entries() , deferred()}, riak_dt:context()) ->
+    {ok, delta_map()} | precondition_error().
 apply_ops([], _Dot, Map, _Ctx) ->
     {ok, Map};
 apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock, Values, Deferred}, Ctx) ->
@@ -326,7 +325,7 @@ apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock, Values, Defer
                             {ok, {{_,_,Tombstone}, _}} ->
                                 ?DICT:store(Field, {{[Dot], [], Tombstone}, Updated}, Values);
                             error ->
-                                ?DICT:store(Field, {{[Dot], [],  riak_dt_vclock:fresh()}, Updated}, Values)
+                                ?DICT:store(Field, {{[Dot], [], ?FRESH_CLOCK}, Updated}, Values)
                         end,
             apply_ops(Rest, Dot, {Clock, NewValues, Deferred}, Ctx);
         Error ->
@@ -352,8 +351,8 @@ apply_ops([{remove, Field} | Rest], Dot, Map, Ctx) ->
 %%
 %% @see defer_remove/4 for handling of removes of fields that are
 %% _not_ present
--spec remove_field(field(), map(), context()) ->
-    {ok, map()} | precondition_error().
+-spec remove_field(field_name(), delta_map(), riak_dt:context()) ->
+    {ok, delta_map()} | precondition_error().
 remove_field(Field, {Clock, Values, Deferred}, undefined) ->
     case ?DICT:find(Field, Values) of
         error ->
@@ -369,9 +368,13 @@ remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
                     %Element is removed but has deferred operations
                     {ok, empty} when DefCtx =/= no_deferred ->
                         ?DICT:update(Field,
-                                     fun({{Dots, _S, Tombstone}, CRDT}) ->
-                                             Tombstone = riak_dt_vclock:merge([DefCtx, Tombstone]),
-                                             {{Dots, _S, Tombstone}, CRDT}
+                                     fun(Found) ->
+                                             case Found of
+                                                 {{Dots, _S, Tombstone}, CRDT} ->
+                                                     Tombstone = riak_dt_vclock:merge([DefCtx, Tombstone]),
+                                                     {{Dots, _S, Tombstone}, CRDT};
+                                                 error -> UpdtValues
+                                             end
                                      end,UpdtValues);
                     {ok, empty} ->
                         ?DICT:erase(Field, UpdtValues);
@@ -383,10 +386,8 @@ remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
     {ok, {Clock, NewValues, Deferred}}.
 
 %% @private drop dominated fields
-ctx_rem_field(_Field, error, _Ctx_, _Clock) ->
-    empty;
-
-ctx_rem_field({_, Type}, {ok, {{Dots, _S, Tombstone}, CRDT}}, Ctx, MapClock) ->
+-spec ctx_rem_field(field_name(), field_value(), riak_dt:context(), riak_dt_vclock:vclock()) -> empty | field_value().
+ctx_rem_field({_, Type}, {{Dots, _S, Tombstone}, CRDT}, Ctx, MapClock) ->
     %% Drop dominated fields, and update the tombstone.
     %%
     %% If the context is removing a field at dot {a, 1} and the
@@ -406,13 +407,12 @@ ctx_rem_field({_, Type}, {ok, {{Dots, _S, Tombstone}, CRDT}}, Ctx, MapClock) ->
             CRDT2 = Type:merge(TS, Type:parent_clock(MapClock, CRDT)),
             %% Always reset to empty clock so we don't duplicate storage
             {{SurvivingDots, _S, Tombstone}, Type:parent_clock(?FRESH_CLOCK, CRDT2)}
-    end;
-ctx_rem_field(Field, Values, Ctx, MapClock) ->
-    ctx_rem_field(Field, ?DICT:find(Field, Values), Ctx, MapClock).
+    end.
 
 %% Value is a map:
 %% Remove fields that don't have deferred operations;
 %% Compute the removal tombstone for this field.
+-spec propagate_remove(field_name(), entries() | field_value(), riak_dt_vclock:vclock(), riak_dt:context()) -> {riak_dt_vclock:vclock(), entries() | empty}.
 propagate_remove({_, riak_dt_delta_map}, {{Dots, _S, Tombstone}, {Clock, Value0, Deferred}}, MapClock, Ctx)->
     {SubMergedDef, SubEntries} =
     ?DICT:fold(fun(K, V, {UpdtClock, UpdtEntries}) ->
@@ -425,7 +425,7 @@ propagate_remove({_, riak_dt_delta_map}, {{Dots, _S, Tombstone}, {Clock, Value0,
                                {riak_dt_vclock:merge([TombstoneClock, UpdtClock]),
                                 ?DICT:store(K, Value, UpdtEntries)}
                        end
-               end, {riak_dt_vclock:fresh(),?DICT:new()},Value0),
+               end, {?FRESH_CLOCK, ?DICT:new()}, Value0),
     %Clear map if all entries are empty
     case ?DICT:size(SubEntries) of
         0 ->
@@ -441,7 +441,7 @@ propagate_remove({_, riak_dt_delta_map}, {{Dots, _S, Tombstone}, {Clock, Value0,
 propagate_remove({_, Type}=Field, {{Clock, _S, TombstoneIn}, CRDT}, MapClock, Ctx) ->
     case Type:get_deferred(CRDT) of
         [] ->
-            {[], ctx_rem_field(Field, {ok, {{Clock, _S, []}, CRDT}}, Ctx, MapClock)};
+            {[], ctx_rem_field(Field, {{Clock, _S, []}, CRDT}, Ctx, MapClock)};
         _ ->
             Intersection = riak_dt_vclock:glb(Clock,Ctx),
             Tombstone = riak_dt_vclock:merge([Intersection, TombstoneIn | Type:get_deferred(CRDT)]),
@@ -479,7 +479,7 @@ propagate_remove(Field, Values, MapClock, Ctx) ->
 %% result in deferred operations on the parent Map. This simulates
 %% causal delivery, in that an `update' must be seen before it can be
 %% `removed'.
--spec defer_remove(riak_dt_vclock:vclock(), riak_dt_vclock:vclock(), field(), deferred()) ->
+-spec defer_remove(riak_dt_vclock:vclock(), riak_dt_vclock:vclock(), field_name(), deferred()) ->
     deferred().
 defer_remove(Clock, Ctx, Field, Deferred) ->
     case riak_dt_vclock:descends(Clock, Ctx) of
@@ -492,14 +492,14 @@ defer_remove(Clock, Ctx, Field, Deferred) ->
                               Deferred)
     end.
 
--spec delta_update(map_op(), riak_dt:actor() | riak_dt:dot(), map()) ->
-    {ok, map()} | precondition_error().
+-spec delta_update(map_op(), riak_dt:actor() | riak_dt:dot(), delta_map()) ->
+    {ok, delta_map()} | precondition_error().
 delta_update(Op, ActorOrDot, {Clock0, _, _}=Map) ->
     {Dot, _Clock} = update_clock(ActorOrDot, Clock0),
     delta_update(Op, Dot, Map, Clock0).
 
--spec delta_update(map_op(), riak_dt:actor() | riak_dt:dot(), map(), riak_dt:context()) ->
-    {ok, map()}.
+-spec delta_update(map_op(), riak_dt:actor() | riak_dt:dot(), delta_map(), riak_dt:context()) ->
+    {ok, delta_map()}.
 delta_update({update, Ops}, Actor, {Clock0, _, _}=Map, Ctx) ->
     {Dot, _Clock} = update_clock(Actor, Clock0),
     delta_apply_ops(Ops, Dot, Map, new(), Ctx).
@@ -511,8 +511,8 @@ delta_update({update, Ops}, Actor, {Clock0, _, _}=Map, Ctx) ->
 %% @private
 -spec delta_apply_ops([map_field_update() | map_field_op()], riak_dt:dot(),
                       {riak_dt_vclock:vclock(), entries() , deferred()},
-                      {riak_dt_vclock:vclock(), entries() , deferred()}, context()) ->
-    {ok, map()} | precondition_error().
+                      {riak_dt_vclock:vclock(), entries() , deferred()}, riak_dt:context()) ->
+    {ok, delta_map()} | precondition_error().
 delta_apply_ops([], _Dot, _Map, Delta, _Ctx) ->
     {ok, Delta};
 
@@ -532,7 +532,7 @@ delta_apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock0, Values
                                                 DDef
                                                }, Updated}, DValues );
                              error ->
-                                 ?DICT:store(Field, {{[Dot], [Dot], riak_dt_vclock:fresh()}, Updated}, DValues)
+                                 ?DICT:store(Field, {{[Dot], [Dot], ?FRESH_CLOCK}, Updated}, DValues)
                          end,
             delta_apply_ops(Rest, Dot, {Clock0, Values, Deferred}, {DClock, NewDValues, DDef}, Ctx);
         Error ->
@@ -572,6 +572,7 @@ delta_apply_remove({_, Type}=Field, {{Active, _Seen, Tombstone}, CRDT}, Clock, C
     NewTombstone = riak_dt_vclock:merge([Tombstone, ChildTombstone, Ctx | DeferredOps]),
     {{[], lists:subtract(Active, SurvivingDots), NewTombstone}, NewCRDT}.
 
+-spec merge(delta_map(), delta_map()) -> delta_map().
 merge({LHSClock, LHSEntries, LHSDeferred}, {RHSClock, RHSEntries, RHSDeferred}) ->
     Fields = lists:umerge(?DICT:fetch_keys(LHSEntries), ?DICT:fetch_keys(RHSEntries)),
     {AllDots, Entries} = lists:foldl(fun(Field, {DotsAcc, Acc}) ->
@@ -592,6 +593,7 @@ merge({LHSClock, LHSEntries, LHSDeferred}, {RHSClock, RHSEntries, RHSDeferred}) 
     CRDT = clear_seen(Clock, CRDT0),
     clear_tombstones(CRDT).
 
+-spec update_entry(field_name(), riak_dt_vclock:vclock(), field_value(), riak_dt_vclock:vclock(), field_value()) -> empty | field_value().
 update_entry({_, Type}, LHSClock, LHSEntry, RHSClock, RHSEntry) ->
     {{LHSDots, LHSS, LHSTomb}, LHSCRDT} = LHSEntry,
     {{RHSDots, RHSS, RHSTomb}, RHSCRDT} = RHSEntry,
@@ -617,6 +619,7 @@ update_entry({_, Type}, LHSClock, LHSEntry, RHSClock, RHSEntry) ->
             {{Dots, MergedSeen, MergedTombstone}, Type:parent_clock(?FRESH_CLOCK, MergedCRDT)}
     end.
 
+-spec keep_dots(riak_dt_vclock:vclock(), riak_dt_vclock:vclock(), riak_dt_vclock:vclock(), riak_dt_vclock:vclock(), seen(), seen()) -> riak_dt_vclock:vclock().
 keep_dots(LHSDots, RHSDots, LHSClock, RHSClock, LHSeen, RHSeen) ->
     CommonDots = sets:intersection(sets:from_list(LHSDots), sets:from_list(RHSDots)),
     LHSUnique = sets:to_list(sets:subtract(sets:from_list(LHSDots), CommonDots)),
@@ -685,8 +688,8 @@ clear_seen(SeenClock, {_Clock, CRDT0, Deferred}) ->
     {_Clock, CRDT, Deferred}.
 
 %% @private
--spec remove_all([field()], map(), context()) ->
-    map().
+-spec remove_all([field_name()], delta_map(), riak_dt:context()) ->
+    delta_map().
 remove_all(Fields, Map, Ctx) ->
     lists:foldl(fun(Field, MapAcc) ->
                         {ok, MapAcc2}= remove_field(Field, MapAcc, Ctx),
@@ -747,14 +750,14 @@ clear_tombstones_handle(Field, {{Dots,  _S, Tombstone}, CRDT}=Value, NewMap, Map
 %% @doc compare two `map()'s for equality of structure Both schemas
 %% and value list must be equal. Performs a pariwise equals for all
 %% values in the value lists
--spec equal(map(), map()) -> boolean().
+-spec equal(delta_map(), delta_map()) -> boolean().
 equal({Clock1, Values1, Deferred1}, {Clock2, Values2, Deferred2}) ->
     riak_dt_vclock:equal(Clock1, Clock2) andalso
     Deferred1 == Deferred2 andalso
     pairwise_equals(lists:sort(?DICT:to_list(Values1)),
                     lists:sort(?DICT:to_list(Values2))).
 
--spec pairwise_equals(entries(), entries()) -> boolean().
+-spec pairwise_equals(entries() | [], entries() | []) -> boolean().
 pairwise_equals([], []) ->
     true;
 pairwise_equals([{{Name, Type}, {{Dots1, S1, Tombstone1}, CRDT1}}|Rest1], [{{Name, Type}, {{Dots2, S2, Tombstone2}, CRDT2}}|Rest2]) ->
@@ -763,19 +766,19 @@ pairwise_equals([{{Name, Type}, {{Dots1, S1, Tombstone1}, CRDT1}}|Rest1], [{{Nam
             pairwise_equals(Rest1, Rest2);
         _ ->
             false
-    end;
-pairwise_equals(_, _) ->
-    false.
+    end.
 
 %% @doc sets the clock in the map to that `Clock'. Used by a
 %% containing Map for sub-CRDTs
--spec parent_clock(riak_dt_vclock:vclock(), map()) -> map().
+-spec parent_clock(riak_dt_vclock:vclock(), delta_map()) -> delta_map().
 parent_clock(Clock, {MapClock, Values, Deferred}) ->
     {riak_dt_vclock:merge([MapClock, Clock]), Values, Deferred}.
 
+-spec get_deferred(delta_map()) -> [riak_dt:context()].
 get_deferred({_, _, Deferred}) ->
     lists:map(fun({Key, _}) -> Key end, ?DICT:to_list(Deferred)).
 
+-spec get_tombstone(field_name(),delta_map()) -> riak_dt_vclock:vclock().
 get_tombstone({_, riak_dt_delta_map}, {_, Value, _}) ->
     ?DICT:fold(fun(_, {{_, _, Tomb},_}, Acc) ->
                        riak_dt_vclock:merge([Tomb, Acc])
@@ -788,7 +791,7 @@ get_entry({_Name, Type}=Field, Fields, Clock) ->
                                         {ok, Entry} ->
                                             Entry;
                                         error ->
-                                            {{[], [], riak_dt_vclock:fresh()}, Type:new()}
+                                            {{[], [], ?FRESH_CLOCK}, Type:new()}
                                     end,
     {{Dots, _S, Tombstone}, Type:parent_clock(Clock, CRDT)}.
 
@@ -809,7 +812,7 @@ update_clock(Actor, Clock) ->
 %% that only seen fields are removed. If a field removal operation has
 %% a context that the Map has not seen, it will be deferred until
 %% causally relevant.
--spec precondition_context(map()) -> riak_dt:context().
+-spec precondition_context(delta_map()) -> riak_dt:context().
 precondition_context({Clock, _Field, _Deferred}) ->
     Clock.
 
@@ -821,11 +824,11 @@ precondition_context({Clock, _Field, _Deferred}) ->
 %%                basically `field_count' - ( unique fields)
 %% `deferred_length': How many operations on the deferred list, a reasonable expression
 %%                   of lag/staleness.
--spec stats(map()) -> [{atom(), integer()}].
+-spec stats(delta_map()) -> [{atom(), integer()}].
 stats(Map) ->
     [ {S, stat(S, Map)} || S <- [actor_count, field_count, deferred_length]].
 
--spec stat(atom(), map()) -> number() | undefined.
+-spec stat(atom(), delta_map()) -> number() | undefined.
 stat(actor_count, {Clock, _, _}) ->
     length(Clock);
 stat(field_count, {_, Fields, _}) ->
@@ -848,13 +851,13 @@ stat(_,_) -> undefined.
 %% (`false')
 %%
 %% @see `from_binary/1'
--spec to_binary(map()) -> binary_map().
+-spec to_binary(delta_map()) -> binary_map().
 to_binary(Map) ->
     to_binary(?V2_VERS, Map).
 
 %% @private encode v1 maps as v2, and vice versa. The first argument
 %% is the target binary type.
--spec to_binary(1 | 2, map()) -> binary_map().
+-spec to_binary(1 | 2, delta_map()) -> binary_map().
 to_binary(?V2_VERS, Map0) ->
     Map = to_v2(Map0),
     <<?TAG:8/integer, ?V2_VERS:8/integer, (riak_dt:to_binary(Map))/binary>>;
@@ -892,7 +895,7 @@ to_v1({Clock, Fields0, Deferred0}) ->
 %% `to_binary/1' will return the original `map()'.
 %%
 %% @see `to_binary/1'
--spec from_binary(binary_map()) -> map().
+-spec from_binary(binary_map()) -> delta_map().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
     Map = riak_dt:from_binary(B),
     %% upgrade v1 structure to v2
@@ -904,7 +907,7 @@ from_binary(<<?TAG:8/integer, ?V2_VERS:8/integer, B/binary>>) ->
 %% either `to_binary/1' or `to_binary/2' and the first is a valid
 %% version (`1' or `2' at present) will return an `map()' in the
 %% correct `TargetVersion'
--spec from_binary(TargetVersion :: 1 | 2, binary_map()) -> map().
+-spec from_binary(TargetVersion :: 1 | 2, binary_map()) -> delta_map().
 from_binary(?V1_VERS, <<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
     riak_dt:from_binary(B);
 from_binary(?V1_VERS, <<?TAG:8/integer, ?V2_VERS:8/integer, B/binary>>) ->

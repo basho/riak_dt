@@ -26,7 +26,7 @@
 -behaviour(riak_dt).
 
 -export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1, stats/1, stat/2]).
--export([update/4, parent_clock/2]).
+-export([update/4, parent_clock/2, get_deferred/1]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -70,6 +70,9 @@ update(Op, Actor, Flag, _Ctx) ->
 -spec parent_clock(riak_dt_vclock:vclock(), oe_flag()) -> oe_flag().
 parent_clock(_Clock, Flag) ->
     Flag.
+
+-spec get_deferred(oe_flag()) -> [].
+get_deferred(_CRDT) -> [].
 
 -spec merge(oe_flag(), oe_flag()) -> oe_flag().
 merge({C1, F}, {C2,F}) ->

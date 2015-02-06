@@ -27,7 +27,7 @@
 %% API
 -export([new/0, value/1, update/3, merge/2, equal/2,
          to_binary/1, from_binary/1, value/2, precondition_context/1, stats/1, stat/2]).
--export([update/4, parent_clock/2]).
+-export([update/4, parent_clock/2, get_deferred/1]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -116,6 +116,9 @@ update(Op, Actor, ORDict, _Ctx) ->
 -spec parent_clock(riak_dt_vclock:vclock(), orset()) -> orset().
 parent_clock(_Clock, ORSet) ->
     ORSet.
+
+-spec get_deferred(orset()) -> [].
+get_deferred(_CRDT) -> [].
 
 -spec merge(orset(), orset()) -> orset().
 merge(ORDictA, ORDictB) ->

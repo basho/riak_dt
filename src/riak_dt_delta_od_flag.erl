@@ -57,6 +57,7 @@ new() ->
 parent_clock(Clock, {_SetClock, Flag , Deferred}) ->
     {Clock, Flag, Deferred}.
 
+-spec get_deferred(od_flag()) -> [riak_dt:context()].
 get_deferred({_,_,Deferred}) -> Deferred.
 
 -spec value(od_flag()) -> boolean().
