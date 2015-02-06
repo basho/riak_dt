@@ -1157,34 +1157,34 @@ remfield_test() ->
     AB = merge(A4, B),
     ?assertEqual([{Field, [2]}], value(AB)).
 
-%present_but_removed_test() ->
-%    F = {'X', riak_dt_lwwreg},
-%    {ok, A} = ?UPDT_MERGE({update, [{update, F, {assign, <<"A">>}}]}, a, new()),
-%    C = A,
-%    {ok, A2} = ?UPDT_MERGE({update, [{remove, F}]}, a, A),
-%    {ok, B} = ?UPDT_MERGE({update, [{update, F, {assign, <<"B">>}}]}, b, new()),
-%    A3 = merge(B, A2),
-%   {ok, B2} = ?UPDT_MERGE({update, [{remove, F}]}, b, B),
-%   Merged = lists:foldl(fun(Set, Acc) ->
-%                                merge(Set, Acc) end,
-%                        A3,
-%                        [C, B2]),
-%   ?assertEqual([], value(Merged)).
+present_but_removed_test() ->
+    F = {'X', riak_dt_delta_lwwreg},
+    {ok, A} = ?UPDT_MERGE({update, [{update, F, {assign, <<"A">>}}]}, a, new()),
+    C = A,
+    {ok, A2} = ?UPDT_MERGE({update, [{remove, F}]}, a, A),
+    {ok, B} = ?UPDT_MERGE({update, [{update, F, {assign, <<"B">>}}]}, b, new()),
+    A3 = merge(B, A2),
+    {ok, B2} = ?UPDT_MERGE({update, [{remove, F}]}, b, B),
+    Merged = lists:foldl(fun(Set, Acc) ->
+                                 merge(Set, Acc) end,
+                         A3,
+                         [C, B2]),
+    ?assertEqual([], value(Merged)).
 
-%no_dots_left_test() ->
-%    F = {'Z', riak_dt_lwwreg},
-%    {ok, A} =  ?UPDT_MERGE({update, [{update, F, {assign, <<"A">>}}]}, a, new()),
-%    {ok, B} =  ?UPDT_MERGE({update, [{update, F, {assign, <<"B">>}}]}, b, new()),
-%    C = A, %% replicate A to empty C
-%    {ok, A2} = ?UPDT_MERGE({update, [{remove, F}]}, a, A),
-%    A3 = merge(A2, B),
-%    {ok, B2} = ?UPDT_MERGE({update, [{remove, F}]}, b, B),
-%    B3 = merge(B2, C),
-%    Merged = lists:foldl(fun(Set, Acc) ->
-%                                merge(Set, Acc) end,
-%                         A3,
-%                         [B3, C]),
-%    ?assertEqual([], value(Merged)).
+no_dots_left_test() ->
+    F = {'Z', riak_dt_delta_lwwreg},
+    {ok, A} =  ?UPDT_MERGE({update, [{update, F, {assign, <<"A">>}}]}, a, new()),
+    {ok, B} =  ?UPDT_MERGE({update, [{update, F, {assign, <<"B">>}}]}, b, new()),
+    C = A, %% replicate A to empty C
+    {ok, A2} = ?UPDT_MERGE({update, [{remove, F}]}, a, A),
+    A3 = merge(A2, B),
+    {ok, B2} = ?UPDT_MERGE({update, [{remove, F}]}, b, B),
+    B3 = merge(B2, C),
+    Merged = lists:foldl(fun(Set, Acc) ->
+                                 merge(Set, Acc) end,
+                         A3,
+                         [B3, C]),
+    ?assertEqual([], value(Merged)).
 
 tombstone_remove_test() ->
     F = {'X', riak_dt_delta_orswot},
