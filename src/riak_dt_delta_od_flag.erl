@@ -21,11 +21,11 @@
 %%
 %% -------------------------------------------------------------------
 
--module(riak_dt_od_flag).
+-module(riak_dt_delta_od_flag).
 
 -behaviour(riak_dt).
 
--export([new/0, value/1, value/2, update/3, update/4]).
+-export([new/0, value/1, value/2, update/3, update/4, delta_update/3, delta_update/4]).
 -export([ merge/2, equal/2, from_binary/1]).
 -export([to_binary/1, stats/1, stat/2]).
 -export([precondition_context/1]).
@@ -58,7 +58,7 @@ parent_clock(Clock, {_SetClock, Flag , Deferred}) ->
     {Clock, Flag, Deferred}.
 
 -spec get_deferred(od_flag()) -> [riak_dt:context()].
-get_deferred({_, _, Deferred}) -> Deferred.
+get_deferred({_,_,Deferred}) -> Deferred.
 
 -spec value(od_flag()) -> boolean().
 value({_, [], _}) -> false;
@@ -118,6 +118,46 @@ defer_disable(Clock, Ctx, Deferred) ->
         false ->
             ordsets:add_element(Ctx, Deferred)
     end.
+
+-spec delta_update(od_flag_op(), riak_dt:actor() | riak_dt:dot(), od_flag()) -> {ok, od_flag()}.
+delta_update(enable, Dot, {Clock, _Dots, _Def}) when is_tuple(Dot) ->
+    NewClock = riak_dt_vclock:merge([[Dot], Clock]),
+    {ok, {NewClock, [Dot], []}};
+delta_update(enable, Actor, {Clock, _Dots, _Def}) ->
+    NewClock = riak_dt_vclock:increment(Actor, Clock),
+    Dot = [{Actor, riak_dt_vclock:get_counter(Actor, NewClock)}],
+    {ok, {NewClock, Dot, []}};
+delta_update(disable, _Actor, Flag) ->
+    delta_disable(Flag, undefined).
+
+-spec delta_disable(od_flag(), riak_dt:context()) ->
+    {ok, od_flag()}.
+delta_disable({Clock, _, Deferred}, undefined) ->
+    {ok, {Clock, [], Deferred}};
+delta_disable({Clock, Dots, _Deferred}, Ctx) ->
+    NewDots = riak_dt_vclock:subtract_dots(Dots, Ctx),
+    NewClock = riak_dt_vclock:merge([Clock, Ctx]),
+    NewDeferred = defer_disable(Clock, Ctx, []),
+    {ok, {NewClock, NewDots, NewDeferred}}.
+
+%% @doc `update/4' is similar to `update/3' except that it takes a
+%% `context' (obtained from calling `precondition_context/1'). This
+%% context ensure that a `disable' operation does not `disable' a flag
+%% that is has not been `seen` enabled by the caller. For example, the
+%% flag has been enabled by `a', `b', and `c'. The user has a copy of
+%% the flag obtained by reading `a'. Subsequently all replicas merge,
+%% and the user sends a `disable' operation. The have only seen the
+%% enable of `a', yet they disable the concurrecnt `b' and `c'
+%% operations, unless they send a context obtained from `a'.
+-spec delta_update(od_flag_op(), riak_dt:actor() | riak_dt:dot(),
+             od_flag(), riak_dt:context()) ->
+                    {ok, od_flag()}.
+delta_update(Op, Actor, Flag, undefined) ->
+    delta_update(Op, Actor, Flag);
+delta_update(enable, Actor, Flag, _Ctx) ->
+    delta_update(enable, Actor, Flag);
+delta_update(disable, _Actor, Flag, Ctx) ->
+    delta_disable(Flag, Ctx).
 
 -spec merge(od_flag(), od_flag()) -> od_flag().
 merge({Clock, Entries, Deferred}, {Clock, Entries, Deferred}) ->
@@ -304,4 +344,82 @@ stat_test() ->
     ?assertEqual([{actor_count, 3}, {dot_length, 0}, {deferred_length, 0}], stats(F4)),
     ?assertEqual(3, stat(actor_count, F4)),
     ?assertEqual(undefined, stat(max_dot_length, F4)).
+
+delta_enable_test() ->
+    F0 = new(),
+    {ok, D1} = delta_update(enable, 1, F0),
+    F0D1 = merge(F0, D1), 
+    {ok, F1} = update(enable, 1, F0),
+    ?assertEqual(F1, F0D1).
+
+delta_simple_disable_test() ->
+    F0 = new(),
+    {ok, F1} = update(enable, 1, F0),
+    {ok, F2} = update(disable, 1, F1),
+    {ok, D1} = delta_update(disable, 1, F1),
+    F1D1 = merge(F1, D1), 
+    ?assertEqual(F2, F1D1).
+
+disable_delta_test() ->
+    {ok, A} = delta_update(enable, a, new()),
+    {ok, B} = delta_update(enable, b, new()),
+    C = A,
+    {ok, A2} = delta_update(disable, a, A),
+    A3 = merge(A2, B),
+    {ok, B2} = delta_update(disable, b, B),
+    Merged = merge(merge(C, A3), B2),
+    ?assertEqual(false, value(Merged)).
+
+delta_concurrent_test() ->
+    F0 = new(),
+    {ok, F1} = update(enable, 1, F0),
+    {ok, D11} = delta_update(disable, 1, F1),
+    {ok, D21} = delta_update(enable, 2, F1),
+    F1D11 = merge(F1, D11), 
+    F1D21 = merge(F1, D21), 
+    ?assertEqual(false, value(F1D11)),
+    ?assertEqual(true, value(F1D21)),
+    D11D21 = merge(D11, D21),
+    ?assertEqual(true, value(D11D21)),
+		    F1D11D21 = merge(F1, D11D21),
+		    ?assertEqual(true, value(F1D11D21)).
+
+delta_concurrent_other_test() ->
+    F0 = new(),
+    {ok, F1} = update(enable, 1, F0),
+    {ok, F2} = update(enable, 2, F1),
+    {ok, F3} = update(enable, 2, F2),
+    {ok, D1} = delta_update(disable, 1, F2),
+    ?assertEqual(true, value(merge(F3,D1))).
+
+delta_merge_commutativity_test() ->
+    F0 = new(),
+    {ok, F1} = update(enable, 1, F0),
+    {ok, D11} = delta_update(disable, 1, F1),
+    {ok, D21} = delta_update(enable, 2, F1),
+    F1D11 = merge(F1, D11), 
+    F1D21 = merge(F1, D21), 
+    D11D21 = merge(D11, D21),
+    D21D11 = merge(D21, D11),
+    ?assertEqual(D11D21,D21D11),
+    ?assertEqual(merge(F1D11,D21), merge(F1D21,D11)),
+    ?assertEqual(merge(merge(F1D11,D21),D11D21), merge(F1D21,D11)).
+
+delta_old_enable_no_effect_test() ->
+    F0 = new(),
+    {ok, D11} = delta_update(enable, 1, F0),
+    F1 = merge(F0, D11),
+    {ok, D12} = delta_update(disable, 1, F1),
+    F2 = merge(F1, D12),
+    ?assertEqual(false, value(F2)),
+    {ok, D21} = delta_update(enable, 2, F2),
+    F3 = merge(F2, D21),
+    ?assertEqual(true, value(F3)),
+    {ok, D22} = delta_update(disable, 1, F3),
+    F4 = merge(F3, D22),
+    ?assertEqual(F4, merge(F4, D21)).
+
+
+
 -endif.
+

@@ -33,13 +33,13 @@
 %%
 %% @end
 
--module(riak_dt_pncounter).
+-module(riak_dt_delta_pncounter).
 -behaviour(riak_dt).
 
 -export([new/0, new/2, value/1, value/2,
          update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
 -export([to_binary/2, from_binary/2, current_version/1, change_versions/3]).
--export([parent_clock/2, get_deferred/1, update/4]).
+-export([parent_clock/2, update/4, delta_update/3, delta_update/4, get_deferred/1]).
 
 %% EQC API
 -ifdef(EQC).
@@ -123,6 +123,33 @@ update({decrement, By}, Actor, PNCnt) when is_integer(By), By > 0 ->
 
 update(Op, Actor, Cntr, _Ctx) ->
     update(Op, Actor, Cntr).
+
+%% @doc Update a `pncounter()'. The first argument is either the atom
+%% `increment' or `decrement' or the two tuples `{increment, pos_integer()}' or
+%% `{decrement, pos_integer()}'. In the case of the former, the operation's amount
+%% is `1'. Otherwise it is the value provided in the tuple's second element.
+%% `Actor' is any term, and the 3rd argument is the `pncounter()' to update.
+%%
+%% returns the updated `pncounter()'
+-spec delta_update(pncounter_op(), riak_dt:actor() | riak_dt:dot(), pncounter()) -> {ok, pncounter()}.
+delta_update(Op, {Actor, _Cnt}, PNCnt) ->
+    delta_update(Op, Actor, PNCnt);
+delta_update(increment, Actor, PNCnt) ->
+    delta_update({increment, 1}, Actor, PNCnt);
+delta_update(decrement, Actor, PNCnt) ->
+    delta_update({decrement, 1}, Actor, PNCnt);
+delta_update({_IncrDecr, 0}, _Actor, PNCnt) ->
+    {ok, PNCnt};
+delta_update({increment, By}, Actor, PNCnt) when is_integer(By), By > 0 ->
+    {ok, delta_increment_by(By, Actor, PNCnt)};
+delta_update({increment, By}, Actor, PNCnt) when is_integer(By), By < 0 ->
+    delta_update({decrement, -By}, Actor, PNCnt);
+delta_update({decrement, By}, Actor, PNCnt) when is_integer(By), By > 0 ->
+    {ok, delta_decrement_by(By, Actor, PNCnt)}.
+
+delta_update(Op, Actor, Cntr, _Ctx) ->
+    delta_update(Op, Actor, Cntr).
+
 
 %% @doc Merge two `pncounter()'s to a single `pncounter()'. This is the Least Upper Bound
 %% function described in the literature.
@@ -255,6 +282,25 @@ decrement_by(Decrement, Actor, PNCnt) ->
             [{Actor,Inc,Dec+Decrement}|ModPNCnt]
     end.
 
+% Priv
+-spec delta_increment_by(pos_integer(), term(), pncounter()) -> pncounter().
+delta_increment_by(Increment, Actor, PNCnt) ->
+    case lists:keytake(Actor, 1, PNCnt) of
+        false ->
+            [{Actor,Increment,0}];
+        {value, {Actor,Inc,Dec}, _ModPNCnt} ->
+            [{Actor,Inc+Increment,Dec}]
+    end.
+
+-spec delta_decrement_by(pos_integer(), term(), pncounter()) -> pncounter().
+delta_decrement_by(Decrement, Actor, PNCnt) ->
+    case lists:keytake(Actor, 1, PNCnt) of
+        false ->
+            [{Actor,0,Decrement}];
+        {value, {Actor,Inc,Dec}, _ModPNCnt} ->
+            [{Actor,Inc,Dec+Decrement}]
+    end.
+
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
@@ -313,29 +359,37 @@ value_test() ->
 
 update_increment_test() ->
     PNCnt0 = new(),
-    {ok, PNCnt1} = update(increment, 1, PNCnt0),
-    {ok, PNCnt2} = update(increment, 2, PNCnt1),
-    {ok, PNCnt3} = update(increment, 1, PNCnt2),
-    ?assertEqual([{1,2,0}, {2,1,0}], PNCnt3).
+    {ok, PNCnt1} = delta_update(increment, 1, PNCnt0),
+    PNCnt1M = merge(PNCnt1, PNCnt0),
+    {ok, PNCnt2} = delta_update(increment, 2, PNCnt1M),
+    PNCnt2M = merge(PNCnt2, PNCnt1M),
+    {ok, PNCnt3} = delta_update(increment, 1, PNCnt2M),
+    PNCnt3M = merge(PNCnt3, PNCnt2M),
+    ?assertEqual([{1,2,0}, {2,1,0}], PNCnt3M).
 
 update_increment_by_test() ->
     PNCnt0 = new(),
-    {ok, PNCnt1} = update({increment, 7}, 1, PNCnt0),
+    {ok, PNCnt1} = delta_update({increment, 7}, 1, PNCnt0),
     ?assertEqual([{1,7,0}], PNCnt1).
 
 update_decrement_test() ->
     PNCnt0 = new(),
-    {ok, PNCnt1} = update(increment, 1, PNCnt0),
-    {ok, PNCnt2} = update(increment, 2, PNCnt1),
-    {ok, PNCnt3} = update(increment, 1, PNCnt2),
-    {ok, PNCnt4} = update(decrement, 1, PNCnt3),
-    ?assertEqual([{1,2,1}, {2,1,0}], PNCnt4).
+    {ok, PNCnt1} = delta_update(increment, 1, PNCnt0),
+    PNCnt1M = merge(PNCnt1, PNCnt0),
+    {ok, PNCnt2} = delta_update(increment, 2, PNCnt1M),
+    PNCnt2M = merge(PNCnt2, PNCnt1M),
+    {ok, PNCnt3} = delta_update(increment, 1, PNCnt2M),
+    PNCnt3M = merge(PNCnt3, PNCnt2M),
+    {ok, PNCnt4} = delta_update(decrement, 1, PNCnt3M),
+    PNCnt4M = merge(PNCnt4, PNCnt3M),
+    ?assertEqual([{1,2,1}, {2,1,0}], PNCnt4M).
 
 update_decrement_by_test() ->
     PNCnt0 = new(),
     {ok, PNCnt1} = update({increment, 7}, 1, PNCnt0),
     {ok, PNCnt2} = update({decrement, 5}, 1, PNCnt1),
-    ?assertEqual([{1,7,5}], PNCnt2).
+    ?assertEqual([{1,7,5}], PNCnt2),
+    ?assertEqual([{1,7,5}], merge(PNCnt0, PNCnt2)).
 
 merge_test() ->
     PNCnt1 = [{<<"1">>,1,0},
@@ -373,18 +427,25 @@ usage_test() ->
     PNCnt2 = new(),
     ?assert(equal(PNCnt1, PNCnt2)),
     {ok, PNCnt1_1} = update({increment, 2}, a1, PNCnt1),
+    PNCnt1_1M = merge(PNCnt1_1, PNCnt1),
     {ok, PNCnt2_1} = update(increment, a2, PNCnt2),
-    PNCnt3 = merge(PNCnt1_1, PNCnt2_1),
-    {ok, PNCnt2_2} = update({increment, 3}, a3, PNCnt2_1),
+    PNCnt2_1M = merge(PNCnt2_1, PNCnt2),
+    PNCnt3 = merge(PNCnt1_1M, PNCnt2_1M),
+    {ok, PNCnt2_2} = update({increment, 3}, a3, PNCnt2_1M),
+    PNCnt2_2M = merge(PNCnt2_2, PNCnt2_1M),
     {ok, PNCnt3_1} = update(increment, a4, PNCnt3),
-    {ok, PNCnt3_2} = update(increment, a1, PNCnt3_1),
-    {ok, PNCnt3_3} = update({decrement, 2}, a5, PNCnt3_2),
-    {ok, PNCnt2_3} = update(decrement, a2, PNCnt2_2),
+    PNCnt3_1M = merge(PNCnt3_1, PNCnt3),
+    {ok, PNCnt3_2} = update(increment, a1, PNCnt3_1M),
+    PNCnt3_2M = merge(PNCnt3_2, PNCnt3_1M),
+    {ok, PNCnt3_3} = update({decrement, 2}, a5, PNCnt3_2M),
+    PNCnt3_3M = merge(PNCnt3_3, PNCnt3_2M),
+    {ok, PNCnt2_3} = update(decrement, a2, PNCnt2_2M),
+    PNCnt2_3M = merge(PNCnt2_3, PNCnt2_2M),
     ?assertEqual([{a5,0,2},
                   {a1,3,0},
                   {a4,1,0},
                   {a2,1,1},
-                  {a3,3,0}], merge(PNCnt3_3, PNCnt2_3)).
+                  {a3,3,0}], merge(PNCnt3_3M, PNCnt2_3M)).
 
 roundtrip_bin_test() ->
     PN = new(),
@@ -423,3 +484,4 @@ stat_test() ->
     ?assertEqual(4, stat(actor_count, PN4)),
     ?assertEqual(undefined, stat(max_dot_length, PN4)).
 -endif.
+

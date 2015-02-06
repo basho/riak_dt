@@ -22,7 +22,7 @@
 
 -module(riak_dt).
 
--export([to_binary/1, from_binary/1]).
+-export([to_binary/1, from_binary/1, dict_to_orddict/1]).
 -export_type([actor/0, dot/0, crdt/0, context/0]).
 
 -type crdt() :: term().
@@ -43,7 +43,8 @@
 %% the clock and the crdt, and if relevant, returns to crdt with the
 %% given clock as it's own.
 -callback parent_clock(riak_dt_vclock:vclock(), crdt()) ->
-     crdt().
+    crdt().
+-callback get_deferred(crdt()) -> [context()].
 -callback merge(crdt(), crdt()) -> crdt().
 -callback equal(crdt(), crdt()) -> boolean().
 -callback to_binary(crdt()) -> binary().
@@ -70,3 +71,9 @@ to_binary(Term) ->
 -spec from_binary(binary()) -> crdt().
 from_binary(Binary) ->
     binary_to_term(Binary).
+
+%% @private
+-spec dict_to_orddict(dict()) -> orddict:orddict().
+dict_to_orddict(Dict) ->
+    orddict:from_list(dict:to_list(Dict)).
+

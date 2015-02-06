@@ -30,7 +30,7 @@
 -behaviour(riak_dt).
 
 -export([new/0, value/1, value/2, update/3, merge/2, equal/2, from_binary/1, to_binary/1, stats/1, stat/2]).
--export([update/4, parent_clock/2]).
+-export([update/4, parent_clock/2, get_deferred/1]).
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -export([gen_op/0, init_state/0, update_expected/3, eqc_state_value/1]).
@@ -80,6 +80,9 @@ equal(FA,FB) ->
                           disable_flag().
 parent_clock(_Clock, Flag) ->
     Flag.
+
+-spec get_deferred(disable_flag()) -> [].
+get_deferred(_CRDT) -> [].
 
 -spec from_binary(binary()) -> disable_flag().
 from_binary(<<?TAG:7, 0:1>>) -> off;

@@ -180,7 +180,7 @@
 -export([new/0, value/1, value/2, update/3, update/4]).
 -export([merge/2, equal/2, to_binary/1, from_binary/1]).
 -export([precondition_context/1, stats/1, stat/2]).
--export([parent_clock/2]).
+-export([parent_clock/2, get_deferred/1]).
 
 %% EQC API
 -ifdef(EQC).
@@ -244,6 +244,9 @@ new() ->
 -spec parent_clock(riak_dt_vclock:vclock(), map()) -> map().
 parent_clock(Clock, {_MapClock, Values, Deferred}) ->
     {Clock, Values, Deferred}.
+
+-spec get_deferred(map()) -> [riak_dt:context()].
+get_deferred({_,_, Deferred}) -> Deferred.
 
 %% @doc get the current set of values for this Map
 -spec value(map()) -> values().

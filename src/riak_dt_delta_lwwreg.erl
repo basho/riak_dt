@@ -28,12 +28,12 @@
 %%
 %% @end
 
--module(riak_dt_lwwreg).
+-module(riak_dt_delta_lwwreg).
 -behaviour(riak_dt).
 
 -export([new/0, value/1, value/2, update/3, merge/2,
          equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
--export([parent_clock/2, get_deferred/1, update/4]).
+-export([parent_clock/2, get_deferred/1, update/4, delta_update/3, delta_update/4]).
 
 %% EQC API
 -ifdef(EQC).
@@ -45,41 +45,41 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--export_type([lwwreg/0, lwwreg_op/0]).
+-export_type([delta_lwwreg/0, lwwreg_op/0]).
 
--opaque lwwreg() :: {term(), non_neg_integer()}.
+-opaque delta_lwwreg() :: {term(), non_neg_integer()}.
 
 -type lwwreg_op() :: {assign, term(), non_neg_integer()}  | {assign, term()}.
 
 -type lww_q() :: timestamp.
 
 %% @doc Create a new, empty `lwwreg()'
--spec new() -> lwwreg().
+-spec new() -> delta_lwwreg().
 new() ->
     {<<>>, 0}.
 
--spec parent_clock(riak_dt_vclock:vclock(), lwwreg()) -> lwwreg().
+-spec parent_clock(riak_dt_vclock:vclock(), delta_lwwreg()) -> delta_lwwreg().
 parent_clock(_Clock, Reg) ->
     Reg.
 
--spec get_deferred(lwwreg()) -> [].
+-spec get_deferred(delta_lwwreg()) -> [].
 get_deferred(_CRDT) -> [].
 
 %% @doc The single total value of a `gcounter()'.
--spec value(lwwreg()) -> term().
+-spec value(delta_lwwreg()) -> term().
 value({Value, _TS}) ->
     Value.
 
-%% @doc query for this `lwwreg()'.
+%% @doc query for this `delta_lwwreg()'.
 %% `timestamp' is the only query option.
--spec value(lww_q(), lwwreg()) -> non_neg_integer().
+-spec value(lww_q(), delta_lwwreg()) -> non_neg_integer().
 value(timestamp, {_V, TS}) ->
     TS.
 
-%% @doc Assign a `Value' to the `lwwreg()'
+%% @doc Assign a `Value' to the `delta_lwwreg()'
 %% associating the update with time `TS'
--spec update(lwwreg_op(), term(), lwwreg()) ->
-                    {ok, lwwreg()}.
+-spec update(lwwreg_op(), term(), delta_lwwreg()) ->
+                    {ok, delta_lwwreg()}.
 update({assign, Value, TS}, _Actor, {_OldVal, OldTS}) when is_integer(TS), TS > 0, TS >= OldTS ->
     {ok, {Value, TS}};
 update({assign, _Value, _TS}, _Actor, OldLWWReg) ->
@@ -99,13 +99,29 @@ update({assign, Value}, _Actor, {OldVal, OldTS}) ->
 update(Op, Actor, Reg, _Ctx) ->
     update(Op, Actor, Reg).
 
+-spec delta_update(lwwreg_op(), term(), delta_lwwreg(), riak_dt:vclock()) ->
+                    {ok, delta_lwwreg()}.
+delta_update(Op, Actor, LWWReg, _Ctx) ->
+    delta_update(Op, Actor, LWWReg).
+
+%% Optimize the case that the old timestamp is newer than the given timestamp.
+%% Since it will never be integrated, no use in sending the state.
+%% I'm not sure how usefult this is...
+-spec delta_update(lwwreg_op(), term(), delta_lwwreg()) ->
+                    {ok, delta_lwwreg()}.
+delta_update({assign, _Value, TS}, _Actor, {_, OldTS}) when is_integer(TS), OldTS >= TS ->
+    {ok, {<<>>, TS}};
+
+delta_update(Op, Actor, LWWReg) ->
+    update(Op, Actor, LWWReg).
+
 make_micro_epoch() ->
     {Mega, Sec, Micro} = os:timestamp(),
     (Mega * 1000000 + Sec) * 1000000 + Micro.
 
-%% @doc Merge two `lwwreg()'s to a single `lwwreg()'. This is the Least Upper Bound
+%% @doc Merge two `delta_lwwreg()'s to a single `delta_lwwreg()'. This is the Least Upper Bound
 %% function described in the literature.
--spec merge(lwwreg(), lwwreg()) -> lwwreg().
+-spec merge(delta_lwwreg(), delta_lwwreg()) -> delta_lwwreg().
 merge({Val1, TS1}, {_Val2, TS2}) when TS1 > TS2 ->
     {Val1, TS1};
 merge({_Val1, TS1}, {Val2, TS2}) when TS2 > TS1 ->
@@ -115,20 +131,20 @@ merge(LWWReg1, LWWReg2) when LWWReg1 >= LWWReg2 ->
 merge(_LWWReg1, LWWReg2) ->
     LWWReg2.
 
-%% @doc Are two `lwwreg()'s structurally equal? This is not `value/1' equality.
+%% @doc Are two `delta_lwwreg()'s structurally equal? This is not `value/1' equality.
 %% Two registers might represent the value `armchair', and not be `equal/2'. Equality here is
 %% that both registers contain the same value and timestamp.
--spec equal(lwwreg(), lwwreg()) -> boolean().
+-spec equal(delta_lwwreg(), delta_lwwreg()) -> boolean().
 equal({Val, TS}, {Val, TS}) ->
     true;
 equal(_, _) ->
     false.
 
--spec stats(lwwreg()) -> [{atom(), number()}].
+-spec stats(delta_lwwreg()) -> [{atom(), number()}].
 stats(LWW) ->
     [{value_size, stat(value_size, LWW)}].
 
--spec stat(atom(), lwwreg()) -> number() | undefined.
+-spec stat(atom(), delta_lwwreg()) -> number() | undefined.
 stat(value_size, {Value,_}=_LWW) ->
     erlang:external_size(Value);
 stat(_, _) -> undefined.
@@ -137,13 +153,13 @@ stat(_, _) -> undefined.
 -define(TAG, ?DT_LWWREG_TAG).
 -define(V1_VERS, 1).
 
-%% @doc Encode an effecient binary representation of an `lwwreg()'
--spec to_binary(lwwreg()) -> binary().
+%% @doc Encode an effecient binary representation of an `delta_lwwreg()'
+-spec to_binary(delta_lwwreg()) -> binary().
 to_binary(LWWReg) ->
     <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(LWWReg))/binary>>.
 
-%% @doc Decode binary `lwwreg()'
--spec from_binary(binary()) -> lwwreg().
+%% @doc Decode binary `delta_lwwreg()'
+-spec from_binary(binary()) -> delta_lwwreg().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
     riak_dt:from_binary(Bin).
 
@@ -160,7 +176,7 @@ eqc_value_test_() ->
 generate() ->
     ?LET({Op, Actor}, {gen_op(), char()},
          begin
-             {ok, Lww} = riak_dt_lwwreg:update(Op, Actor, riak_dt_lwwreg:new()),
+             {ok, Lww} = riak_dt_delta_lwwreg:delta_update(Op, Actor, riak_dt_delta_lwwreg:new()),
              Lww
          end).
 
@@ -199,16 +215,17 @@ value_test() ->
 
 update_assign_test() ->
     LWW0 = new(),
-    {ok, LWW1} = update({assign, value1, 2}, actor1, LWW0),
-    {ok, LWW2} = update({assign, value0, 1}, actor1, LWW1),
-    ?assertEqual({value1, 2}, LWW2),
-    {ok, LWW3} = update({assign, value2, 3}, actor1, LWW2),
+    {ok, LWW1} = delta_update({assign, value1, 2}, actor1, LWW0),
+    {ok, LWW2} = delta_update({assign, value0, 1}, actor1, LWW1),
+    ?assertEqual({<<>>, 1}, LWW2),
+    ?assertEqual({value1, 2}, merge(LWW1,LWW2)),
+    {ok, LWW3} = delta_update({assign, value2, 3}, actor1, LWW2),
     ?assertEqual({value2, 3}, LWW3).
 
 update_assign_ts_test() ->
     LWW0 = new(),
-    {ok, LWW1} = update({assign, value0}, actr, LWW0),
-    {ok, LWW2} = update({assign, value1}, actr, LWW1),
+    {ok, LWW1} = delta_update({assign, value0}, actr, LWW0),
+    {ok, LWW2} = delta_update({assign, value1}, actr, LWW1),
     ?assertMatch({value1, _}, LWW2).
 
 merge_test() ->
@@ -229,22 +246,22 @@ equal_test() ->
 
 roundtrip_bin_test() ->
     LWW = new(),
-    {ok, LWW1} = update({assign, 2}, a1, LWW),
-    {ok, LWW2} = update({assign, 4}, a2, LWW1),
-    {ok, LWW3} = update({assign, 89}, a3, LWW2),
-    {ok, LWW4} = update({assign, <<"this is a binary">>}, a4, LWW3),
+    {ok, LWW1} = delta_update({assign, 2}, a1, LWW),
+    {ok, LWW2} = delta_update({assign, 4}, a2, LWW1),
+    {ok, LWW3} = delta_update({assign, 89}, a3, LWW2),
+    {ok, LWW4} = delta_update({assign, <<"this is a binary">>}, a4, LWW3),
     Bin = to_binary(LWW4),
     Decoded = from_binary(Bin),
     ?assert(equal(LWW4, Decoded)).
 
 query_test() ->
     LWW = new(),
-    {ok, LWW1} = update({assign, value, 100}, a1, LWW),
+    {ok, LWW1} = delta_update({assign, value, 100}, a1, LWW),
     ?assertEqual(100, value(timestamp, LWW1)).
 
 stat_test() ->
     LWW = new(),
-    {ok, LWW1} = update({assign, <<"abcd">>}, 1, LWW),
+    {ok, LWW1} = delta_update({assign, <<"abcd">>}, 1, LWW),
     ?assertEqual([{value_size, 11}], stats(LWW)),
     ?assertEqual([{value_size, 15}], stats(LWW1)),
     ?assertEqual(15, stat(value_size, LWW1)),

@@ -35,10 +35,10 @@
 %%
 %% @end
 
--module(riak_dt_gcounter).
+-module(riak_dt_delta_gcounter).
 -behaviour(riak_dt).
 -export([new/0, new/2, value/1, value/2, update/3, merge/2, equal/2, to_binary/1, from_binary/1, stats/1, stat/2]).
--export([update/4, parent_clock/2, get_deferred/1]).
+-export([delta_update/4, update/4, parent_clock/2, get_deferred/1]).
 
 %% EQC API
 -ifdef(EQC).
@@ -91,6 +91,20 @@ update({increment, Amount}, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
 update(Op, Actor, GCnt, _Ctx) ->
     update(Op, Actor, GCnt).
 
+%% @doc `increment' the entry in `GCnt' for `Actor' by 1 or `{increment, Amt}'.
+%% returns a delta on `gcounter()' or error if `Amt' is not a `pos_integer()'
+-spec delta_update(gcounter_op(), riak_dt:actor(), gcounter()) ->
+                    {ok, gcounter()}.
+delta_update(increment, Actor, GCnt) ->
+    {ok, delta_increment_by(1, Actor, GCnt)};
+delta_update({increment, Amount}, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
+    {ok, delta_increment_by(Amount, Actor, GCnt)}.
+
+-spec delta_update(gcounter_op(), riak_dt:actor(), gcounter(), riak_dt:context()) ->
+                    {ok, gcounter()}.
+delta_update(Op, Actor, GCnt, _Ctx) ->
+    delta_update(Op, Actor, GCnt).
+
 -spec parent_clock(riak_dt_vclock:vclock(), gcounter()) -> gcounter().
 parent_clock(_Clock, GCnt) ->
     GCnt.
@@ -116,6 +130,15 @@ equal(VA,VB) ->
 -spec increment_by(pos_integer(), term(), gcounter()) -> gcounter().
 increment_by(Amount, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
     orddict:update_counter(Actor, Amount, GCnt).
+
+%% @private peform the increment and returns the delta.
+-spec delta_increment_by(pos_integer(), term(), gcounter()) -> gcounter().
+delta_increment_by(Amount, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
+    case orddict:find(Actor, GCnt) of
+        {ok, Curr} -> orddict:store(Actor, Curr + Amount, orddict:new());
+        error -> orddict:store(Actor, Amount, orddict:new())
+    end.
+
 
 -spec stats(gcounter()) -> [{atom(), number()}].
 stats(GCnt) ->
@@ -189,17 +212,35 @@ value_test() ->
     ?assertEqual(15, value(GC1)),
     ?assertEqual(0, value(GC2)).
 
-update_increment_test() ->
+check_delta_update_test() ->
     GC0 = new(),
-    {ok, GC1} = update(increment, 1, GC0),
-    {ok, GC2} = update(increment, 2, GC1),
-    {ok, GC3} = update(increment, 1, GC2),
-    ?assertEqual([{1, 2}, {2, 1}], GC3).
+    {ok, GC1} = delta_update(increment, 1, GC0),
+    ?assertEqual([{1, 1}], GC1),
+    GC1Merged = merge(GC1, GC0),
+    ?assertEqual([{1, 1}], GC1Merged),
+    {ok, GC2} = delta_update(increment, 2, GC1Merged),
+    ?assertEqual([{2, 1}], GC2),
+    GC2Merged = merge(GC2, GC1),
+    ?assertEqual([{1, 1}, {2,1}], GC2Merged),
+    {ok, GC3} = delta_update(increment, 1, GC2Merged),
+    ?assertEqual([{1, 2}], GC3),
+    GC3Merged = merge(GC3, GC2),
+    ?assertEqual([{1, 2}, {2, 1}], GC3Merged).
 
-update_increment_by_test() ->
+delta_update_increment_test() ->
     GC0 = new(),
-    {ok, GC} = update({increment, 7}, 1, GC0),
-    ?assertEqual([{1, 7}], GC).
+    {ok, GC1} = delta_update(increment, 1, GC0),
+    GC1Merged = merge(GC1, GC0),
+    {ok, GC2} = delta_update(increment, 2, GC1Merged),
+    GC2Merged = merge(GC2, GC1),
+    {ok, GC3} = delta_update(increment, 1, GC2Merged),
+    GC3Merged = merge(GC3, GC2),
+    ?assertEqual([{1, 2}, {2, 1}], GC3Merged).
+
+delta_update_increment_by_test() ->
+    GC0 = new(),
+    {ok, GC} = delta_update({increment, 7}, 1, GC0),
+    ?assertEqual([{1, 7}], merge(GC0, GC)).
 
 merge_test() ->
     GC1 = [{<<"1">>, 1},
@@ -242,21 +283,26 @@ usage_test() ->
     GC1 = new(),
     GC2 = new(),
     ?assert(equal(GC1, GC2)),
-    {ok, GC1_1} = update({increment, 2}, a1, GC1),
-    {ok, GC2_1} = update(increment, a2, GC2),
-    GC3 = merge(GC1_1, GC2_1),
-    {ok, GC2_2} = update({increment, 3}, a3, GC2_1),
-    {ok, GC3_1} = update(increment, a4, GC3),
-    {ok, GC3_2} = update(increment, a1, GC3_1),
+    {ok, GC1_1} = delta_update({increment, 2}, a1, GC1),
+    GC1_1Merged = merge(GC1_1, GC1),
+    {ok, GC2_1} = delta_update(increment, a2, GC2),
+    GC2_1Merged = merge(GC2_1, GC2),
+    GC3 = merge(GC1_1Merged, GC2_1Merged),
+    {ok, GC2_2} = delta_update({increment, 3}, a3, GC2_1Merged),
+    GC2_2Merged = merge(GC2_2, GC2_1Merged),
+    {ok, GC3_1} = delta_update(increment, a4, GC3),
+    GC3_1Merged = merge(GC3_1, GC3),
+    {ok, GC3_2} = delta_update(increment, a1, GC3_1Merged),
+    GC3_2Merged = merge(GC3_2, GC3_1Merged),
     ?assertEqual([{a1, 3}, {a2, 1}, {a3, 3}, {a4, 1}],
-                 lists:sort(merge(GC3_2, GC2_2))).
+                 lists:sort(merge(GC3_2Merged, GC2_2Merged))).
 
 roundtrip_bin_test() ->
     GC = new(),
-    {ok, GC1} = update({increment, 2}, <<"a1">>, GC),
-    {ok, GC2} = update({increment, 4}, a2, GC1),
-    {ok, GC3} = update(increment, "a4", GC2),
-    {ok, GC4} = update({increment, 10000000000000000000000000000000000000000}, {complex, "actor", [<<"term">>, 2]}, GC3),
+    {ok, GC1} = delta_update({increment, 2}, <<"a1">>, GC),
+    {ok, GC2} = delta_update({increment, 4}, a2, GC1),
+    {ok, GC3} = delta_update(increment, "a4", GC2),
+    {ok, GC4} = delta_update({increment, 10000000000000000000000000000000000000000}, {complex, "actor", [<<"term">>, 2]}, merge(GC3, merge(GC2, merge(GC1, GC)))),
     Bin = to_binary(GC4),
     Decoded = from_binary(Bin),
     ?assert(equal(GC4, Decoded)).
@@ -266,8 +312,8 @@ lots_of_actors_test() ->
                              ActorLen = crypto:rand_uniform(1, 1000),
                              Actor = crypto:rand_bytes(ActorLen),
                              Cnt = crypto:rand_uniform(1, 10000),
-                             {ok, Cnt2} =riak_dt_gcounter:update({increment, Cnt}, Actor, GCnt),
-                             Cnt2
+                             {ok, Cnt2} = delta_update({increment, Cnt}, Actor, GCnt),
+                             merge(Cnt2, GCnt)
                      end,
                      new(),
                      lists:seq(1, 1000)),
@@ -277,11 +323,14 @@ lots_of_actors_test() ->
 
 stat_test() ->
     GC0 = new(),
-    {ok, GC1} = update(increment, 1, GC0),
-    {ok, GC2} = update(increment, 2, GC1),
-    {ok, GC3} = update(increment, 3, GC2),
-    ?assertEqual([{actor_count, 3}], stats(GC3)),
-    ?assertEqual(3, stat(actor_count, GC3)),
-    ?assertEqual(undefined, stat(field_count, GC3)).
+    {ok, GC1} = delta_update(increment, 1, GC0),
+    {ok, GC2} = delta_update(increment, 2, GC1),
+    {ok, GC3} = delta_update(increment, 3, GC2),
+    Merged = merge(GC3,merge(GC2,merge(GC1,GC0))),
+    ?assertEqual([{actor_count, 1}], stats(GC3)),
+    ?assertEqual(1, stat(actor_count, GC3)),
+    ?assertEqual([{actor_count, 3}], stats(Merged)),
+    ?assertEqual(3, stat(actor_count, Merged)),
+    ?assertEqual(undefined, stat(field_count, Merged)).
 
 -endif.

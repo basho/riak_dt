@@ -50,7 +50,7 @@
 -export([update/3, merge/2, equal/2]).
 -export([to_binary/1, from_binary/1]).
 -export([stats/1, stat/2]).
--export([parent_clock/2, update/4]).
+-export([parent_clock/2, get_deferred/1, update/4]).
 
 %% EQC API
 -ifdef(EQC).
@@ -84,6 +84,9 @@ new() ->
 -spec parent_clock(riak_dt_vclock:vclock(), emcntr()) -> emcntr().
 parent_clock(Clock, {_, Cntr}) ->
     {Clock, Cntr}.
+
+-spec get_deferred(emcntr()) -> [].
+get_deferred(_CRDT) -> [].
 
 %% @doc the current integer value of the counter
 -spec value(emcntr()) -> integer().
