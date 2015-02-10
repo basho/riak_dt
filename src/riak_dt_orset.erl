@@ -28,6 +28,8 @@
 -export([new/0, value/1, update/3, merge/2, equal/2,
          to_binary/1, from_binary/1, value/2, precondition_context/1, stats/1, stat/2]).
 -export([update/4, parent_clock/2]).
+-export([to_binary/2]).
+-export([to_version/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -189,12 +191,26 @@ stat(_, _) -> undefined.
 
 -spec to_binary(orset()) -> binary_orset().
 to_binary(ORSet) ->
-    %% @TODO something smarter
-    <<?TAG:8/integer, ?V1_VERS:8/integer, (term_to_binary(ORSet))/binary>>.
+    <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(ORSet))/binary>>.
 
+-spec to_binary(Vers :: pos_integer(), orset()) -> {ok, binary_orset()} | ?UNSUPPORTED_VERSION.
+to_binary(1, Set) ->
+    {ok, to_binary(Set)};
+to_binary(Vers, _Set) ->
+    ?UNSUPPORTED_VERSION(Vers).
+
+-spec from_binary(binary_orset()) -> {ok, orset()} | ?UNSUPPORTED_VERSION | ?INVALID_BINARY.
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
-    %% @TODO something smarter
-    binary_to_term(Bin).
+    riak_dt:from_binary(Bin);
+from_binary(<<?TAG:8/integer, Vers:8/integer, _Bin/binary>>) ->
+    ?UNSUPPORTED_VERSION(Vers);
+from_binary(_B) ->
+    ?INVALID_BINARY.
+
+-spec to_version(pos_integer(), orset()) -> orset().
+to_version(_Version, Set) ->
+    Set.
+
 
 %% Private
 add_elem(Elem,Token,ORDict) ->

@@ -112,7 +112,7 @@ prop_bin_roundtrip(Mod) ->
     ?FORALL(CRDT, Mod:generate(),
             begin
                 Bin = Mod:to_binary(CRDT),
-                CRDT2= Mod:from_binary(Bin),
+                {ok, CRDT2} = Mod:from_binary(Bin),
                 collect({range(byte_size(term_to_binary(CRDT))), range(byte_size(Bin))},
                         ?WHENFAIL(
                            begin
