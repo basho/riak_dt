@@ -430,7 +430,7 @@ propagate_remove({_, riak_dt_delta_map}, {{Dots, _S, Tombstone}, {Clock, Value0,
     case ?DICT:size(SubEntries) of
         0 ->
             {SubMergedDef, empty};
-        _ -> {SubMergedDef, {{Dots, _S, riak_dt_vclock:merge([SubMergedDef | Tombstone])}, {Clock, SubEntries, Deferred}}}
+        _ -> {SubMergedDef, {{Dots, _S, riak_dt_vclock:merge([SubMergedDef, Tombstone])}, {Clock, SubEntries, Deferred}}}
     end;
 
 
