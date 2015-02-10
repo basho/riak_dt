@@ -258,7 +258,7 @@ value({Clock, Values, _Deferred}) ->
     %%Selects the visible elements from the map
     lists:sort(?DICT:fold(
                   fun({Name, Type}, {{Dots, _, Tombstone}, CRDT0}, Acc) ->
-                          CRDT = parent_clock(Clock, CRDT0),
+                          CRDT = Type:parent_clock(Clock, CRDT0),
                           case Tombstone of
                               [] -> [{{Name, Type}, Type:value(CRDT)} | Acc];
                               _ ->
