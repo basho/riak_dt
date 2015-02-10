@@ -28,8 +28,10 @@
 -export([new/0, value/1, value/2, update/3, update/4]).
 -export([ merge/2, equal/2, from_binary/1]).
 -export([to_binary/1, stats/1, stat/2]).
+-export([to_binary/2]).
 -export([precondition_context/1]).
 -export([parent_clock/2]).
+-export([to_version/2]).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -172,13 +174,24 @@ stat(_, _) -> undefined.
 -define(TAG, ?DT_OD_FLAG_TAG).
 -define(VSN1, 1).
 
--spec from_binary(binary()) -> od_flag().
+-spec from_binary(binary()) -> {ok, od_flag()} | ?UNSUPPORTED_VERSION | ?INVALID_BINARY.
 from_binary(<<?TAG:8, ?VSN1:8, Bin/binary>>) ->
-    riak_dt:from_binary(Bin).
+    {ok, riak_dt:from_binary(Bin)};
+from_binary(<<?TAG:8, Vers:8, _Bin/binary>>) ->
+    ?UNSUPPORTED_VERSION(Vers);
+from_binary(_B) ->
+    ?INVALID_BINARY.
 
 -spec to_binary(od_flag()) -> binary().
 to_binary(Flag) ->
     <<?TAG:8, ?VSN1:8, (riak_dt:to_binary(Flag))/binary>>.
+
+-spec to_binary(Vers :: pos_integer(), od_flag()) -> {ok, binary()} | ?UNSUPPORTED_VERSION.
+to_binary(1, Flag) ->
+    B = to_binary(Flag),
+    {ok, B};
+to_binary(Vers, _F) ->
+    ?UNSUPPORTED_VERSION(Vers).
 
 %% @doc the `precondition_context' is an opaque piece of state that
 %% can be used for context operations to ensure only observed state is
@@ -188,6 +201,10 @@ to_binary(Flag) ->
 -spec precondition_context(od_flag()) -> riak_dt:context().
 precondition_context({Clock, _Flag, _Deferred}) ->
     Clock.
+
+-spec to_version(pos_integer(), od_flag()) -> od_flag().
+to_version(_Version, Flag) ->
+    Flag.
 
 %% ===================================================================
 %% EUnit tests
@@ -289,7 +306,9 @@ binary_roundtrip_test() ->
     {ok, F1} = update(enable, 1, F0),
     {ok, F2} = update(disable, 1, F1),
     {ok, F3} = update(enable, 2, F2),
-    ?assert(equal(from_binary(to_binary(F3)), F3)).
+    Bin = to_binary(F3),
+    {ok, F4} = from_binary(Bin),
+    ?assert(equal(F4, F3)).
 
 stat_test() ->
     {ok, F0} = update(enable, 1, new()),
