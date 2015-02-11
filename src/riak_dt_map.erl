@@ -356,7 +356,7 @@ get_entry({_Name, Type}=Field, Fields, Clock) ->
 apply_ops([], _Dot, Map, _Ctx) ->
     {ok, Map};
 apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock, Values, Deferred}, Ctx) ->
-    {_, CRDT} = get_entry(Field, Values, Clock),
+    {{_,_,CRDTDef}, CRDT} = get_entry(Field, Values, Clock),
     case Type:update(Op, Dot, CRDT, Ctx) of
         {ok, Updated0} ->
             Updated = Type:parent_clock(?FRESH_CLOCK, Updated0),
@@ -366,7 +366,15 @@ apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock, Values, Defer
                             error ->
                                 ?DICT:store(Field, {{[Dot], [],  ?FRESH_CLOCK}, Updated}, Values)
                         end,
-            apply_ops(Rest, Dot, {Clock, NewValues, Deferred}, Ctx);
+            %% Propagate previous remove operations that were tombstoned.
+            %% Code could be better.
+            NewValues1 = case length(CRDTDef) > 0 of
+                             true ->
+                                 {_, Out} = propagate_remove(Field, NewValues, Clock, Ctx),
+                                 Out;
+                             _ -> NewValues
+                         end,
+            apply_ops(Rest, Dot, {Clock, NewValues1, Deferred}, Ctx);
         Error ->
             Error
     end;
@@ -400,7 +408,7 @@ remove_field(Field, {Clock, Values, Deferred}, undefined) ->
             {ok, {Clock, ?DICT:erase(Field, Values), Deferred}}
     end;
 
-remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
+remove_field({_,Type}=Field, {Clock, Values, Deferred0}, Ctx) ->
     Deferred = defer_remove(Clock, Ctx, Field, Deferred0),
     {DefCtx, UpdtValues} = propagate_remove(Field, Values, Clock, Ctx),
     NewValues = case ?DICT:find(Field, UpdtValues) of
@@ -419,7 +427,11 @@ remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
                     {ok, CRDT} ->
                         ?DICT:store(Field, CRDT, UpdtValues);
                     error ->
-                        UpdtValues
+                        case riak_dt_vclock:descends(Clock, Ctx) of
+                            true -> UpdtValues;
+                            false ->
+                                ?DICT:store(Field, {{?FRESH_CLOCK, [], Ctx},Type:new()}, UpdtValues)
+                        end
                 end,
     {ok, {Clock, NewValues, Deferred}}.
 
@@ -451,6 +463,8 @@ ctx_rem_field({_, Type}, {{Dots, _S, Tombstone}, CRDT}, Ctx, MapClock) ->
 %% Remove fields that don't have deferred operations;
 %% Compute the removal tombstone for this field.
 -spec propagate_remove(field_name(), entries() | field_value(), riak_dt_vclock:vclock(), riak_dt:context()) -> {riak_dt_vclock:vclock(), entries() | empty}.
+propagate_remove(_Type, Entry, _MapClock, undefined)-> {[],Entry};
+
 propagate_remove({_, riak_dt_map}, {{Dots, _S, Tombstone}, {Clock, Value0, Deferred}}, MapClock, Ctx)->
     {SubMergedDef, SubEntries} =
     ?DICT:fold(fun(K, V, {UpdtClock, UpdtEntries}) ->
@@ -528,7 +542,11 @@ defer_remove(Clock, Ctx, Field, Deferred) ->
                                 Deferred)
     end.
 -spec merge(map(), map()) -> map().
-merge({LHSClock, LHSEntries, LHSDeferred}, {RHSClock, RHSEntries, RHSDeferred}) ->
+merge({LHSClock0, LHSEntries0, LHSDeferred0}, {RHSClock0, RHSEntries0, RHSDeferred0}) ->
+    %% Clear entries that do not use dots to identify updates
+    {LHSClock, LHSEntries, LHSDeferred} = apply_deferred(LHSClock0, LHSEntries0, RHSDeferred0),
+    {RHSClock, RHSEntries, RHSDeferred} = apply_deferred(RHSClock0, RHSEntries0, LHSDeferred0),
+
     Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
     Fields = lists:umerge(?DICT:fetch_keys(LHSEntries), ?DICT:fetch_keys(RHSEntries)),
     Entries = lists:foldl(fun({_Name, Type}=Field, Acc) ->
@@ -549,6 +567,8 @@ merge({LHSClock, LHSEntries, LHSDeferred}, {RHSClock, RHSEntries, RHSDeferred}) 
                           Fields),
     Deferred = merge_deferred(LHSDeferred, RHSDeferred),
     CRDT = apply_deferred(Clock, Entries, Deferred),
+    %% What should be done first: clear tombstones or apply deferred?
+    %% Can we remove this apply deferred?
     clear_tombstones(CRDT).
 
 -spec keep_dots(riak_dt_vclock:vclock(), riak_dt_vclock:vclock(), riak_dt_vclock:vclock(), riak_dt_vclock:vclock()) -> riak_dt_vclock:vclock().
@@ -656,7 +676,9 @@ pairwise_equals([{{Name, Type}, {{Dots1, S1, Tombstone1}, CRDT1}}|Rest1], [{{Nam
             pairwise_equals(Rest1, Rest2);
         _ ->
             false
-    end.
+    end;
+pairwise_equals(_, _) -> false.
+
 
 %% @doc an opaque context that can be passed to `update/4' to ensure
 %% that only seen fields are removed. If a field removal operation has
