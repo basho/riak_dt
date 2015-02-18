@@ -621,8 +621,8 @@ clear_tombstones_handle({_, riak_dt_map}=Field, {{Dots, _S, Tombstone}, {Clock, 
     TombstoneCovered = riak_dt_vclock:descends(MapClock, Tombstone),
     case ?DICT:size(FilteredEntries) == 0 of
         true when length(Tombstone) > 0 andalso TombstoneCovered  ->
-                % No childs, a tombstone was set (remove executed) and the clock dominates tombstone
-                NewMap;
+            % No childs, a tombstone was set (remove executed) and the clock dominates tombstone
+            NewMap;
         _ ->
             case TombstoneCovered of
                 true ->
@@ -656,9 +656,9 @@ clear_tombstones_handle(Field, {{Dots, _S, Tombstone}, CRDT}=Value, NewMap, MapC
 -spec equal(map(), map()) -> boolean().
 equal({Clock1, Values1, Deferred1}, {Clock2, Values2, Deferred2}) ->
     riak_dt_vclock:equal(Clock1, Clock2) andalso
-        Deferred1 == Deferred2 andalso
-        pairwise_equals(lists:sort(?DICT:to_list(Values1)),
-                        lists:sort(?DICT:to_list(Values2))).
+    Deferred1 == Deferred2 andalso
+    pairwise_equals(lists:sort(?DICT:to_list(Values1)),
+                    lists:sort(?DICT:to_list(Values2))).
 
 -spec pairwise_equals(entries() | [], entries() | []) -> boolean().
 pairwise_equals([], []) ->
@@ -733,9 +733,9 @@ to_binary(?V1_VERS, Map0) ->
 %% @private transpose a v1 map (orddicts) to a v2 (dicts)
 -spec to_v2({riak_dt_vclock:vclock(), orddict:orddict() | dict(),
              orddict:orddict() | dict()}) ->
-                   {riak_dt_vclock:vclock(), dict(), dict()}.
+    {riak_dt_vclock:vclock(), dict(), dict()}.
 to_v2({Clock, Fields0, Deferred0}) when is_list(Fields0),
-                                         is_list(Deferred0) ->
+                                        is_list(Deferred0) ->
     Fields = ?DICT:from_list(Fields0),
     Deferred = ?DICT:from_list(Deferred0),
     {Clock, Fields, Deferred};
@@ -745,9 +745,9 @@ to_v2(S) ->
 %% @private transpose a v2 map (dicts) to a v1 (orddicts)
 -spec to_v1({riak_dt_vclock:vclock(), orddict:orddict() | dict(),
              orddict:orddict() | dict()}) ->
-                   {riak_dt_vclock:vclock(), orddict:orddict(), orddict:orddict()}.
+    {riak_dt_vclock:vclock(), orddict:orddict(), orddict:orddict()}.
 to_v1({_Clock, Fields0, Deferred0}=S) when is_list(Fields0),
-                                            is_list(Deferred0) ->
+                                           is_list(Deferred0) ->
     S;
 to_v1({Clock, Fields0, Deferred0}) ->
     %% Must be dicts, there is no is_dict test though
@@ -974,8 +974,8 @@ clear_invisible_after_merge_set_2_test() ->
                          {update, [{update, ?FIELD, {update, [{update, ?FIELD_S, {add, Elem}}]}}]}
                  end,
     RemElemFromS = fun(Elem) ->
-                         {update, [{update, ?FIELD, {update, [{update, ?FIELD_S, {remove, Elem}}]}}]}
-                 end,
+                           {update, [{update, ?FIELD, {update, [{update, ?FIELD_S, {remove, Elem}}]}}]}
+                   end,
     InitialState = new(),
     {ok, {CtxA1,_,_}=StateA1} = update(AddElemToS(0), a, InitialState),
     {ok, {CtxB1,_,_}=StateB1} = update(RemElemFromS(0), b, InitialState, CtxA1),
@@ -1184,7 +1184,7 @@ size(Map) ->
     byte_size(term_to_binary(Map)) div 10.
 
 generate() ->
-        ?LET({Ops, Actors}, {non_empty(list(gen_op())), non_empty(list(bitstring(16*8)))},
+    ?LET({Ops, Actors}, {non_empty(list(gen_op())), non_empty(list(bitstring(16*8)))},
          lists:foldl(fun(Op, Map) ->
                              Actor = case length(Actors) of
                                          1 -> hd(Actors);
@@ -1215,12 +1215,12 @@ gen_field() ->
 
 gen_field(Size) ->
     {growingelements(['A', 'B', 'C', 'X', 'Y', 'Z']) %% Macro? Bigger?
-    , elements([
-                riak_dt_emcntr,
-                riak_dt_orswot,
-%%                riak_dt_lwwreg,
-                riak_dt_od_flag
-               ] ++ [?MODULE || Size > 0])}.
+     , elements([
+                 riak_dt_emcntr,
+                 riak_dt_orswot,
+                 %%                riak_dt_lwwreg,
+                 riak_dt_od_flag
+                ] ++ [?MODULE || Size > 0])}.
 
 gen_field_op({_Name, Type}, Size) ->
     Type:gen_op(Size).
