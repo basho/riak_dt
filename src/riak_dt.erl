@@ -25,6 +25,7 @@
 -export([to_binary/1, from_binary/1, dict_to_orddict/1]).
 -export_type([actor/0, dot/0, crdt/0, context/0]).
 
+-include("riak_dt.hrl").
 -include("riak_dt_tags.hrl").
 
 -type crdt() :: term().
@@ -82,6 +83,6 @@ from_binary(Binary) ->
 
 
 %% @private turns a dict into a sorted list of [{key, value}]
--spec dict_to_orddict(dict()) -> orddict:orddict().
+-spec dict_to_orddict(riak_dt_dict()) -> orddict:orddict().
 dict_to_orddict(Dict) ->
     lists:sort(dict:to_list(Dict)).

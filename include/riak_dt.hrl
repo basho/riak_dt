@@ -1,0 +1,7 @@
+-ifdef(namespaced_types).
+-type riak_dt_dict() :: dict:dict().
+-type riak_dt_set() :: sets:set().
+-else.
+-type riak_dt_dict() :: dict().
+-type riak_dt_set() :: set().
+-endif.
