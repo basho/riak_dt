@@ -10,3 +10,4 @@ data/*
 .qc/*
 .eqc-info
 current_counterexample.eqc
+.rebar/
