@@ -474,7 +474,7 @@ propagate_remove({_, riak_dt_map}, {{Dots, _S, Tombstone}, {Clock, Value0, Defer
     UncoveredDeferred = lists:filter(fun(DefOp) ->
                                              riak_dt_vclock:descends(Clock, DefOp)
                                      end, get_deferred(CRDT)),
-    Descends = riak_dt_vclock:descends(Ctx, MapClock),
+    Descends = riak_dt_vclock:descends(Ctx, Dots),
                                                 %Clear map if all entries are empty
     case ?DICT:size(SubEntries) of
         0 when length(UncoveredDeferred) == 0, Descends ->
