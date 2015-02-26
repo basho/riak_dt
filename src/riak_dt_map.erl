@@ -180,7 +180,7 @@
 -export([merge/2, equal/2, to_binary/1, from_binary/1]).
 -export([to_binary/2, from_binary/2]).
 -export([precondition_context/1, stats/1, stat/2]).
--export([parent_clock/2]).
+-export([parent_clock/2, get_deferred/1]).
 
 %% EQC API
 -ifdef(EQC).
@@ -247,6 +247,14 @@ new() ->
 -spec parent_clock(riak_dt_vclock:vclock(), map()) -> map().
 parent_clock(Clock, {_MapClock, Values, Deferred}) ->
     {Clock, Values, Deferred}.
+
+-spec get_deferred(map()) -> [riak_dt:context()].
+get_deferred({_, Entries, Deferred}) ->
+    ChildDeferred = dict:fold(fun({_,Type}, {_, CRDT}, Acc) ->
+                                      Type:get_deferred(CRDT)++Acc
+                              end, [], Entries),
+    MyDeferred = lists:map(fun({Key, _}) -> Key end, ?DICT:to_list(Deferred)),
+    ChildDeferred++MyDeferred.
 
 %% @doc get the current set of values for this Map
 -spec value(map()) -> values().
@@ -371,8 +379,21 @@ remove_field(Field, {Clock, Values, Deferred}, undefined) ->
             {ok, {Clock, dict:erase(Field, Values), Deferred}}
     end;
 %% Context removes
-remove_field(Field, {Clock, Values, Deferred0}, Ctx) ->
-    Deferred = defer_remove(Clock, Ctx, Field, Deferred0),
+remove_field({_, Type}=Field, {Clock, Values, Deferred0}, Ctx) ->
+    Deferred1 = defer_remove(Clock, Ctx, Field, Deferred0),
+    Deferred = case dict:find(Field, Values) of
+                   error -> Deferred1;
+                   {ok, {_, FoundCRDT}} ->
+                       ChildDeferredCtx = Type:get_deferred(FoundCRDT),
+                       lists:foldl(fun(ChildCtx, DefAcc) ->
+                                           dict:update(ChildCtx,
+                                                       fun(Fields) ->
+                                                               ordsets:add_element(Field, Fields)
+                                                       end,
+                                                       ordsets:add_element(Field, ordsets:new()),
+                                                       DefAcc)
+                                   end, Deferred1, ChildDeferredCtx)
+               end,
     NewValues = case ctx_rem_field(Field, Values, Ctx, Clock) of
                     empty ->
                         dict:erase(Field, Values);
