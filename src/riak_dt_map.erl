@@ -653,6 +653,223 @@ from_binary(?V2_VERS, <<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
 %% ===================================================================
 -ifdef(TEST).
 
+-define(FIELD, {'X', riak_dt_map}).
+-define(FIELD_Y, {'Y', riak_dt_map}).
+-define(FIELD_X, {'X', riak_dt_od_flag}).
+-define(FIELD_A, {'X.A', riak_dt_od_flag}).
+-define(FIELD_B, {'X.B', riak_dt_od_flag}).
+-define(FIELD_S, {'X.S', riak_dt_orswot}).
+
+-define(ENABLE_FLAG_A, {update, [{update, ?FIELD, {update, [{update, ?FIELD_A, enable}]}}]}).
+-define(ENABLE_FLAG_B, {update, [{update, ?FIELD, {update, [{update, ?FIELD_B, enable}]}}]}).
+-define(DISABLE_FLAG_A, {update, [{update, ?FIELD, {update, [{update, ?FIELD_A, disable}]}}]}).
+-define(DISABLE_FLAG_B, {update, [{update, ?FIELD, {update, [{update, ?FIELD_B, disable}]}}]}).
+
+-define(REMOVE_FIELD_X,{update, [{remove, ?FIELD}]}).
+-define(REMOVE_FIELD_XA, {update, [{update, ?FIELD, {update, [{remove, ?FIELD_A}]}}]}).
+-define(REMOVE_FIELD_XB, {update, [{update, ?FIELD, {update, [{remove, ?FIELD_B}]}}]}).
+
+-define(ENABLE_FLAG_XYA, {update, [{update, ?FIELD, {update, [{update, ?FIELD_Y, {update, [{update, ?FIELD_A, enable}]}}]}}]}).
+
+%% Issue 99 test case
+keep_deferred_test() ->
+    InitialState = new(),
+
+    %Update at node A
+    {ok, {CtxA1, _, _}=StateA1} = update({update, [{update, ?FIELD_X, enable}]}, a, InitialState),
+    %Update with the context of node A on node B generates a deferred.
+    {ok, {CtxB1, _, _}=StateB1} = update({update, [{update, ?FIELD_X, disable}]}, b, InitialState, CtxA1),
+    %Remove field in B is causal with the disable op - it removes the field and the deferred.
+    {ok, StateB2} = update({update, [{remove, ?FIELD_X}]}, b, StateB1, CtxB1),
+    StateAB = merge(StateA1,StateB2),
+    ?assertEqual([],value(StateAB)).
+
+%% Test that the field is preserved if a deferred arrives after a remove
+keep_multiple_deferred_test() ->
+    InitialState = new(),
+
+    %Update at node A
+    {ok, {CtxA1, _, _}=StateA1} = update({update, [{update, ?FIELD_X, enable}]}, a, InitialState),
+    %Update with the context of node A on node B generates a deferred.
+    {ok, {CtxB1, _, _}=StateB1} = update({update, [{update, ?FIELD_X, disable}]}, b, InitialState, CtxA1),
+    %Remove field in B is causal with the disable op - it removes the field and the deferred.
+    {ok, StateB2} = update({update, [{remove, ?FIELD_X}]}, b, StateB1, CtxB1),
+    {ok, StateB3} = update({update, [{update, ?FIELD_X, disable}]}, b, StateB2, [{c,1}]),
+    StateAB = merge(StateA1,StateB3),
+    ?assertEqual([{{'X',riak_dt_od_flag},false}],value(StateAB)).
+
+%% Concurrently enable the flag
+keep_deferred_with_concurrent_add_test() ->
+    InitialState = new(),
+
+    %Update at node A
+    {ok, {CtxA1, _, _}=StateA1} = update({update, [{update, ?FIELD_X, enable}]}, a, InitialState),
+    %Update with the context of node A on node B generates a deferred.
+    {ok, {_, _, _}=StateA2} = update({update, [{update, ?FIELD_X, enable}]}, a, StateA1, CtxA1),
+    {ok, {CtxB1, _, _}=StateB1} = update({update, [{update, ?FIELD_X, disable}]}, b, InitialState, CtxA1),
+    %Remove field in B is causal with the disable op - it removes the field and the deferred.
+    {ok, StateB2} = update({update, [{remove, ?FIELD_X}]}, b, StateB1, CtxB1),
+    StateAB = merge(StateA2,StateB2),
+    ?assertEqual([{{'X',riak_dt_od_flag},true}],value(StateAB)).
+
+%%  Remove using a context that does not descend from the object.
+%%  Remove concurrent with deferred delete --- preserve remove
+keep_deferred_context_test() ->
+    InitialState = new(),
+    {ok, {CtxA1, _, _}=StateA1} = update({update, [{update, ?FIELD_X, enable}]}, a, InitialState),
+    {ok, {_, _, _}=StateB1} = update({update, [{update, ?FIELD_X, disable}]}, b, InitialState, CtxA1),
+    {ok, StateB2} = update({update, [{remove, ?FIELD_X}]}, b, StateB1, CtxA1),
+    ?assertEqual([{{'X',riak_dt_od_flag},false}],value(StateB2)),
+    StateAB = merge(StateA1,StateB2),
+    ?assertEqual([{{'X',riak_dt_od_flag},false}],value(StateAB)).
+
+%% Remove a field that is a map with a deferred operation.
+%% Map should be removed in the end
+remove_subtree_test() ->
+    InitialState = new(),
+    {ok, {CtxA1,_,_}=StateA1} = update(?ENABLE_FLAG_A, a, InitialState),
+    {ok, {CtxB1,_,_}=StateB1} = update(?DISABLE_FLAG_A, b, InitialState, CtxA1),
+    {ok, StateB2} = update(?REMOVE_FIELD_X, b, StateB1, CtxB1),
+    StateAB = merge(StateA1,StateB2),
+    ?assertEqual([],value(StateAB)).
+
+%% Remove a field inside a map that has a deferred operation.
+remove_entry_in_subtree_test() ->
+    InitialState = new(),
+    {ok, {CtxA1,_,_}=StateA1} = update(?ENABLE_FLAG_A, a, InitialState),
+    {ok, {CtxB1,_,_}=StateB1} = update(?DISABLE_FLAG_A, b, InitialState, CtxA1),
+    {ok, StateB2} = update(?REMOVE_FIELD_XA, b, StateB1, CtxB1),
+    StateAB = merge(StateA1,StateB2),
+    ?assertEqual([{{'X',riak_dt_map},[]}],value(StateAB)).
+
+%% Remove a field X that is a map that has a entry with a deferred
+%% and a flag that is enable after remove X but before receiving the deferred.
+%% The idea is to test that the flag is preserved after clearing the tombstones
+remove_entry_in_subtree_2_test() ->
+    InitialState = new(),
+    {ok, {CtxA1,_,_}=StateA1} = update(?ENABLE_FLAG_A, a, InitialState),
+    {ok, {CtxB1,_,_}=StateB1} = update(?DISABLE_FLAG_A, b, InitialState, CtxA1),
+    {ok, {CtxB2,_,_}=StateB2} = update(?REMOVE_FIELD_X, b, StateB1, CtxB1),
+    {ok, StateB3} = update(?ENABLE_FLAG_B, b, StateB2, CtxB2),
+    StateAB = merge(StateA1,StateB3),
+    ?assertEqual([{{'X',riak_dt_map}, [{{'X.B',riak_dt_od_flag},true}]}],value(StateAB)).
+
+%% The same as before, but the enable flag is a remote operation.
+remove_entry_in_subtree_3_test() ->
+    InitialState = new(),
+    {ok, {CtxA1,_,_}=StateA1} = update(?ENABLE_FLAG_A, a, InitialState),
+    {ok, {CtxB1,_,_}=StateB1} = update(?DISABLE_FLAG_A, b, InitialState, CtxA1),
+    {ok, {_,_,_}=StateB2} = update(?REMOVE_FIELD_X, b, StateB1, CtxB1),
+    {ok, StateA2} = update(?ENABLE_FLAG_B, a, StateA1, CtxA1),
+    StateAB = merge(StateA2,StateB2),
+    ?assertEqual([{{'X',riak_dt_map}, [{{'X.B',riak_dt_od_flag},true}]}],value(StateAB)).
+
+two_deferred_entries_test() ->
+    InitialState = new(),
+    {ok, {CtxA1,_,_}=StateA1} = update(?ENABLE_FLAG_A, a, InitialState),
+    {ok, {CtxC1,_,_}=StateC1} = update(?ENABLE_FLAG_B, c, InitialState),
+    {ok, {_CtxB1,_,_}=StateB1} = update(?DISABLE_FLAG_A, b, InitialState, CtxA1),
+    {ok, {CtxB2,_,_}=StateB2} = update(?DISABLE_FLAG_B, b, StateB1, CtxC1),
+    {ok, {CtxB3,_,_}=StateB3} = update(?REMOVE_FIELD_XA, b, StateB2, CtxB2),
+    {ok, {_CtxB4,_,_}=StateB4} = update(?REMOVE_FIELD_XB, b, StateB3, CtxB3),
+    {_,_Map,_}=StateAB = merge(StateA1,StateB4),
+
+    %%Check that the element is there
+    %%-- Not sure this still applies
+    %{ok, {{_,_,_},{_,X,_}}} = ?DICT:find(?FIELD,Map),
+    %?assertEqual(true,?DICT:is_key(?FIELD_B,X)),
+    StateABC = merge(StateAB,StateC1),
+    ?assertEqual([{{'X',riak_dt_map},[]}],value(StateABC)).
+
+two_deferred_entries_2_test() ->
+    InitialState = new(),
+    {ok, {CtxA1,_,_}=StateA1} = update(?ENABLE_FLAG_A, a, InitialState),
+    {ok, {CtxC1,_,_}=StateC1} = update(?ENABLE_FLAG_B, c, InitialState),
+    {ok, {CtxB1,_,_}=StateB1} = update(?DISABLE_FLAG_A, b, InitialState, CtxA1),
+    {ok, {_CtxB2,_,_}=StateB2} = update(?REMOVE_FIELD_XA, b, StateB1, CtxB1),
+    {ok, {CtxB3,_,_}=StateB3} = update(?DISABLE_FLAG_B, b, StateB2, CtxC1),
+    StateAB = merge(StateA1,StateB3),
+    {ok, {_,_,_}=StateAB1} = update(?REMOVE_FIELD_XB, b, StateAB, CtxB3),
+    StateABC = merge(StateAB1,StateC1),
+    ?assertEqual([{{'X',riak_dt_map},[]}],value(StateABC)).
+
+clear_invisible_after_merge_test() ->
+    InitialState = new(),
+    {ok, {CtxA1,_,_}=StateA1} = update(?ENABLE_FLAG_A, a, InitialState),
+    {ok, {_,_,_}=StateA2} = update(?ENABLE_FLAG_A, a, StateA1),
+    {ok, {CtxB1,_,_}=StateB1} = update(?DISABLE_FLAG_A, b, InitialState, CtxA1),
+    {ok, {CtxB2,_,_}=StateB2} = update(?ENABLE_FLAG_B, b, StateB1, CtxB1),
+    {ok, {_,_,_}=StateB3} = update(?REMOVE_FIELD_X, b, StateB2, CtxB2),
+    StateAB1 = merge(StateB3,StateA1),
+    StateAB2 = merge(StateB3,StateA2),
+    ?assertEqual([], value(StateAB1)),
+    ?assertEqual([{{'X',riak_dt_map},[{{'X.A',riak_dt_od_flag},true}]}], value(StateAB2)).
+
+clear_invisible_after_merge_2_test() ->
+    InitialState = new(),
+    {ok, {CtxA1,_,_}=_StateA1} = update(?ENABLE_FLAG_A, a, InitialState),
+    {ok, {_CtxB1,_,_}=StateB1} = update(?DISABLE_FLAG_B, b, InitialState,CtxA1),
+    {ok, {CtxB2,_Map,_}=StateB2} = update(?ENABLE_FLAG_XYA, b, StateB1),
+
+    %%Check that the element is there
+    %%%%-- Not sure this still applies
+    %{ok, {{_,_,_},{_,X,_}}} = ?DICT:find(?FIELD,Map),
+    %{ok, {{_,_,_},{_,Y,_}}} = ?DICT:find(?FIELD_Y, X),
+    %?assertEqual(true,?DICT:is_key(?FIELD_A,Y)),
+    {ok, {_,_,_}=StateB3} = update(?REMOVE_FIELD_X, b, StateB2, CtxB2),
+    ?assertEqual([], value(StateB3)).
+
+clear_invisible_after_merge_set_test() ->
+    AddElemToS = fun(Elem) ->
+                         {update, [{update, ?FIELD, {update, [{update, ?FIELD_S, {add, Elem}}]}}]}
+                 end,
+    InitialState = new(),
+    {ok, {CtxA1,_,_}=StateA1} = update(?ENABLE_FLAG_A, a, InitialState),
+    {ok, {CtxB1,_,_}=StateB1} = update(?DISABLE_FLAG_A, b, InitialState, CtxA1),
+    {ok, {CtxB2,_,_}=StateB2} = update(AddElemToS(0), b, StateB1, CtxB1),
+    {ok, {CtxB3,_,_}=StateB3} = update(?REMOVE_FIELD_X, b, StateB2, CtxB2),
+    {ok, {_,_,_}=StateB4} = update(AddElemToS(1), b, StateB3, CtxB3),
+    StateAB = merge(StateA1,StateB4),
+    ?assertEqual([{{'X',riak_dt_map}, [{{'X.S',riak_dt_orswot},[1]}]}], value(StateAB)).
+
+clear_invisible_after_merge_set_2_test() ->
+    AddElemToS = fun(Elem) ->
+                         {update, [{update, ?FIELD, {update, [{update, ?FIELD_S, {add, Elem}}]}}]}
+                 end,
+    RemElemFromS = fun(Elem) ->
+                           {update, [{update, ?FIELD, {update, [{update, ?FIELD_S, {remove, Elem}}]}}]}
+                   end,
+    InitialState = new(),
+    {ok, {CtxA1,_,_}=StateA1} = update(AddElemToS(0), a, InitialState),
+    {ok, {CtxB1,_,_}=StateB1} = update(RemElemFromS(0), b, InitialState, CtxA1),
+    {ok, {CtxB2,_,_}=StateB2} = update(AddElemToS(1), b, StateB1, CtxB1),
+    {ok, {CtxB3,_,_}=StateB3} = update(?REMOVE_FIELD_X, b, StateB2, CtxB2),
+    {ok, {_,_,_}=StateB4} = update(AddElemToS(2), b, StateB3, CtxB3),
+    StateAB = merge(StateA1,StateB4),
+    ?assertEqual([{{'X',riak_dt_map}, [{{'X.S',riak_dt_orswot},[2]}]}], value(StateAB)).
+
+transaction_1_test() ->
+    Updt1 = {update, [{update, ?FIELD, {update, [{update, ?FIELD_A, enable}, {update, ?FIELD_B, enable}]}}]},
+    InitialState = new(),
+    {ok, {CtxA1,_,_}=StateA1} = update(Updt1, a, InitialState),
+    ?assertEqual([{{'X',riak_dt_map},[{{'X.A',riak_dt_od_flag},true},
+                                      {{'X.B',riak_dt_od_flag},true}]}], value(StateA1)),
+    {ok, StateB1} = update(?REMOVE_FIELD_X, b, InitialState, CtxA1),
+    StateAB = merge(StateA1,StateB1),
+    ?assertEqual([], value(StateAB)).
+
+transaction_2_test() ->
+    Updt1 = {update, [{update, ?FIELD, {update, [{update, ?FIELD_A, enable}, {update, ?FIELD_B, enable}]}}]},
+    InitialState = new(),
+    {ok, {CtxA1,_,_}=StateA1} = update(Updt1, a, InitialState),
+    {ok, StateB1} = update(?REMOVE_FIELD_XA, b, InitialState, CtxA1),
+    StateAB = merge(StateA1,StateB1),
+    ?assertEqual([{{'X',riak_dt_map},[{{'X.B',riak_dt_od_flag},true}]}], value(StateAB)),
+    {ok, StateA2} = update(?ENABLE_FLAG_A, a, StateA1),
+    StateA2B = merge(StateA2,StateB1),
+    ?assertEqual([{{'X',riak_dt_map},[{{'X.A',riak_dt_od_flag},true},
+                                      {{'X.B',riak_dt_od_flag},true}]}], value(StateA2B)).
+
 %% This fails on previous version of riak_dt_map
 assoc_test() ->
     Field = {'X', riak_dt_orswot},
@@ -875,3 +1092,8 @@ gen_field_op({_Name, Type}, Size) ->
 -endif.
 
 -endif.
+
+
+
+
+
