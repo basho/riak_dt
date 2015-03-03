@@ -39,6 +39,9 @@
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) ->
                               io:format(user, Str, Args) end, P)).
+
+-define(ACTOR(Nat), list_to_binary("actor" ++ integer_to_list(Nat))).
+
 %% @doc eunit runner
 eqc_test_() ->
     {timeout, 200, ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(100, ?QC_OUT(prop_merge()))))}.
@@ -70,8 +73,7 @@ create_replica_pre(#state{replicas=Replicas}) ->
 
 %% @doc create_replica_arge - Generate a replica
 create_replica_args(_S) ->
-    %% don't waste time shrinking actor id binaries
-    [noshrink(binary(8))].
+    [?LET(ID, nat(), ?ACTOR(ID))].
 
 %% @doc create_replica_pre - Don't duplicate replicas
 -spec create_replica_pre(S :: eqc_statem:symbolic_state(),

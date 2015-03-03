@@ -233,7 +233,12 @@ riak_dt_od_flag:od_flag_op() | riak_dt_map:map_op() | riak_dt_delta_map:map_op()
 -type dict(_A, _B) :: dict().
 
 -define(FRESH_CLOCK, riak_dt_vclock:fresh()).
+
+-ifdef(EQC).
+-define(DICT, orddict).
+-else.
 -define(DICT, dict).
+-endif.
 
 %% @doc Create a new, empty Map.
 -spec new() -> delta_map().
@@ -520,19 +525,18 @@ delta_apply_ops(Ops, Dot, {Clock0, _, _}=CRDT, Delta, undefined) ->
     delta_apply_ops(Ops, Dot, CRDT, Delta, Clock0);
 
 delta_apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock0, Values, Deferred}, {DClock, DValues, DDef}, Ctx) ->
-    {_, CRDT} = get_entry(Field, DValues, Clock0),
+    {_, CRDT} = get_entry(Field, Values, Clock0),
     case Type:delta_update(Op, Dot, CRDT, Ctx) of
-        {ok, Updated0} ->
-            Updated = Type:parent_clock(?FRESH_CLOCK, Updated0),
-            NewDValues = case ?DICT:find(Field,DValues) of
-                             {ok, {{Dots, Seen, _}, _}} ->
+        {ok, Delta} ->
+            NewDValues = case ?DICT:find(Field, DValues) of
+                             {ok, {{Dots, Seen, _}, Delta0}} ->
                                  ?DICT:store(Field, {
                                                {ordsets:add_element(Dot, Dots),
                                                 ordsets:add_element(Dot, Seen),
                                                 DDef
-                                               }, Updated}, DValues );
+                                               }, Type:merge(Delta, Delta0)}, DValues );
                              error ->
-                                 ?DICT:store(Field, {{[Dot], [Dot], ?FRESH_CLOCK}, Updated}, DValues)
+                                 ?DICT:store(Field, {{[Dot], [Dot], ?FRESH_CLOCK}, Delta}, DValues)
                          end,
             delta_apply_ops(Rest, Dot, {Clock0, Values, Deferred}, {DClock, NewDValues, DDef}, Ctx);
         Error ->
@@ -789,8 +793,10 @@ get_tombstone(_, _) -> [].
 get_entry({_Name, Type}=Field, Fields, Clock) ->
     {{Dots, _S, Tombstone}, CRDT} = case ?DICT:find(Field, Fields) of
                                         {ok, Entry} ->
+                                            io:format("found entry ~p~n", [Entry]),
                                             Entry;
                                         error ->
+                                            io:format("no entry of ~p in ~p~n", [Field, Fields]),
                                             {{[], [], ?FRESH_CLOCK}, Type:new()}
                                     end,
     {{Dots, _S, Tombstone}, Type:parent_clock(Clock, CRDT)}.
