@@ -122,7 +122,6 @@ value(_, Cntr) ->
 update(Op, {Actor, Evt}=Dot, {Clock, PNCnt, Def}) when is_tuple(Dot) ->
     Clock2 = riak_dt_vclock:merge([[Dot], Clock]),
     Entry = orddict:find(Actor, PNCnt),
-    io:format("entry is ~p from ~p~n", [Entry, PNCnt]),
     {Inc, Dec} = op(Op, Entry),
     {ok, {Clock2, orddict:store(Actor, {Evt, Inc, Dec}, PNCnt), Def}}.
 
@@ -137,7 +136,6 @@ delta_update(Op, Dot, Cntr, _Ctx) ->
    delta_update(Op, Dot, Cntr).
 
 delta_update(Op, Dot, Cntr0) ->
-    io:format("called with ~p ~p ~p~n", [Op, Dot, Cntr0]),
     {ok, {_Clock, Dots, _}} = update(Op, Dot, Cntr0),
     {Actor, _Evt} = Dot,
     {ok, {riak_dt_vclock:fresh(), %% No clock
@@ -190,7 +188,6 @@ merge({ClockA, CntA, DefA}, {ClockB, CntB, DefB}) ->
 strip_deltas(Clock, Entries, Deltas) ->
     ordsets:fold(fun({Actor, {Event, Inc, Dec}}=Delta, {C, E, D}) ->
                          Counter = riak_dt_vclock:get_counter(Actor, C),
-                         io:format("actor count ~p~n", [Counter]),
                          case (Event - Counter) of
                              N when N < 2 orelse Counter == 0 ->
                                  %% no gap delta, or no current

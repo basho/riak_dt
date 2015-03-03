@@ -793,10 +793,8 @@ get_tombstone(_, _) -> [].
 get_entry({_Name, Type}=Field, Fields, Clock) ->
     {{Dots, _S, Tombstone}, CRDT} = case ?DICT:find(Field, Fields) of
                                         {ok, Entry} ->
-                                            io:format("found entry ~p~n", [Entry]),
                                             Entry;
                                         error ->
-                                            io:format("no entry of ~p in ~p~n", [Field, Fields]),
                                             {{[], [], ?FRESH_CLOCK}, Type:new()}
                                     end,
     {{Dots, _S, Tombstone}, Type:parent_clock(Clock, CRDT)}.
