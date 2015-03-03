@@ -50,6 +50,8 @@
                   set=?SET:new()}
        ).
 
+-define(ACTOR(Nat), list_to_binary("actor" ++ integer_to_list(Nat))).
+
 eqc_test_() ->
     {timeout, 60, ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(50, ?QC_OUT(prop_merge()))))}.
 
@@ -71,9 +73,7 @@ create_replica_pre(#state{replicas=Replicas}) ->
 
 %% @doc create_replica_command - Command generator
 create_replica_args(_S) ->
-    %% Don't waste time shrinking the replicas ID binaries, they 8
-    %% byte binaris as that is riak-esque.
-    [noshrink(binary(8))].
+    [?LET(ID, nat(), ?ACTOR(ID))].
 
 %% @doc create_replica_pre - don't create a replica that already
 %% exists
