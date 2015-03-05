@@ -188,7 +188,8 @@ delta_update({remove, Elem}, _Actor, ORSet) ->
 
 delta_update({remove_all, Elems}, _Actor, ORSet0) ->
     ORSet = lists:foldl(fun(Elem , ORSetAcc) ->
-                                delta_remove_elem(Elem, ORSet0, ORSetAcc)
+                                {ok, ORSetAcc2} = delta_remove_elem(Elem, ORSet0, ORSetAcc),
+                                ORSetAcc2
                         end, new(), Elems),
     {ok, ORSet};
 
