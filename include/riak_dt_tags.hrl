@@ -35,3 +35,9 @@
 -define(DT_MAP_TAG, 77).
 
 %% Other
+
+
+%% Error macros
+-define(UNSUPPORTED_VERSION(Vers), {error, unsupported_version, Vers}).
+-define(INVALID_BINARY, {error, invalid_binary}).
+-define(UNSUPPORTED_VERSION, {error, unsupported_version, Vers :: pos_integer()}).

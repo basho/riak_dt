@@ -27,6 +27,7 @@
 -export([update/3, update/4, merge/2]).
 -export([delta_update/3, delta_update/4]).
 -export([precondition_context/1, parent_clock/2, get_deferred/1]).
+-export([to_binary/1, to_binary/2, from_binary/1]).
 
 
 -opaque delta_orswot() :: {riak_dt_vclock:vclock(), entries(), seen(), deferred()}.
@@ -202,7 +203,16 @@ delta_update({add_all, Elems}, Actor, {Clock0, _Entries, _Seen, _Deferred}) ->
                                      {ok, Delta} = delta_add_elem(Elem, Dot, ORSetAcc),
                                      {NewClock, Delta}
                              end, {Clock0, new()}, Elems),
+    {ok, ORSet};
+delta_update({update, Ops}, ActorOrDot, ORSet0) ->
+    ORSet = lists:foldl(fun(Op, Set) ->
+                                {ok, NewSet} = delta_update(Op, ActorOrDot, ORSet0),
+                                merge(Set, NewSet)
+                        end,
+                        new(),
+                        Ops),
     {ok, ORSet}.
+
 
 delta_update({add, Elem}, ActorOrDot, {Clock, _Entries, _Seen, _Deferred}, _Ctx) ->
     {Dot, _} = update_clock(ActorOrDot, Clock),
@@ -224,7 +234,8 @@ delta_update({remove, Elem}, _Actor, ORSet, Ctx) ->
 
 delta_update({remove_all, Elems}, _Actor, ORSet0, Ctx) ->
     ORSet = lists:foldl(fun(Elem , ORSetAcc) ->
-                                delta_remove_elem(Elem, ORSet0, ORSetAcc, Ctx)
+                                {ok, ORSetAcc2} = delta_remove_elem(Elem, ORSet0, ORSetAcc, Ctx),
+                                ORSetAcc2
                         end, new(), Elems),
     {ok, ORSet};
 
@@ -408,6 +419,72 @@ update_clock(Actor, Clock) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
     Dot = {Actor, riak_dt_vclock:get_counter(Actor, NewClock)},
     {Dot, NewClock}.
+
+
+
+-include("riak_dt_tags.hrl").
+-define(TAG, ?DT_ORSWOT_TAG).
+-define(V1_VERS, 1).
+-define(V2_VERS, 2).
+
+%% @doc returns a binary representation of the provided
+%% `orswot()'. The resulting binary is tagged and versioned for ease
+%% of future upgrade. Calling `from_binary/1' with the result of this
+%% function will return the original set. Use the application env var
+%% `binary_compression' to turn t2b compression on (`true') and off
+%% (`false')
+%%
+%% @see `from_binary/1'
+to_binary(S) ->
+    {ok, B} = to_binary(?V2_VERS, S),
+    B.
+
+%% @private encode v1 sets as v2, and vice versa. The first argument
+%% is the target binary type.
+to_binary(?V1_VERS, S0) ->
+    S = to_v1(S0),
+    {ok, <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(S))/binary>>};
+to_binary(?V2_VERS, S0) ->
+    S = to_v2(S0),
+    {ok, <<?TAG:8/integer, ?V2_VERS:8/integer, (riak_dt:to_binary(S))/binary>>};
+to_binary(Vers, _S0) ->
+    ?UNSUPPORTED_VERSION(Vers).
+
+%% @private transpose a v1 orswot (orddicts) to a v2 (dicts)
+to_v2({Clock, Entries0, Deferred0}) when is_list(Entries0),
+                                         is_list(Deferred0) ->
+    %% Turn v1 set into a v2 set
+    Entries = ?DICT:from_list(Entries0),
+    Deferred = ?DICT:from_list(Deferred0),
+    {Clock, Entries, Deferred};
+to_v2(S) ->
+    S.
+
+%% @private transpose a v2 orswot (dicts) to a v1 (orddicts)
+to_v1({_Clock, Entries0, Deferred0}=S) when is_list(Entries0),
+                                            is_list(Deferred0) ->
+    S;
+to_v1({Clock, Entries0, Deferred0}) ->
+    %% Must be dicts, there is no is_dict test though
+    %% should we use error handling as logic here??
+    Entries = riak_dt:dict_to_orddict(Entries0),
+    Deferred = riak_dt:dict_to_orddict(Deferred0),
+    {Clock, Entries, Deferred}.
+
+%% @doc When the argument is a `binary_orswot()' produced by
+%% `to_binary/1' will return the original `orswot()'.
+%%
+%% @see `to_binary/1'
+from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
+    S = riak_dt:from_binary(B),
+    %% Now upgrade the structure to dict from orddict
+    {ok, to_v2(S)};
+from_binary(<<?TAG:8/integer, ?V2_VERS:8/integer, B/binary>>) ->
+    {ok, riak_dt:from_binary(B)};
+from_binary(<<?TAG:8/integer, Vers:8/integer, _B/binary>>) ->
+    ?UNSUPPORTED_VERSION(Vers);
+from_binary(_B) ->
+    ?INVALID_BINARY.
 
 %% ===================================================================
 %% EUnit tests
