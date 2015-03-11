@@ -178,10 +178,11 @@ apply_ops([Op | Rest], ActorOrDot, ORSet) ->
 
 -spec delta_update(orswot_op(), actor() | dot(), delta_orswot(), riak_dt:context()) ->
     {ok, delta_orswot()} | {error, not_implemented}.
-delta_update({add, Elem}, Actor, {Clock, _Entries, _Seen, _Def}) ->
+delta_update({add, Elem}, Actor, {Clock, _Entries, _Seen, _Def}=ORSet) ->
     {Dot, _NewClock} = update_clock(Actor, Clock),
-    Delta = new(),
-    delta_add_elem(Elem, Dot, Delta);
+    {ok, Delta} = delta_add_elem(Elem, Dot, new()),
+    {ok, Update} = add_elem(Dot, ORSet, Elem),
+    {ok, {Update, Delta}};
 
 delta_update({remove, Elem}, _Actor, ORSet) ->
     delta_remove_elem(Elem,ORSet, new());
@@ -198,13 +199,14 @@ delta_update({remove_all, Elems}, _Actor, ORSet0) ->
 delta_update({add_all, _Elems}, Actor, {_Clock0, _Entries, _Seen, _Deferred}) when is_tuple(Actor)->
     {error, not_implemented};
 
-delta_update({add_all, Elems}, Actor, {Clock0, _Entries, _Seen, _Deferred}) ->
-    {_, ORSet} = lists:foldl(fun(Elem , {Clock, ORSetAcc}) ->
+delta_update({add_all, Elems}=Op, Actor, {Clock0, _Entries, _Seen, _Deferred}=Obj) ->
+    {_, DeltaORSet} = lists:foldl(fun(Elem , {Clock, ORSetAcc}) ->
                                      {Dot, NewClock} = update_clock(Actor, Clock),
                                      {ok, Delta} = delta_add_elem(Elem, Dot, ORSetAcc),
                                      {NewClock, Delta}
                              end, {Clock0, new()}, Elems),
-    {ok, ORSet};
+    {ok, ORSet} = update(Op, Actor,Obj),
+    {ok, {ORSet,DeltaORSet}};
 delta_update({update, Ops}, ActorOrDot, ORSet0) ->
     ORSet = lists:foldl(fun(Op, Set) ->
                                 {ok, NewSet} = delta_update(Op, ActorOrDot, ORSet0),
@@ -215,20 +217,24 @@ delta_update({update, Ops}, ActorOrDot, ORSet0) ->
     {ok, ORSet}.
 
 
-delta_update({add, Elem}, ActorOrDot, {Clock, _Entries, _Seen, _Deferred}, _Ctx) ->
+delta_update({add, Elem}, ActorOrDot, {Clock, _Entries, _Seen, _Deferred}=ORSet, _Ctx) ->
     {Dot, _} = update_clock(ActorOrDot, Clock),
-    delta_add_elem(Elem, Dot, new());
+    {ok, Delta} = delta_add_elem(Elem, Dot, new()),
+    {ok, Update} = add_elem(Dot, ORSet, Elem),
+    {ok, {Update, Delta}};
+
 
 delta_update({add_all, _Elems}, Actor, {_Clock0, _Entries, _Seen, _Deferred}, _Ctx) when is_tuple(Actor) ->
     {error, not_implemented};
 
-delta_update({add_all, Elems}, ActorOrDot, {Clock0, _Entries, _Seen, _Deferred}, _Ctx) ->
-    {_, ORSet} = lists:foldl(fun(Elem , {Clock, ORSetAcc}) ->
+delta_update({add_all, Elems}=Op, ActorOrDot, {Clock0, _Entries, _Seen, _Deferred}=Obj, _Ctx) ->
+    {_, DeltaORSet} = lists:foldl(fun(Elem , {Clock, ORSetAcc}) ->
                                      {Dot, NewClock} = update_clock(ActorOrDot, Clock),
                                      {ok, Delta} = delta_add_elem(Elem, Dot, ORSetAcc),
                                      {NewClock,Delta}
                              end, {Clock0, new()}, Elems),
-    {ok, ORSet};
+    {ok, ORSet} = update(Op, ActorOrDot,Obj),
+    {ok, {ORSet, DeltaORSet}};
 
 delta_update({remove, Elem}, _Actor, ORSet, Ctx) ->
     delta_remove_elem(Elem, ORSet, new(), Ctx);
