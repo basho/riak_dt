@@ -1,4 +1,3 @@
-%% -*- coding: utf-8 -*-
 %% -------------------------------------------------------------------
 %%
 %% riak_dt_orswot: Tombstone-less, replicated, state based observe remove set
@@ -44,20 +43,19 @@
 %%
 %% Essentially we've made a dotted version vector.
 %%
-%% @see riak_dt_multi
-%% @see riak_dt_vclock
+%% @see riak_dt_multi, riak_dt_vclock
 %%
-%% @reference Marc Shapiro, Nuno Preguiça, Carlos Baquero, Marek
+%% @reference Marc Shapiro, Nuno Preguiça, Carlos Baquero, Marek
 %% Zawirski (2011) A comprehensive study of Convergent and Commutative
-%% Replicated Data Types. [http://hal.upmc.fr/inria-00555588/]
+%% Replicated Data Types. http://hal.upmc.fr/inria-00555588/
 %%
 %% @reference Annette Bieniusa, Marek Zawirski, Nuno Preguiça, Marc
 %% Shapiro, Carlos Baquero, Valter Balegas, Sérgio Duarte (2012) An
 %% Optimized Conﬂict-free Replicated Set
-%% [http://arxiv.org/abs/1210.3368]
+%% http://arxiv.org/abs/1210.3368
 %%
 %% @reference Nuno Preguiça, Carlos Baquero, Paulo Sérgio Almeida,
-%% Victor Fonte, Ricardo Gonçalves [http://arxiv.org/abs/1011.5808]
+%% Victor Fonte, Ricardo Gonçalves http://arxiv.org/abs/1011.5808
 %%
 %% @end
 -module(riak_dt_orswot).
@@ -80,8 +78,10 @@
 -export([new/0, value/1, value/2]).
 -export([update/3, update/4, merge/2, equal/2]).
 -export([to_binary/1, from_binary/1]).
+-export([to_binary/2]).
 -export([precondition_context/1, stats/1, stat/2]).
--export([parent_clock/2, get_deferred/1]).
+-export([parent_clock/2]).
+-export([to_version/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -92,10 +92,18 @@
 
 -export_type([orswot/0, orswot_op/0, binary_orswot/0]).
 
--opaque orswot() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
+-type orswot() :: v1_orswot() | v2_orswot().
+-type v2_orswot() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
+-type v1_orswot() :: {riak_dt_vclock:vclock(), {member(), dots()},
+                      {riak_dt_vclock:vclock(), [member()]}}.
+
+-type any_orswot() :: v2_orswot() | v2ord_orswot().
+
+-type v2ord_orswot() :: {riak_dt_vclock:vclock(), orddict:orddict(), orddict:orddict()}.
+
 %% Only removes can be deferred, so a list of members to be removed
 %% per context.
--type deferred() :: [{riak_dt_vclock:vclock(), [member()]}].
+-type deferred() :: dict(riak_dt_vclock:vclock(), [member()]).
 -type binary_orswot() :: binary(). %% A binary that from_binary/1 will operate on.
 
 -type orswot_op() ::  {add, member()} | {remove, member()} |
@@ -108,33 +116,37 @@
 %% a dict of member() -> minimal_clock() mappings.  The
 %% `minimal_clock()' is a more effecient way of storing knowledge
 %% about adds / removes than a UUID per add.
--type entries() :: [{member(), minimal_clock()}].
+-type entries() :: dict(member(), dots()).
 
-%% a minimal clock is just the dots for the element, each dot being an
-%% actor and event counter for when the element was added.
--type minimal_clock() :: [dot()].
+%% The dots for the element, each dot being an actor and event counter
+%% for when the element was added.
+-type dots() :: [dot()].
 -type dot() :: riak_dt:dot().
 -type member() :: term().
 
 -type precondition_error() :: {error, {precondition ,{not_present, member()}}}.
 
+%% used until we move to erlang 17 and can use dict:dict/2
+-type dict(_A, _B) :: dict().
+
+-define(DICT, dict).
+
 -spec new() -> orswot().
 new() ->
-    {riak_dt_vclock:fresh(), orddict:new(), orddict:new()}.
+    {riak_dt_vclock:fresh(), ?DICT:new(), ?DICT:new()}.
 
 %% @doc sets the clock in the Set to that `Clock'. Used by a
 %% containing Map for sub-CRDTs
 -spec parent_clock(riak_dt_vclock:vclock(), orswot()) -> orswot().
-parent_clock(Clock, {_SetClock, Entries, Deferred}) ->
+parent_clock(Clock, Set) ->
+    {_SetClock, Entries, Deferred} = to_v2(Set),
     {Clock, Entries, Deferred}.
 
--spec get_deferred(orswot()) -> [riak_dt:context()].
-get_deferred({_, _, Deferred}) ->
-    lists:map(fun({Key, _}) -> Key end, orddict:to_list(Deferred)).
-
 -spec value(orswot()) -> [member()].
+value({_Clock, Entries, _Deferred}) when is_list(Entries) ->
+    [K || {K, _Dots} <- Entries];
 value({_Clock, Entries, _Deferred}) ->
-    [K || {K, _Dots} <- orddict:to_list(Entries)].
+    lists:sort([K || {K, _Dots} <- ?DICT:to_list(Entries)]).
 
 -spec value(orswot_q(), orswot()) -> term().
 value(size, ORset) ->
@@ -146,13 +158,15 @@ value({contains, Elem}, ORset) ->
 %% NOTE: either _all_ are applied, or _none_ are.
 -spec update(orswot_op(), actor() | dot(), orswot()) -> {ok, orswot()} |
                                                 precondition_error().
+update(Op, Actor, {_Clock, Entries, _Deferred}=V1Set) when is_list(Entries) ->
+    update(Op, Actor, to_v2(V1Set));
 update({update, Ops}, Actor, ORSet) ->
     apply_ops(Ops, Actor, ORSet);
 update({add, Elem}, Actor, ORSet) ->
     {ok, add_elem(Actor, ORSet, Elem)};
 update({remove, Elem}, _Actor, ORSet) ->
     {_Clock, Entries, _Deferred} = ORSet,
-    remove_elem(orddict:find(Elem, Entries), Elem, ORSet);
+    remove_elem(?DICT:find(Elem, Entries), Elem, ORSet);
 update({add_all, Elems}, Actor, ORSet) ->
     ORSet2 = lists:foldl(fun(E, S) ->
                                  add_elem(Actor, S, E) end,
@@ -166,6 +180,8 @@ update({remove_all, Elems}, Actor, ORSet) ->
 
 -spec update(orswot_op(), actor() | dot(), orswot(), riak_dt:context()) ->
                     {ok, orswot()} | precondition_error().
+update(Op, Actor, {_Clock, Entries, _Deferred}=V1Set, Ctx) when is_list(Entries) ->
+    update(Op, Actor, to_v2(V1Set), Ctx);
 update(Op, Actor, ORSet, undefined) ->
     update(Op, Actor, ORSet);
 update({add, Elem}, Actor, ORSet, _Ctx) ->
@@ -176,14 +192,14 @@ update({remove, Elem}, _Actor, {Clock, Entries, Deferred}, Ctx) ->
     %% have this element, we can drop any dots it has that the
     %% Context has seen.
     Deferred2 = defer_remove(Clock, Ctx, Elem, Deferred),
-    case orddict:find(Elem, Entries) of
+    case ?DICT:find(Elem, Entries) of
         {ok, ElemClock} ->
             ElemClock2 = riak_dt_vclock:subtract_dots(ElemClock, Ctx),
             case ElemClock2 of
                 [] ->
-                    {ok, {Clock, orddict:erase(Elem, Entries), Deferred2}};
+                    {ok, {Clock, ?DICT:erase(Elem, Entries), Deferred2}};
                 _ ->
-                    {ok, {Clock, orddict:store(Elem, ElemClock2, Entries), Deferred2}}
+                    {ok, {Clock, ?DICT:store(Elem, ElemClock2, Entries), Deferred2}}
             end;
         error ->
             %% Do we not have the element because we removed it
@@ -229,7 +245,7 @@ defer_remove(Clock, Ctx, Elem, Deferred) ->
     case riak_dt_vclock:descends(Clock, Ctx) of
         %% no need to save this remove, we're done
         true -> Deferred;
-        false -> orddict:update(Ctx,
+        false -> ?DICT:update(Ctx,
                                 fun(Elems) ->
                                         ordsets:add_element(Elem, Elems) end,
                                 ordsets:add_element(Elem, ordsets:new()),
@@ -265,23 +281,57 @@ remove_all([Elem | Rest], Actor, ORSet, Ctx) ->
     remove_all(Rest, Actor, ORSet2, Ctx).
 
 -spec merge(orswot(), orswot()) -> orswot().
+merge({_LHSC, LHSE, _LHSD}=LHS, {_RHSC, RHSE, _RHSD}=RHS) when is_list(LHSE);
+                                                               is_list(RHSE) ->
+    merge(to_v2(LHS), to_v2(RHS));
 merge({Clock, Entries, Deferred}, {Clock, Entries, Deferred}) ->
     {Clock, Entries, Deferred};
-merge({LHSClock, LHSEntries, LHSDeferred}=LHS, {RHSClock, RHSEntries, RHSDeferred}=RHS) ->
+merge({LHSClock, LHSEntries, LHSDeferred}, {RHSClock, RHSEntries, RHSDeferred}) ->
     Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
-    %% If an element is in both dicts, merge it. If it occurs in one,
-    %% then see if its dots are dominated by the others whole set
-    %% clock. If so, then drop it, if not, keep it.
-    LHSKeys = sets:from_list(orddict:fetch_keys(LHSEntries)),
-    RHSKeys = sets:from_list(orddict:fetch_keys(RHSEntries)),
-    CommonKeys = sets:intersection(LHSKeys, RHSKeys),
-    LHSUnique = sets:subtract(LHSKeys, CommonKeys),
-    RHSUnique = sets:subtract(RHSKeys, CommonKeys),
-    Entries00 = merge_common_keys(CommonKeys, LHS, RHS),
-
-    Entries0 = merge_disjoint_keys(LHSUnique, LHSEntries, RHSClock, Entries00),
-    Entries = merge_disjoint_keys(RHSUnique, RHSEntries, LHSClock, Entries0),
-
+    {Keep, RHSElems} = ?DICT:fold(fun(Elem, Dots, {Acc, RHSRemaining}) ->
+                         case ?DICT:find(Elem, RHSEntries) of
+                             error ->
+                                 %% Only on left, trim dots and keep
+                                 %% surviving
+                                 case riak_dt_vclock:subtract_dots(Dots, RHSClock) of
+                                     [] ->
+                                         %% Removed
+                                         {Acc, RHSRemaining};
+                                     NewDots ->
+                                         {?DICT:store(Elem, NewDots, Acc), RHSRemaining}
+                                 end;
+                             {ok, RHSDots} ->
+                                 %% On both sides
+                                 CommonDots = sets:intersection(sets:from_list(Dots), sets:from_list(RHSDots)),
+                                 LHSUnique = sets:to_list(sets:subtract(sets:from_list(Dots), CommonDots)),
+                                 RHSUnique = sets:to_list(sets:subtract(sets:from_list(RHSDots), CommonDots)),
+                                 LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, RHSClock),
+                                 RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, LHSClock),
+                                 V = riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]),
+                                 %% Perfectly possible that an item in both sets should be dropped
+                                 case V of
+                                     [] ->
+                                         %% Removed from both sides
+                                         {Acc, ?DICT:erase(Elem, RHSRemaining)};
+                                     _ ->
+                                         {?DICT:store(Elem, V, Acc), ?DICT:erase(Elem, RHSRemaining)}
+                                 end
+                         end
+                 end,
+                 {?DICT:new(), RHSEntries},
+                 LHSEntries),
+    %%Now what about the stuff left from the right hand side? Do the same to that!
+    Entries = ?DICT:fold(fun(Elem, Dots, Acc) ->
+                         case riak_dt_vclock:subtract_dots(Dots, LHSClock) of
+                             [] ->
+                                 %% Removed
+                                 Acc;
+                             NewDots ->
+                                 ?DICT:store(Elem, NewDots, Acc)
+                         end
+                 end,
+                 Keep,
+                 RHSElems),
     Deffered = merge_deferred(LHSDeferred, RHSDeferred),
 
     apply_deferred(Clock, Entries, Deffered).
@@ -289,7 +339,7 @@ merge({LHSClock, LHSEntries, LHSDeferred}=LHS, {RHSClock, RHSEntries, RHSDeferre
 %% @private merge the deffered operations for both sets.
 -spec merge_deferred(deferred(), deferred()) -> deferred().
 merge_deferred(LHS, RHS) ->
-    orddict:merge(fun(_K, LH, RH) ->
+    ?DICT:merge(fun(_K, LH, RH) ->
                           ordsets:union(LH, RH) end,
                   LHS, RHS).
 
@@ -301,81 +351,30 @@ merge_deferred(LHS, RHS) ->
 -spec apply_deferred(riak_dt_vclock:vclock(), entries(), deferred()) ->
                             orswot().
 apply_deferred(Clock, Entries, Deferred) ->
-    lists:foldl(fun({Ctx, Elems}, ORSwot) ->
-                        {ok, ORSwot2} = remove_all(Elems, undefined,  ORSwot, Ctx),
-                        ORSwot2
+    ?DICT:fold(fun(Ctx, Elems, ORSwot) ->
+                       {ok, ORSwot2} = remove_all(Elems, undefined,  ORSwot, Ctx),
+                       ORSwot2
                 end,
-                {Clock, Entries, []}, %% Start with an empty deferred list
-                Deferred).
-
-%% @doc check if each element in `Entries' should be in the merged
-%% set.
--spec merge_disjoint_keys(set(), orddict:orddict(),
-                          riak_dt_vclock:vclock(), orddict:orddict()) -> orddict:orddict().
-merge_disjoint_keys(Keys, Entries, SetClock, Accumulator) ->
-    sets:fold(fun(Key, Acc) ->
-                      Dots = orddict:fetch(Key, Entries),
-                      case riak_dt_vclock:descends(SetClock, Dots) of
-                          false ->
-                              %% Optimise the set of stored dots to
-                              %% include only those unseen
-                              NewDots = riak_dt_vclock:subtract_dots(Dots, SetClock),
-                              orddict:store(Key, NewDots, Acc);
-                          true ->
-                              Acc
-                      end
-              end,
-              Accumulator,
-              Keys).
-
-%% @doc merges the minimal clocks for the common entries in both sets.
--spec merge_common_keys(set(), {riak_dt_vclock:vclock(), entries(), deferred()},
-                        {riak_dt_vclock:vclock(), entries(), deferred()}) ->
-                               orddict:orddict().
-merge_common_keys(CommonKeys, {LHSClock, LHSEntries, _}, {RHSClock, RHSEntries, _}) ->
-
-    %% If both sides have the same values, some dots may still need to
-    %% be shed.  If LHS has dots for 'X' that RHS does _not_ have, and
-    %% RHS's clock dominates those dots, then we need to drop those
-    %% dots.  We only keep dots BOTH side agree on, or dots that are
-    %% not dominated. Keep only common dots, and dots that are not
-    %% dominated by the other sides clock
-
-    sets:fold(fun(Key, Acc) ->
-                      V1 = orddict:fetch(Key, LHSEntries),
-                      V2 = orddict:fetch(Key, RHSEntries),
-
-                      CommonDots = sets:intersection(sets:from_list(V1), sets:from_list(V2)),
-                      LHSUnique = sets:to_list(sets:subtract(sets:from_list(V1), CommonDots)),
-                      RHSUnique = sets:to_list(sets:subtract(sets:from_list(V2), CommonDots)),
-                      LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, RHSClock),
-                      RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, LHSClock),
-                      V = riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]),
-                      %% Perfectly possible that an item in both sets should be dropped
-                      case V of
-                          [] ->
-                              orddict:erase(Key, Acc);
-                          _ ->
-                              orddict:store(Key, V, Acc)
-                      end
-              end,
-              orddict:new(),
-              CommonKeys).
+               {Clock, Entries, ?DICT:new()}, %% Start with an empty deferred list
+               Deferred).
 
 -spec equal(orswot(), orswot()) -> boolean().
+equal({_, Entries1, _}=LHS, {_, Entries2, _}=RHS) when is_list(Entries1);
+                                                       is_list(Entries2) ->
+    equal(to_v2(LHS), to_v2(RHS));
 equal({Clock1, Entries1, _}, {Clock2, Entries2, _}) ->
     riak_dt_vclock:equal(Clock1, Clock2) andalso
-        orddict:fetch_keys(Entries1) == orddict:fetch_keys(Entries2) andalso
-        clocks_equal(Entries1, Entries2).
+        lists:sort(?DICT:fetch_keys(Entries1)) == lists:sort(?DICT:fetch_keys(Entries2)) andalso
+        dots_equal(?DICT:to_list(Entries1), ?DICT:to_list(Entries2)).
 
--spec clocks_equal(orddict:orddict(), orddict:orddict()) -> boolean().
-clocks_equal([], _) ->
+-spec dots_equal([{member(), dots()}], [{member(), dots()}]) -> boolean().
+dots_equal([], _) ->
     true;
-clocks_equal([{Elem, Clock1} | Rest], Entries2) ->
-    Clock2 = orddict:fetch(Elem, Entries2),
+dots_equal([{Elem, Clock1} | Rest], Entries2) ->
+    {Elem, Clock2} = lists:keyfind(Elem, 1, Entries2),
     case riak_dt_vclock:equal(Clock1, Clock2) of
         true ->
-            clocks_equal(Rest, Entries2);
+            dots_equal(Rest, Entries2);
         false ->
             false
     end.
@@ -383,18 +382,18 @@ clocks_equal([{Elem, Clock1} | Rest], Entries2) ->
 %% Private
 -spec add_elem(actor() | dot(), orswot(), member()) -> orswot().
 add_elem(Dot, {Clock, Entries, Deferred}, Elem) when is_tuple(Dot) ->
-    {riak_dt_vclock:merge([Clock, [Dot]]), orddict:store(Elem, [Dot], Entries), Deferred};
+    {riak_dt_vclock:merge([Clock, [Dot]]), ?DICT:store(Elem, [Dot], Entries), Deferred};
 add_elem(Actor, {Clock, Entries, Deferred}, Elem) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
     Dot = [{Actor, riak_dt_vclock:get_counter(Actor, NewClock)}],
-    {NewClock, orddict:store(Elem, Dot, Entries), Deferred}.
+    {NewClock, ?DICT:store(Elem, Dot, Entries), Deferred}.
 
 -spec remove_elem({ok, riak_dt_vclock:vclock()} | error,
-                  member(), {riak_dt_vclock:vclock(), orddict:orddict(), deferred()}) ->
-                         {ok, {riak_dt_vclock:vclock(), orddict:orddict(), deferred()}} |
+                  member(), {riak_dt_vclock:vclock(), entries(), deferred()}) ->
+                         {ok, {riak_dt_vclock:vclock(), entries(), deferred()}} |
                          precondition_error().
 remove_elem({ok, _VClock}, Elem, {Clock, Dict, Deferred}) ->
-    {ok, {Clock, orddict:erase(Elem, Dict), Deferred}};
+    {ok, {Clock, ?DICT:erase(Elem, Dict), Deferred}};
 remove_elem(_, Elem, _ORSet) ->
     {error, {precondition, {not_present, Elem}}}.
 
@@ -412,24 +411,28 @@ precondition_context({Clock, _Entries, _Deferred}) ->
 
 -spec stats(orswot()) -> [{atom(), number()}].
 stats(ORSWOT) ->
-    [ {S, stat(S, ORSWOT)} || S <- [actor_count, element_count, max_dot_length, deferred_length]].
+    OSV2 = to_v2(ORSWOT),
+    [ {S, stat(S, OSV2)} || S <- [actor_count, element_count, max_dot_length, deferred_length]].
 
 -spec stat(atom(), orswot()) -> number() | undefined.
+stat(Stat, {_C, E, _D}=S) when is_list(E) ->
+    stat(Stat, to_v2(S));
 stat(actor_count, {Clock, _Dict, _}) ->
     length(Clock);
 stat(element_count, {_Clock, Dict, _}) ->
-    orddict:size(Dict);
+    ?DICT:size(Dict);
 stat(max_dot_length, {_Clock, Dict, _}) ->
-    orddict:fold(fun(_K, Dots, Acc) ->
-                         max(length(Dots), Acc)
-                 end, 0, Dict);
+    ?DICT:fold(fun(_K, Dots, Acc) ->
+                       max(length(Dots), Acc)
+               end, 0, Dict);
 stat(deferred_length, {_Clock, _Dict, Deferred}) ->
-    length(Deferred);
+    ?DICT:size(Deferred);
 stat(_,_) -> undefined.
 
 -include("riak_dt_tags.hrl").
 -define(TAG, ?DT_ORSWOT_TAG).
 -define(V1_VERS, 1).
+-define(V2_VERS, 2).
 
 %% @doc returns a binary representation of the provided
 %% `orswot()'. The resulting binary is tagged and versioned for ease
@@ -438,18 +441,67 @@ stat(_,_) -> undefined.
 %% `binary_compression' to turn t2b compression on (`true') and off
 %% (`false')
 %%
-%% @see from_binary/1
+%% @see `from_binary/1'
 -spec to_binary(orswot()) -> binary_orswot().
 to_binary(S) ->
-     <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(S))/binary>>.
+    {ok, B} = to_binary(?V2_VERS, S),
+    B.
+
+%% @private encode v1 sets as v2, and vice versa. The first argument
+%% is the target binary type.
+-spec to_binary(Vers :: pos_integer(), orswot()) -> {ok, binary_orswot()} | ?UNSUPPORTED_VERSION.
+to_binary(?V1_VERS, S0) ->
+    S = to_v1(S0),
+    {ok, <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(S))/binary>>};
+to_binary(?V2_VERS, S0) ->
+    S = to_v2(S0),
+    {ok, <<?TAG:8/integer, ?V2_VERS:8/integer, (riak_dt:to_binary(S))/binary>>};
+to_binary(Vers, _S0) ->
+    ?UNSUPPORTED_VERSION(Vers).
+
+-spec to_version(pos_integer(), any_orswot()) -> any_orswot().
+to_version(2, Set) -> to_v2(Set);
+to_version(1, Set) -> to_v1(Set);
+to_version(_, Set) -> Set.
+
+%% @private transpose a v1 orswot (orddicts) to a v2 (dicts)
+-spec to_v2(any_orswot()) -> orswot().
+to_v2({Clock, Entries0, Deferred0}) when is_list(Entries0),
+                                         is_list(Deferred0) ->
+    %% Turn v1 set into a v2 set
+    Entries = ?DICT:from_list(Entries0),
+    Deferred = ?DICT:from_list(Deferred0),
+    {Clock, Entries, Deferred};
+to_v2(S) ->
+    S.
+
+%% @private transpose a v2 orswot (dicts) to a v1 (orddicts)
+-spec to_v1(any_orswot()) -> v2ord_orswot().
+to_v1({_Clock, Entries0, Deferred0}=S) when is_list(Entries0),
+                                            is_list(Deferred0) ->
+    S;
+to_v1({Clock, Entries0, Deferred0}) ->
+    %% Must be dicts, there is no is_dict test though
+    %% should we use error handling as logic here??
+    Entries = riak_dt:dict_to_orddict(Entries0),
+    Deferred = riak_dt:dict_to_orddict(Deferred0),
+    {Clock, Entries, Deferred}.
 
 %% @doc When the argument is a `binary_orswot()' produced by
 %% `to_binary/1' will return the original `orswot()'.
 %%
-%% @see to_binary/1
--spec from_binary(binary_orswot()) -> orswot().
+%% @see `to_binary/1'
+-spec from_binary(binary_orswot()) -> {ok, orswot()} | ?UNSUPPORTED_VERSION | ?INVALID_BINARY.
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
-    riak_dt:from_binary(B).
+    S = riak_dt:from_binary(B),
+    %% Now upgrade the structure to dict from orddict
+    {ok, to_v2(S)};
+from_binary(<<?TAG:8/integer, ?V2_VERS:8/integer, B/binary>>) ->
+    {ok, riak_dt:from_binary(B)};
+from_binary(<<?TAG:8/integer, Vers:8/integer, _B/binary>>) ->
+    ?UNSUPPORTED_VERSION(Vers);
+from_binary(_B) ->
+    ?INVALID_BINARY.
 
 %% ===================================================================
 %% EUnit tests

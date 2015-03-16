@@ -448,6 +448,9 @@ delta_update(Op, ActorOrDot, {Clock0, _, _}=Map) ->
     {ok, delta_map()}.
 delta_update({update, Ops}, Actor, {Clock0, _, _}=Map, Ctx) ->
     {Dot, _Clock} = update_clock(Actor, Clock0),
+    %{ok, Delta} = delta_apply_ops(Ops, Dot, Map, new(), Ctx),
+    %{ok, Obj} = apply_ops(Ops, Dot, Map, Ctx),
+    %{ok, {Obj, Delta}}.
     delta_apply_ops(Ops, Dot, Map, new(), Ctx).
 
 %% How to accept multiple operations for the same object?
@@ -562,7 +565,6 @@ merge({LHSClock, LHSEntries, LHSDeferred}, {RHSClock, RHSEntries, RHSDeferred}) 
     {Clock, _Seen} = compress_seen(riak_dt_vclock:merge([LHSClock, RHSClock]), AllDots),
     Deferred = merge_deferred(LHSDeferred, RHSDeferred),
     R = apply_deferred({Clock, Entries, Deferred}),
-    io:format("Clear Seen ~p~n",[R]),
     clear_seen(Clock, R).
 
 

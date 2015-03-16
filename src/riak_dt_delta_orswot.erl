@@ -63,15 +63,15 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--define(DICT, orddict).
+-define(DICT, dict).
 
 -spec new() -> delta_orswot().
 new() ->
-    {riak_dt_vclock:fresh(), orddict:new(), ordsets:new(), ?DICT:new()}.
+    {riak_dt_vclock:fresh(), ?DICT:new(), ordsets:new(), ?DICT:new()}.
 
 -spec value(delta_orswot()) -> [member()].
 value({Clock, Entries, _Seen, _Deferred}) ->
-    [K || {K, Dots} <- orddict:to_list(Entries),
+    [K || {K, Dots} <- ?DICT:to_list(Entries),
         riak_dt_vclock:subtract_dots(Dots, Clock) == []].
 
 -spec update(orswot_op(), actor() | dot(), delta_orswot()) -> {ok, delta_orswot()} |
@@ -80,7 +80,7 @@ update({add, Elem}, Actor, ORSet) ->
     add_elem(Actor, ORSet, Elem);
 update({remove, Elem}, _Actor, ORSet) ->
     {_Clock, Entries, _Seen, _Deferred} = ORSet,
-    remove_elem(orddict:find(Elem, Entries), Elem, ORSet);
+    remove_elem(?DICT:find(Elem, Entries), Elem, ORSet);
 update({remove_all, Elems}, Actor, ORSet) ->
     remove_all(Elems, Actor, ORSet);
 update({add_all, Elems}, Actor, ORSet) ->
@@ -96,10 +96,10 @@ update({update, Ops}, Actor, ORSet) ->
 
 add_elem(ActorOrDot, {Clock, Entries, Seen, _Deferred}, Elem) ->
     {Dot, NewClock} = update_clock(ActorOrDot, Clock),
-    {ok, {NewClock, orddict:store(Elem, [Dot], Entries), Seen, _Deferred}}.
+    {ok, {NewClock, ?DICT:store(Elem, [Dot], Entries), Seen, _Deferred}}.
 
 remove_elem({ok, _VClock}, Elem, {Clock, Dict, Seen, _Deferred}) ->
-    {ok, {Clock, orddict:erase(Elem, Dict), Seen, _Deferred}};
+    {ok, {Clock, ?DICT:erase(Elem, Dict), Seen, _Deferred}};
 
 remove_elem(_, Elem, _ORSet) ->
     {error, {precondition, {not_present, Elem}}}.
@@ -122,7 +122,7 @@ update({add, Elem}, ActorOrDot, ORSet, _Ctx) ->
 
 update({remove, Elem}, _Actor, ORSet, Ctx) ->
     {_Clock, Entries, _Seen, _Deferred} = ORSet,
-    remove_elem(orddict:find(Elem, Entries), Elem, ORSet, Ctx);
+    remove_elem(?DICT:find(Elem, Entries), Elem, ORSet, Ctx);
 
 update({remove_all, Elems}, Actor, ORSet, Ctx) ->
     remove_all(Elems, Actor, ORSet, Ctx);
@@ -151,8 +151,8 @@ remove_all([Elem | Rest], Actor, ORSet, Ctx) ->
 remove_elem({ok, Dots}, Elem, {Clock, Dict, Seen, Deferred0}, Ctx) ->
     Deferred = defer_remove(Clock, Ctx, Elem, Deferred0),
     DictUpdt = case riak_dt_vclock:subtract_dots(Dots, Ctx) of
-                   [] -> orddict:erase(Elem, Dict);
-                   Remaining -> orddict:store(Elem, Remaining, Dict)
+                   [] -> ?DICT:erase(Elem, Dict);
+                   Remaining -> ?DICT:store(Elem, Remaining, Dict)
                end,
     {ok, {Clock, DictUpdt, Seen, Deferred}};
 
@@ -183,16 +183,22 @@ delta_update({add, Elem}, Actor, {Clock, _Entries, _Seen, _Def}=ORSet) ->
     {ok, Delta} = delta_add_elem(Elem, Dot, new()),
     {ok, Update} = add_elem(Dot, ORSet, Elem),
     {ok, {Update, Delta}};
+    %delta_add_elem(Elem, Dot, new());
 
-delta_update({remove, Elem}, _Actor, ORSet) ->
-    delta_remove_elem(Elem,ORSet, new());
+delta_update({remove, Elem}, _Actor, {_, Entries, _, _}=ORSet) ->
+    {ok, Delta} = delta_remove_elem(Elem, ORSet, new()),
+    {ok, ORSet} = remove_elem(?DICT:find(Elem, Entries), Elem, ORSet),
+    {ok, {ORSet, Delta}};
+    %delta_remove_elem(Elem, ORSet, new());
 
-delta_update({remove_all, Elems}, _Actor, ORSet0) ->
-    ORSet = lists:foldl(fun(Elem , ORSetAcc) ->
+delta_update({remove_all, Elems}, Actor, ORSet0) ->
+    Delta = lists:foldl(fun(Elem , ORSetAcc) ->
                                 {ok, ORSetAcc2} = delta_remove_elem(Elem, ORSet0, ORSetAcc),
                                 ORSetAcc2
                         end, new(), Elems),
-    {ok, ORSet};
+    {ok, ORSet} = remove_all(Elems, Actor, ORSet0),
+    {ok, {ORSet, Delta}};
+    %{ok, Delta};
 
 %Batches of operations do not compose with the map... because operations have to reuse map's dot.
 %Must add what elements were removed to the seen to make it work with just one dot.
@@ -207,6 +213,8 @@ delta_update({add_all, Elems}=Op, Actor, {Clock0, _Entries, _Seen, _Deferred}=Ob
                              end, {Clock0, new()}, Elems),
     {ok, ORSet} = update(Op, Actor,Obj),
     {ok, {ORSet,DeltaORSet}};
+    %{ok, DeltaORSet};
+
 delta_update({update, Ops}, ActorOrDot, ORSet0) ->
     ORSet = lists:foldl(fun(Op, Set) ->
                                 {ok, NewSet} = delta_update(Op, ActorOrDot, ORSet0),
@@ -222,30 +230,38 @@ delta_update({add, Elem}, ActorOrDot, {Clock, _Entries, _Seen, _Deferred}=ORSet,
     {ok, Delta} = delta_add_elem(Elem, Dot, new()),
     {ok, Update} = add_elem(Dot, ORSet, Elem),
     {ok, {Update, Delta}};
+    %delta_add_elem(Elem, Dot, new());
 
 
 delta_update({add_all, _Elems}, Actor, {_Clock0, _Entries, _Seen, _Deferred}, _Ctx) when is_tuple(Actor) ->
     {error, not_implemented};
 
 delta_update({add_all, Elems}=Op, ActorOrDot, {Clock0, _Entries, _Seen, _Deferred}=Obj, _Ctx) ->
-    {_, DeltaORSet} = lists:foldl(fun(Elem , {Clock, ORSetAcc}) ->
+    {_, DeltaORSet} = lists:foldl(fun(Elem , {Clock, DeltaAccIn}) ->
                                      {Dot, NewClock} = update_clock(ActorOrDot, Clock),
-                                     {ok, Delta} = delta_add_elem(Elem, Dot, ORSetAcc),
-                                     {NewClock,Delta}
+                                     {ok, DeltaAcc} = delta_add_elem(Elem, Dot, DeltaAccIn),
+                                     {NewClock, DeltaAcc}
                              end, {Clock0, new()}, Elems),
     {ok, ORSet} = update(Op, ActorOrDot,Obj),
     {ok, {ORSet, DeltaORSet}};
+    %{ok, DeltaORSet};
 
-delta_update({remove, Elem}, _Actor, ORSet, Ctx) ->
-    delta_remove_elem(Elem, ORSet, new(), Ctx);
+delta_update({remove, Elem}, _Actor, {_, Entries, _, _}=ORSet0, Ctx) ->
+    {ok, Delta} = delta_remove_elem(Elem, ORSet0, new(), Ctx),
+    {ok, ORSet} = remove_elem(?DICT:find(Elem, Entries), Elem, ORSet0, Ctx),
+    {ok, {ORSet, Delta}};
+    %delta_remove_elem(Elem, ORSet0, new(), Ctx);
 
-delta_update({remove_all, Elems}, _Actor, ORSet0, Ctx) ->
-    ORSet = lists:foldl(fun(Elem , ORSetAcc) ->
+delta_update({remove_all, Elems}, Actor, ORSet0, Ctx) ->
+    DeltaORSet = lists:foldl(fun(Elem , ORSetAcc) ->
                                 {ok, ORSetAcc2} = delta_remove_elem(Elem, ORSet0, ORSetAcc, Ctx),
                                 ORSetAcc2
                         end, new(), Elems),
-    {ok, ORSet};
+    {ok, ORSet} = remove_all(Elems, Actor, ORSet0, Ctx),
+    {ok, {ORSet, DeltaORSet}};
+    %{ok, DeltaORSet};
 
+%TODO: This is not efficient
 delta_update({update, Ops}, ActorOrDot, ORSet0, Ctx) ->
     ORSet = lists:foldl(fun(Op, Set) ->
                                 {ok, NewSet} = delta_update(Op, ActorOrDot, ORSet0, Ctx),
@@ -257,11 +273,11 @@ delta_update({update, Ops}, ActorOrDot, ORSet0, Ctx) ->
 
 -spec delta_add_elem(orswot_op(), dot(), delta_orswot()) -> {ok, delta_orswot()}.
 delta_add_elem(Elem, Dot, {_Clock, Entries, Seen, _Deferred}) ->
-    {ok, {[], orddict:store(Elem, [Dot], Entries), lists:umerge([Dot], Seen), _Deferred}}.
+    {ok, {[], ?DICT:store(Elem, [Dot], Entries), lists:umerge([Dot], Seen), _Deferred}}.
 
 -spec delta_remove_elem(orswot_op(), delta_orswot(), delta_orswot()) -> {ok, delta_orswot()}.
 delta_remove_elem(Elem, {_, Entries, _, _}, {_, _, SeenOut, _DeferredOut}) ->
-    case orddict:find(Elem, Entries) of
+    case ?DICT:find(Elem, Entries) of
         {ok, Dots} ->
             {ok, {[], [], ordsets:union(Dots,SeenOut), _DeferredOut}};
         error ->
@@ -269,19 +285,36 @@ delta_remove_elem(Elem, {_, Entries, _, _}, {_, _, SeenOut, _DeferredOut}) ->
     end.
 
 -spec delta_remove_elem(orswot_op(), delta_orswot(), delta_orswot(), riak_dt_vclock:vclock()) -> {ok, delta_orswot()}.
-delta_remove_elem(Elem, {Clock, Entries, _, _}, {_, EntriesOut, SeenOut, DeferredOut}, Ctx) ->
-    Deferred = defer_remove(Clock, Ctx, Elem, DeferredOut),
-    case orddict:find(Elem, Entries) of
-        {ok, Dots} ->
-            Remaining = riak_dt_vclock:subtract_dots(Dots, Ctx),
-            Removed = lists:subtract(Dots, Remaining),
-            {ok, {[],
-                  orddict:store(Elem, Remaining, EntriesOut),
-                  ordsets:union(Removed, SeenOut), Deferred
-                 }};
-        error ->
-            {ok, {[], [], SeenOut, Deferred}}
-    end.
+%delta_remove_elem(Elem, {Clock, Entries, _, _}, {_, _EntriesOut, _SeenOut, DeferredOut}, Ctx) ->
+%    Deferred0 = defer_remove(Clock, Ctx, Elem, DeferredOut),
+%    Deferred = case ?DICT:size(Deferred0) > 0 of
+%                   true -> Deferred0;
+%                   false ->
+%                       case ?DICT:find(Elem, Entries) of
+%                           {ok, Dots} ->
+%                              THIS IS NOT COMPLETE
+%                               Remaining = riak_dt_vclock:subtract_dots(Dots, Ctx),
+%                               Removed = lists:subtract(Dots, Remaining),
+%                               ?DICT:update(Removed, fun(Elems) ->
+%                                                          ordset:add_element(Elem, Elems)
+%                                                  end, ordsets:add_element(Elem, ordsets:new()), DeferredOut);
+%                           _ -> %Should not enter here
+%                               defer_remove(Clock, Ctx, Elem, DeferredOut)
+%                      end
+%               end,
+%    {ok, {[], ?DICT:new(), [], Deferred}}.
+
+delta_remove_elem(Elem, {_Clock, _Entries, _, _}, {_, _EntriesOut, _SeenOut, DeferredOut}, Ctx) ->
+    Deferred0 = always_defer_remove(Ctx, Elem, DeferredOut),
+    {ok, {[], ?DICT:new(), [], Deferred0}}.
+
+
+always_defer_remove(Ctx, Elem, Deferred) ->
+    ?DICT:update(Ctx,
+                 fun(Elems) ->
+                         ordsets:add_element(Elem, Elems) end,
+                 ordsets:add_element(Elem, ordsets:new()),
+                 Deferred).
 
 -spec defer_remove(riak_dt_vclock:vclock(), riak_dt_vclock:vclock(), orswot_op(), deferred()) ->
                       deferred().
@@ -297,10 +330,27 @@ defer_remove(Clock, Ctx, Elem, Deferred) ->
     end.
 
 -spec merge(delta_orswot(), delta_orswot()) -> delta_orswot().
+%%Delta merge --- assumes deltas are not merged. Might not be ready for removes
+merge({[], LHEntries, LHSeen, LHDeferred}=_LHS, {RHClock, RHEntries, RHSeen, RHDeferred}=_RHS) ->
+    Entries = ?DICT:fold(fun(Elem, LHDots, EntriesAcc) ->
+                                 ?DICT:update(Elem, fun(Dots) ->
+                                                            lists:umerge(LHDots, Dots)
+                                                    end, LHDots, EntriesAcc)
+                         end, RHEntries, LHEntries),
+    Seen0 = lists:umerge(LHSeen, RHSeen),
+    {Clock, Seen} = compress_seen(RHClock, Seen0),
+    Deferred = ?DICT:merge(fun(_Key, V1, V2) ->
+                                   lists:umerge(V1,V2)
+                           end, LHDeferred,RHDeferred),
+    apply_deferred({Clock, Entries, Seen, Deferred});
+
+merge(LHCRDT, {[], _, _, _RHDeferred}=RHCRDT) ->
+    merge(RHCRDT, LHCRDT);
+
 merge({LHClock, LHEntries, LHSeen, LHDeferred}=LHS, {RHClock, RHEntries, RHSeen, RHDeferred}=RHS) ->
     Clock0 = riak_dt_vclock:merge([LHClock, RHClock]),
-    LHKeys = sets:from_list(orddict:fetch_keys(LHEntries)),
-    RHKeys = sets:from_list(orddict:fetch_keys(RHEntries)),
+    LHKeys = sets:from_list(?DICT:fetch_keys(LHEntries)),
+    RHKeys = sets:from_list(?DICT:fetch_keys(RHEntries)),
     CommonKeys = sets:intersection(LHKeys, RHKeys),
     LHUnique = sets:subtract(LHKeys, CommonKeys),
     RHUnique = sets:subtract(RHKeys, CommonKeys),
@@ -342,19 +392,19 @@ compress(Cnt, [{_A, Cntr} | Rest]) when Cntr - Cnt == 1 ->
 compress(Cnt, Cnts) ->
     {Cnt, Cnts}.
 
-apply_deferred({_, _Entries, _Seen, Deferred}=ORSet0) ->
+apply_deferred({Clock, Entries, Seen, Deferred}) ->
     ?DICT:fold(fun(Ctx, Elems, ORSetAcc) ->
-                       {ok, ORSet} = update({remove_all, Elems}, undefined, ORSetAcc, Ctx),
+                                               {ok, ORSet} = update({remove_all, Elems}, undefined, ORSetAcc, Ctx),
                        ORSet
                end,
-               ORSet0,
+               {Clock, Entries, Seen, dict:new()},
                Deferred).
 
 %% @doc check if each element in `Entries' should be in the merged
 %% set.
 merge_disjoint_keys(Keys, Entries, SetClock, SetSeen, Accumulator) ->
     sets:fold(fun(Key, Acc) ->
-                      Dots = orddict:fetch(Key, Entries),
+                      Dots = ?DICT:fetch(Key, Entries),
                       case riak_dt_vclock:descends(SetClock, Dots) of
                           false ->
                               %% Optimise the set of stored dots to
@@ -364,7 +414,7 @@ merge_disjoint_keys(Keys, Entries, SetClock, SetSeen, Accumulator) ->
                                   [] ->
                                       Acc;
                                   NewDots2 ->
-                                      orddict:store(Key, lists:usort(NewDots2), Acc)
+                                      ?DICT:store(Key, lists:usort(NewDots2), Acc)
                               end;
                           true ->
                               Acc
@@ -384,8 +434,8 @@ merge_common_keys(CommonKeys, {LHSClock, LHSEntries, LHSeen, _LHDef}, {RHSClock,
     %% dominated by the other sides clock
 
     sets:fold(fun(Key, Acc) ->
-                      V1 = orddict:fetch(Key, LHSEntries),
-                      V2 = orddict:fetch(Key, RHSEntries),
+                      V1 = ?DICT:fetch(Key, LHSEntries),
+                      V2 = ?DICT:fetch(Key, RHSEntries),
 
                       CommonDots = sets:intersection(sets:from_list(V1), sets:from_list(V2)),
                       LHSUnique = sets:to_list(sets:subtract(sets:from_list(V1), CommonDots)),
@@ -396,12 +446,12 @@ merge_common_keys(CommonKeys, {LHSClock, LHSEntries, LHSeen, _LHDef}, {RHSClock,
                       %% Perfectly possible that an item in both sets should be dropped
                       case V of
                           [] ->
-                              orddict:erase(Key, Acc);
+                              ?DICT:erase(Key, Acc);
                           _ ->
-                              orddict:store(Key, lists:usort(V), Acc)
+                              ?DICT:store(Key, lists:usort(V), Acc)
                       end
               end,
-              orddict:new(),
+              ?DICT:new(),
               CommonKeys).
 
 precondition_context({Clock, _Entries, _Seen, _Deferred}) ->
@@ -507,7 +557,6 @@ from_binary(_B) ->
 simple_add_test() ->
     InitialState = new(),
     {ok, D_A1} = ?ADD(a, a, InitialState),
-    io:format("~p~n",[D_A1]),
     A1 = merge(D_A1, InitialState),
     ?assertEqual([a], value(A1)).
 
