@@ -743,7 +743,7 @@ to_v1({Clock, Fields0, Deferred0}) ->
 %% `to_binary/1' will return the original `riak_dt_map()'.
 %%
 
-%% @see `to_binary/1'
+%% @see to_binary/1
 -spec from_binary(binary_map()) -> {ok, riak_dt_map()} | ?UNSUPPORTED_VERSION | ?INVALID_BINARY.
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
     Map = riak_dt:from_binary(B),
@@ -940,7 +940,7 @@ stat_test() ->
     ?assertEqual(6, stat(field_count, Map5)),
     ?assertEqual(1, stat(duplication, Map5)),
     %% Updating field {l, riak_dt_lwwreg} merges the duplicates to a single field
-    %% @see apply_ops
+    %% {@link apply_ops}
     {ok, Map6} = update({update, [{update, {l, riak_dt_lwwreg}, {assign, <<"bim">>, 6}}]}, a2, Map5),
     ?assertEqual(0, stat(duplication, Map6)),
     {ok, Map7} = update({update, [{remove, {l, riak_dt_lwwreg}}]}, a1, Map6),
