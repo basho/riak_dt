@@ -2,7 +2,7 @@
 %%
 %% riak_dt_map: OR-Set schema based multi CRDT container
 %%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -168,8 +168,6 @@
 
 -behaviour(riak_dt).
 
--include("riak_dt.hrl").
-
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -endif.
@@ -194,11 +192,13 @@
 
 -export_type([riak_dt_map/0, binary_map/0, map_op/0]).
 
+-include_lib("otp_compat/include/otp_compat.hrl").
+
 -type binary_map() :: binary(). %% A binary that from_binary/1 will accept
 -type riak_dt_map() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
 -type ord_map() :: {riak_dt_vclock:vclock(), orddict:orddict(), orddict:orddict()}.
 -type any_map() :: riak_dt_map() | ord_map().
--type entries() :: dict(field_name(), field_value()).
+-type entries() :: dict_t(field_name(), field_value()).
 -type field() :: {field_name(), field_value()}.
 -type field_name() :: {Name :: binary(), CRDTModule :: crdt_mod()}.
 -type field_value() :: {crdts(), tombstone()}.
@@ -212,13 +212,7 @@
 %% Only field removals can be deferred. CRDTs stored in the map may
 %% have contexts and deferred operations, but as these are part of the
 %% state, they are stored under the field as an update like any other.
--type deferred() :: dict(context(), [field()]).
-
--ifdef(namespaced_types).
--type dict(A, B) :: dict:dict(A, B).
--else.
--type dict(_A, _B) :: dict().
--endif.
+-type deferred() :: dict_t(context(), [field()]).
 
 %% limited to only those mods that support both a shared causal
 %% context, and by extension, the reset-remove semantic.
@@ -481,7 +475,7 @@ merge({LHSClock, LHSEntries, LHSDeferred}, {RHSClock, RHSEntries, RHSDeferred}) 
 
 %% @private filter the set of fields that are on one side of a merge
 %% only.
--spec filter_unique(riak_dt_set(), entries(), riak_dt_vclock:vclock(), entries()) -> entries().
+-spec filter_unique(set_t(), entries(), riak_dt_vclock:vclock(), entries()) -> entries().
 filter_unique(FieldSet, Entries, Clock, Acc) ->
     sets:fold(fun({_Name, Type}=Field, Keep) ->
                       {Dots, TS} = ?DICT:fetch(Field, Entries),
@@ -516,13 +510,13 @@ is_dot_unseen(Dot, Clock) ->
     not riak_dt_vclock:descends(Clock, [Dot]).
 
 %% @doc Get the keys from an ?DICT as a ?SET
--spec key_set(riak_dt_dict()) -> riak_dt_set().
+-spec key_set(dict_t()) -> set_t().
 key_set(Dict) ->
     sets:from_list(?DICT:fetch_keys(Dict)).
 
 %% @doc break the keys from an two ?DICTs out into three ?SETs, the
 %% common keys, those unique to one, and those unique to the other.
--spec key_sets(riak_dt_dict(), riak_dt_dict()) -> {riak_dt_set(), riak_dt_set(), riak_dt_set()}.
+-spec key_sets(dict_t(), dict_t()) -> {set_t(), set_t(), set_t()}.
 key_sets(LHS, RHS) ->
     LHSet = key_set(LHS),
     RHSet = key_set(RHS),
@@ -533,7 +527,7 @@ key_sets(LHS, RHS) ->
 
 %% @private for a set of dots (that are unique to one side) decide
 %% whether to keep, or drop each.
--spec filter_dots(riak_dt_set(), riak_dt_dict(), riak_dt_vclock:vclock()) -> entries().
+-spec filter_dots(set_t(), dict_t(), riak_dt_vclock:vclock()) -> entries().
 filter_dots(Dots, CRDTs, Clock) ->
     DotsToKeep = sets:filter(fun(Dot) ->
                                      is_dot_unseen(Dot, Clock)

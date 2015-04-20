@@ -3,7 +3,7 @@
 %%
 %% riak_dt_orswot: Tombstone-less, replicated, state based observe remove set
 %%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -94,6 +94,8 @@
 
 -export_type([orswot/0, orswot_op/0, binary_orswot/0]).
 
+-include_lib("otp_compat/include/otp_compat.hrl").
+
 -type orswot() :: v1_orswot() | v2_orswot().
 -type v2_orswot() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
 -type v1_orswot() :: {riak_dt_vclock:vclock(), {member(), dots()},
@@ -105,7 +107,7 @@
 
 %% Only removes can be deferred, so a list of members to be removed
 %% per context.
--type deferred() :: dict(riak_dt_vclock:vclock(), [member()]).
+-type deferred() :: dict_t(riak_dt_vclock:vclock(), [member()]).
 -type binary_orswot() :: binary(). %% A binary that from_binary/1 will operate on.
 
 -type orswot_op() ::  {add, member()} | {remove, member()} |
@@ -118,7 +120,7 @@
 %% a dict of member() -> minimal_clock() mappings.  The
 %% `minimal_clock()' is a more effecient way of storing knowledge
 %% about adds / removes than a UUID per add.
--type entries() :: dict(member(), dots()).
+-type entries() :: dict_t(member(), dots()).
 
 %% The dots for the element, each dot being an actor and event counter
 %% for when the element was added.
@@ -127,12 +129,6 @@
 -type member() :: term().
 
 -type precondition_error() :: {error, {precondition ,{not_present, member()}}}.
-
--ifdef(namespaced_types).
--type dict(A, B) :: dict:dict(A, B).
--else.
--type dict(_A, _B) :: dict().
--endif.
 
 -define(DICT, dict).
 
