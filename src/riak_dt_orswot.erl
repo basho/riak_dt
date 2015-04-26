@@ -94,7 +94,7 @@
 
 -export_type([orswot/0, orswot_op/0, binary_orswot/0]).
 
--include_lib("otp_compat/include/otp_compat.hrl").
+-include_lib("otp_compat/include/ns_types.hrl").
 
 -type orswot() :: v1_orswot() | v2_orswot().
 -type v2_orswot() :: {riak_dt_vclock:vclock(), entries(), deferred()}.

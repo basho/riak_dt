@@ -192,7 +192,7 @@
 
 -export_type([riak_dt_map/0, binary_map/0, map_op/0]).
 
--include_lib("otp_compat/include/otp_compat.hrl").
+-include_lib("otp_compat/include/ns_types.hrl").
 
 -type binary_map() :: binary(). %% A binary that from_binary/1 will accept
 -type riak_dt_map() :: {riak_dt_vclock:vclock(), entries(), deferred()}.

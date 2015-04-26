@@ -25,7 +25,7 @@
 -export([to_binary/1, from_binary/1, dict_to_orddict/1]).
 -export_type([actor/0, dot/0, crdt/0, context/0]).
 
--include_lib("otp_compat/include/otp_compat.hrl").
+-include_lib("otp_compat/include/ns_types.hrl").
 -include("riak_dt_tags.hrl").
 
 -type crdt() :: term().
