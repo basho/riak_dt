@@ -36,6 +36,7 @@
               }).
 
 -define(MAP, riak_dt_map2).
+-define(MODEL, riak_dt_map).
 
 -define(NUMTESTS, 1000).
 -define(QC_OUT(P),
@@ -83,7 +84,7 @@ create_replica_pre(#state{replicas=Replicas}, [Id]) ->
 
 %% @doc store new replica ID and bottom map/model in ets
 create_replica(Id) ->
-    ets:insert(map_eqc, {Id, riak_dt_map2:new(), model_new()}).
+    ets:insert(map_eqc, {Id, ?MAP:new(), ?MODEL:new()}).
 
 %% @doc create_replica_next - Add replica ID to state
 -spec create_replica_next(S :: eqc_statem:symbolic_state(),
@@ -117,8 +118,8 @@ remove(Replica, Field) ->
     %% guarantee a merge from another replica hasn't led to the
     %% Field being removed already, so ignore precon errors (they
     %% don't change state)
-    {ok, Map2} = ignore_precon_error(riak_dt_map2:update({update, [{remove, Field}]}, Replica, Map), Map),
-    Model2 = model_remove_field(Field, Model),
+    {ok, Map2} = ignore_precon_error(?MAP:update({update, [{remove, Field}]}, Replica, Map), Map),
+    {ok, Model2} = ignore_precon_error(?MODEL:update({update, [{remove, model_normalise_field(Field)}]}, Replica, Model), Model),
     ets:insert(map_eqc, {Replica, Map2, Model2}),
     {Map2, Model2}.
 
@@ -148,16 +149,17 @@ ctx_remove_pre(#state{replicas=Replicas, adds=Adds}, [From, To, Field]) ->
 %% the `From' replicas
 ctx_remove_dynamicpre(_S, [From, _To, Field]) ->
     [{From, Map, _Model}] = ets:lookup(map_eqc, From),
-    lists:keymember(Field, 1, riak_dt_map2:value(Map)).
+    lists:keymember(Field, 1, ?MAP:value(Map)).
 
 %% @doc perform a context remove on the map and model using context
 %% from `From'
 ctx_remove(From, To, Field) ->
     [{From, FromMap, FromModel}] = ets:lookup(map_eqc, From),
     [{To, ToMap, ToModel}] = ets:lookup(map_eqc, To),
-    Ctx = riak_dt_map2:precondition_context(FromMap),
-    {ok, Map} = riak_dt_map2:update({update, [{remove, Field}]}, To, ToMap, Ctx),
-    Model = model_ctx_remove(Field, FromModel, ToModel),
+    Ctx = ?MAP:precondition_context(FromMap),
+    {ok, Map} = ?MAP:update({update, [{remove, Field}]}, To, ToMap, Ctx),
+    ModelCtx = ?MODEL:precondition_context(FromModel),
+    {ok, Model} = ?MODEL:update({update, [{remove, model_normalise_field(Field)}]}, To, ToModel, ModelCtx),
     ets:insert(map_eqc, {To, Map, Model}),
     {Map, Model}.
 
@@ -189,8 +191,8 @@ replicate(From, To) ->
     [{From, FromMap, FromModel}] = ets:lookup(map_eqc, From),
     [{To, ToMap, ToModel}] = ets:lookup(map_eqc, To),
 
-    Map = riak_dt_map2:merge(FromMap, ToMap),
-    Model = model_merge(FromModel, ToModel),
+    Map = ?MAP:merge(FromMap, ToMap),
+    Model = ?MODEL:merge(FromModel, ToModel),
 
     ets:insert(map_eqc, {To, Map, Model}),
     {Map, Model}.
@@ -223,14 +225,14 @@ ctx_update_pre(#state{replicas=Replicas}, [_Field, _Op, From, To, _Cnt]) ->
 
 %% @doc much like context_remove, get a contet from `From' and apply
 %% `Op' at `To'
-ctx_update(Field, Op, From, To, Cnt) ->
+ctx_update(Field, Op, From, To, _Cnt) ->
     [{From, CtxMap, CtxModel}] = ets:lookup(map_eqc, From),
     [{To, ToMap, ToModel}] = ets:lookup(map_eqc, To),
 
-    Ctx = riak_dt_map2:precondition_context(CtxMap),
-    ModCtx = model_ctx(CtxModel),
-    {ok, Map} = riak_dt_map2:update({update, [{update, Field, Op}]}, To, ToMap, Ctx),
-    {ok, Model} = model_update_field(Field, Op, To, Cnt, ToModel, ModCtx),
+    Ctx = ?MAP:precondition_context(CtxMap),
+    ModCtx = ?MODEL:precondition_context(CtxModel),
+    {ok, Map} = ?MAP:update({update, [{update, Field, Op}]}, To, ToMap, Ctx),
+    {ok, Model} = ?MODEL:update({update, [{update, model_normalise_field(Field), Op}]}, To, ToModel, ModCtx),
 
     ets:insert(map_eqc, {To, Map, Model}),
     {Map, Model}.
@@ -265,11 +267,12 @@ update_pre(#state{replicas=Replicas}, [_Field, _Op, Replica, _Cnt]) ->
     lists:member(Replica, Replicas).
 
 %% @doc apply `Op' to `Field' at `Replica'
-update(Field, Op, Replica, Cnt) ->
+update(Field, Op, Replica, _Cnt) ->
     [{Replica, Map0, Model0}] = ets:lookup(map_eqc, Replica),
 
-    {ok, Map} = ignore_precon_error(riak_dt_map2:update({update, [{update, Field, Op}]}, Replica, Map0), Map0),
-    {ok, Model} = model_update_field(Field, Op, Replica, Cnt, Model0,  undefined),
+    {ok, Map} = ignore_precon_error(?MAP:update({update, [{update, Field, Op}]}, Replica, Map0), Map0),
+    ModelField = model_normalise_field(Field),
+    {ok, Model} = ignore_precon_error(?MODEL:update({update, [{update, ModelField, Op}]}, Replica, Model0), Model0),
 
     ets:insert(map_eqc, {Replica, Map, Model}),
     {Map, Model}.
@@ -302,13 +305,18 @@ idempotent_pre(#state{replicas=Replicas}, [Replica]) ->
 %% @doc idempotent - Merge replica with itself, result used for post condition only
 idempotent(Replica) ->
     [{Replica, Map, _Model}] = ets:lookup(map_eqc, Replica),
-    {Map, riak_dt_map2:merge(Map, Map)}.
+    {Map, ?MAP:merge(Map, Map)}.
 
 %% @doc idempotent_post - Postcondition for idempotent
 -spec idempotent_post(S :: eqc_statem:dynamic_state(),
                       Args :: [term()], R :: term()) -> true | term().
-idempotent_post(_S, [_Replica], {Map, MergedSelfMap}) ->
-    riak_dt_map2:equal(Map, MergedSelfMap).
+idempotent_post(_S, [Replica], {Map, MergedSelfMap}) ->
+    case ?MAP:equal(Map, MergedSelfMap) of
+        true ->
+            true;
+        _Wut ->
+            {postcondition_failed, {Replica, Map, MergedSelfMap}}
+    end.
 
 %% ------ Grouped operator: commutative
 
@@ -330,13 +338,13 @@ commutative_pre(#state{replicas=Replicas}, [Replica, Replica2]) ->
 commutative(Replica1, Replica2) ->
     [{Replica1, Map1, _Model1}] = ets:lookup(map_eqc, Replica1),
     [{Replica2, Map2, _Model2}] = ets:lookup(map_eqc, Replica2),
-    {riak_dt_map2:merge(Map1, Map2), riak_dt_map2:merge(Map2, Map1)}.
+    {?MAP:merge(Map1, Map2), ?MAP:merge(Map2, Map1)}.
 
 %% @doc commutative_post - Postcondition for commutative
 -spec commutative_post(S :: eqc_statem:dynamic_state(),
                       Args :: [term()], R :: term()) -> true | term().
 commutative_post(_S, [_Replica1, _Replica2], {OneMergeTwo, TwoMergeOne}) ->
-    riak_dt_map2:equal(OneMergeTwo, TwoMergeOne).
+    ?MAP:equal(OneMergeTwo, TwoMergeOne).
 
 %% ------ Grouped operator: associative
 
@@ -361,9 +369,9 @@ associative(Replica1, Replica2, Replica3) ->
     [{Replica1, Map1, _Model1}] = ets:lookup(map_eqc, Replica1),
     [{Replica2, Map2, _Model2}] = ets:lookup(map_eqc, Replica2),
     [{Replica3, Map3, _Model3}] = ets:lookup(map_eqc, Replica3),
-    {riak_dt_map2:merge(riak_dt_map2:merge(Map1, Map2), Map3),
-     riak_dt_map2:merge(riak_dt_map2:merge(Map1, Map3), Map2),
-     riak_dt_map2:merge(riak_dt_map2:merge(Map2, Map3), Map1)}.
+    {?MAP:merge(?MAP:merge(Map1, Map2), Map3),
+     ?MAP:merge(?MAP:merge(Map1, Map3), Map2),
+     ?MAP:merge(?MAP:merge(Map2, Map3), Map1)}.
 
 %% @doc associative_post - Postcondition for associative
 -spec associative_post(S :: eqc_statem:dynamic_state(),
@@ -382,7 +390,7 @@ associative_post(_S, [_Replica1, _Replica2, _Replica3], {ABC, ACB, BCA}) ->
     end.
 
 map_values_equal(Map1, Map2) ->
-    lists:sort(riak_dt_map2:value(Map1)) == lists:sort(riak_dt_map2:value(Map2)).
+    lists:sort(?MAP:value(Map1)) == lists:sort(?MAP:value(Map2)).
 
 %% @Doc Weights for commands. Don't create too many replicas, but
 %% prejudice in favour of creating more than 1. Try and balance
@@ -418,12 +426,12 @@ prop_merge() ->
                 ReplicaData =  ets:tab2list(map_eqc),
                 %% Check that merging all values leads to the same results for Map and the Model
                 {Map, Model} = lists:foldl(fun({_Actor, InMap, InModel}, {M, Mo}) ->
-                                                   {riak_dt_map2:merge(M, InMap),
-                                                    model_merge(Mo, InModel)}
+                                                   {?MAP:merge(M, InMap),
+                                                    ?MODEL:merge(Mo, InModel)}
                                            end,
-                                           {riak_dt_map2:new(), model_new()},
+                                           {?MAP:new(), ?MODEL:new()},
                                            ReplicaData),
-                MapValue = riak_dt_map2:value(Map),
+                MapValue = ?MAP:value(Map),
                 ModelValue = model_value(Model),
                 %% clean up
                 ets:delete(map_eqc),
@@ -452,8 +460,8 @@ gen_field() ->
      elements([
                riak_dt_orswot,
                riak_dt_emcntr,
-               riak_dt_lwwreg,
-               riak_dt_map2,
+               riak_dt_emlwwreg,
+               ?MAP,
                riak_dt_od_flag
               ])}.
 
@@ -501,187 +509,50 @@ ignore_precon_error(_, Map) ->
 %% mutated replica is equal for the map and the model
 post_all({Map, Model}, Cmd) ->
     %% What matters is that both types have the exact same results.
-    case lists:sort(riak_dt_map2:value(Map)) == lists:sort(model_value(Model)) of
+    case lists:sort(?MAP:value(Map)) == lists:sort(model_value(Model)) of
         true ->
             true;
         _ ->
-            {postcondition_failed, "Map and Model don't match", Cmd, Map, Model, riak_dt_map2:value(Map), model_value(Model)}
+            {postcondition_failed, "Map and Model don't match", Cmd, Map, Model, ?MAP:value(Map), model_value(Model)}
     end.
 
 %% @doc `true' if `Field' is not in `Map'
 field_not_present(Field, {Map, _Model}) ->
-    case lists:keymember(Field, 1, riak_dt_map2:value(Map)) of
+    case lists:keymember(Field, 1, ?MAP:value(Map)) of
         false ->
             true;
         true ->
             {Field, present, Map}
     end.
 
-%% -----------
-%% Model
-%% ----------
+%% The ?MAP uses the embedded emlwwreg to match the semantics of the
+%% old map (?MODEL) and its lwwreg
+model_normalise_field({Name, riak_dt_emlwwreg}) ->
+    {Name, riak_dt_lwwreg};
+model_normalise_field({Name, ?MAP}) ->
+    {Name, ?MODEL};
+model_normalise_field(F) ->
+    F.
 
-%% The model has to be a Map CRDT, with the same deferred operations
-%% and reset-remove semantics as riak_dt_map2. Luckily it has no
-%% efficiency constraints. It's modelled as three lists. Added fields,
-%% removed fields, and deferred remove operations. There is also an
-%% entry for tombstones, and vclock. Whenever a field is removed, an
-%% empty CRDT of that fields type is stored, with the clock at removal
-%% time, in tombstones. Merging a fields value with this tombstone
-%% ensures reset-remove semantics. The vector clock entry is only for
-%% tombstones and context operations. The add/remove sets use a unique
-%% tag, like in OR-Set, for elements.
+model_denormalise_field({Name, riak_dt_lwwreg}) ->
+    {Name, riak_dt_emlwwreg};
+model_denormalise_field({Name, ?MODEL}) ->
+    {Name, ?MAP};
+model_denormalise_field(F) ->
+    F.
 
--record(model, {
-          %% Things added to the Map, a Set really, but uses a list
-          %% for ease of reading in case of a counter example
-          adds=[],
-          %% Tombstones of things removed from the map
-          removes=[],
-          %% Removes that are waiting for adds before they
-          %% can be run (like context ops in the
-          %% riak_dt_map2)
-          deferred=[],
-          %% For reset-remove semantic, the field+clock at time of
-          %% removal
-          tombstones=orddict:new() :: orddict:orddict(),
-          %% for embedded context operations
-          clock=riak_dt_vclock:fresh() :: riak_dt_vclock:vclock()
-         }).
-
--type map_model() :: #model{}.
-
-%% @doc create a new model. This is the bottom element.
--spec model_new() -> map_model().
-model_new() ->
-    #model{}.
-
-%% @doc update `Field' with `Op', by `Actor' at time `Cnt'. very
-%% similar to riak_dt_map2.
--spec model_update_field({atom(), module()}, term(), binary(), pos_integer(),
-                         map_model(), undefined | riak_dt_vclock:vclock()) -> map_model().
-model_update_field({_Name, Type}=Field, Op, Actor, Cnt, Model, Ctx) ->
-    #model{adds=Adds, removes=Removes, clock=Clock, tombstones=TS} = Model,
-    %% generate a new clock
-    Clock2 = riak_dt_vclock:merge([[{Actor, Cnt}], Clock]),
-    %% Get those fields that are present, that is, only in the Adds
-    %% set
-    InMap = lists:subtract(Adds, Removes),
-    %% Merge all present values to get a current CRDT, and add each
-    %% field entry we merge to a set so we can move them to `removed'
-    {CRDT0, ToRem} = lists:foldl(fun({F, Value, _X}=E, {CAcc, RAcc}) when F == Field ->
-                                         {Type:merge(CAcc, Value), lists:umerge([E], RAcc)};
-                                    (_, Acc) -> Acc
-                                 end,
-                                 {Type:new(), []},
-                                 InMap),
-    %% If we have a tombstone for this field, merge with it to ensure
-    %% reset-remove
-    CRDT1 = case orddict:find(Field, TS) of
-                error ->
-                    CRDT0;
-                {ok, TSVal} ->
-                    Type:merge(CRDT0, TSVal)
-            end,
-    %% Update the clock to ensure a shared causal context
-    CRDT = Type:parent_clock(Clock2, CRDT1),
-    %% Apply the operation
-    case Type:update(Op, {Actor, Cnt}, CRDT, Ctx) of
-        {ok, Updated} ->
-            %% Op succeded, store the new value as the field, using
-            %% `Cnt' (which is time since the statem acts serially) as
-            %% a unique tag.
-            Model2 = Model#model{adds=lists:umerge([{Field, Updated, Cnt}], Adds),
-                                 removes=lists:umerge(ToRem, Removes),
-                                 clock=Clock2},
-            {ok, Model2};
-        _ ->
-            %% if the op failed just return the state un changed
-            {ok, Model}
-    end.
-
-%% @doc remove a field from the model, doesn't enforce a precondition,
-%% removing a non-present field does nothing.
--spec model_remove_field({atom(), module()}, map_model()) -> map_model().
-model_remove_field({_Name, Type}=Field, Model) ->
-    #model{adds=Adds, removes=Removes, tombstones=Tombstones0, clock=Clock} = Model,
-    ToRemove = [{F, Val, Token} || {F, Val, Token} <- Adds, F == Field],
-    TS = Type:parent_clock(Clock, Type:new()),
-    Tombstones = orddict:update(Field, fun(T) -> Type:merge(TS, T) end, TS, Tombstones0),
-    Model#model{removes=lists:umerge(Removes, ToRemove), tombstones=Tombstones}.
-
-%% @doc merge two models. Very simple since the model truley always
-%% grows, it is just a union of states, and then applies the deferred
-%% operations.
--spec model_merge(map_model(), map_model()) -> map_model().
-model_merge(Model1, Model2) ->
-    #model{adds=Adds1, removes=Removes1, deferred=Deferred1, clock=Clock1, tombstones=TS1} = Model1,
-    #model{adds=Adds2, removes=Removes2, deferred=Deferred2, clock=Clock2, tombstones=TS2} = Model2,
-    Clock = riak_dt_vclock:merge([Clock1, Clock2]),
-    Adds0 = lists:umerge(Adds1, Adds2),
-    Tombstones = orddict:merge(fun({_Name, Type}, V1, V2) -> Type:merge(V1, V2) end, TS1, TS2),
-    Removes0 = lists:umerge(Removes1, Removes2),
-    Deferred0 = lists:umerge(Deferred1, Deferred2),
-    {Adds, Removes, Deferred} = model_apply_deferred(Adds0, Removes0, Deferred0),
-    #model{adds=Adds, removes=Removes, deferred=Deferred, clock=Clock, tombstones=Tombstones}.
-
-%% @doc apply deferred operations that may be relevant now a merge as taken place.
--spec model_apply_deferred(list(), list(), list()) -> {list(), list(), list()}.
-model_apply_deferred(Adds, Removes, Deferred) ->
-    D2 = lists:subtract(Deferred, Adds),
-    ToRem = lists:subtract(Deferred, D2),
-    {Adds, lists:umerge(ToRem, Removes), D2}.
-
-%% @doc remove `Field' from `To' using `From's context.
--spec model_ctx_remove({atom(), module()}, map_model(), map_model()) -> map_model().
-model_ctx_remove({_N, Type}=Field, From, To) ->
-    %% get adds for Field, any adds for field in ToAdds that are in
-    %% FromAdds should be removed any others, put in deferred
-    #model{adds=FromAdds, clock=FromClock} = From,
-    #model{adds=ToAdds, removes=ToRemoves, deferred=ToDeferred, tombstones=TS} = To,
-    ToRemove = lists:filter(fun({F, _Val, _Token}) -> F == Field end, FromAdds),
-    Defer = lists:subtract(ToRemove, ToAdds),
-    Remove = lists:subtract(ToRemove, Defer),
-    Tombstone = Type:parent_clock(FromClock, Type:new()),
-    TS2 = orddict:update(Field, fun(T) -> Type:merge(T, Tombstone) end, Tombstone, TS),
-    To#model{removes=lists:umerge(Remove, ToRemoves),
-             deferred=lists:umerge(Defer, ToDeferred),
-             tombstones=TS2}.
-
-%% @doc get the actual value for a model
--spec model_value(map_model()) ->
-                         [{Field::{atom(), module()}, Value::term()}].
+%% recurse down value and replace Field with
+%% model_denormalise_field(Field)
 model_value(Model) ->
-    #model{adds=Adds, removes=Removes, tombstones=TS} = Model,
-    Remaining = lists:subtract(Adds, Removes),
-    %% fold over fields that are in the map and merge each to a merge
-    %% CRDT per field
-    Res = lists:foldl(fun({{_Name, Type}=Key, Value, _X}, Acc) ->
-                              %% if key is in Acc merge with it and replace
-                              dict:update(Key, fun(V) ->
-                                                       Type:merge(V, Value) end,
-                                          Value, Acc) end,
-                      dict:new(),
-                      Remaining),
-    %% fold over merged CRDTs and merge with the tombstone (if any)
-    %% for each field
-    Res2 = dict:fold(fun({_N, Type}=Field, Val, Acc) ->
-                             case orddict:find(Field, TS) of
-                                 error ->
-                                     dict:store(Field, Val, Acc);
-                                 {ok, TSVal} ->
-                                     dict:store(Field, Type:merge(TSVal, Val), Acc)
-                             end
-                     end,
-                     dict:new(),
-                     Res),
-    %% Call `value/1' on each CRDT in the model
-    [{K, Type:value(V)} || {{_Name, Type}=K, V} <- dict:to_list(Res2)].
+    Val0 = ?MODEL:value(Model),
+    normalise_value(?MODEL, Val0).
 
-%% @doc get a context for a model context operation
--spec model_ctx(map_model()) -> riak_dt_vclock:vclock().
-model_ctx(#model{clock=Ctx}) ->
-    Ctx.
-
+normalise_value(?MODEL, Pairs) ->
+    [begin
+         {_N, T}=F = model_denormalise_field(Field),
+         {F, normalise_value(T, Val)}
+     end || {Field, Val} <- Pairs];
+normalise_value(_T, Val) ->
+    Val.
 
 -endif. % EQC

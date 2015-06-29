@@ -158,6 +158,7 @@
 -endif.
 
 -ifdef(TEST).
+-compile(export_all).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
@@ -223,13 +224,8 @@
 
 -define(FRESH_CLOCK, riak_dt_vclock:fresh()).
 
-%% The map output is far more human readable as orddict, so when eqc
-%% testing, making it so for readable counterexamples.
--ifdef(EQC).
--define(DICT, orddict).
--else.
+
 -define(DICT, dict).
--endif.
 
 %% @doc Create a new, empty Map.
 -spec new() -> map().

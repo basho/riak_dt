@@ -134,6 +134,13 @@
 -type dict(_A, _B) :: dict().
 -endif.
 
+%% orddict is easier to read in an eqc counterexample, but dict
+%% performs better in the real world.
+%% -ifdef(EQC).
+%% -define(DICT, orddict).
+%% -else.
+%% -define(DICT, dict).
+%% -endif.
 -define(DICT, dict).
 
 -spec new() -> orswot().
