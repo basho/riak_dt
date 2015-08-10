@@ -28,7 +28,6 @@
 -compile(export_all).
 
 -define(SET, riak_dt_delta_orswot).
--define(MASTER_ID, master).
 -define(MAX_REPLICAS, 10).
 
 %% The set of possible elements in the set
@@ -48,7 +47,8 @@
 
 -record(replica, {
           id,
-          set=?SET:new()
+          set=?SET:new(),
+          deltas=?SET:new()
          }
        ).
 
@@ -95,48 +95,67 @@ create_replica_next(S=#state{replicas=R0}, _Value, [Id]) ->
     S#state{replicas=R0++[Id]}.
 
 %% ------ Grouped operator: delta_add
-delta_add_args(_State) ->
-    [growingelements(?ELEMENTS)].
+%% @doc add_pre - Don't add to a set until we have a replica
+-spec delta_add_pre(S :: eqc_statem:symbolic_state()) -> boolean().
+delta_add_pre(#state{replicas=Replicas}) ->
+    Replicas /= [].
+
+delta_add_args(#state{replicas=Replicas}) ->
+    [elements(Replicas),
+     %% Start of with earlier/fewer elements
+     growingelements(?ELEMENTS)].
+
+%% @doc delta_add_pre - Ensure correct shrinking, only select a replica that
+%% is in the state
+-spec delta_add_pre(S :: eqc_statem:symbolic_state(),
+              Args :: [term()]) -> boolean().
+delta_add_pre(#state{replicas=Replicas}, [Replica, _]) ->
+    lists:member(Replica, Replicas).
 
 %% @doc delta_add the `Element' to the sets at `Replica'
-delta_add(Element) ->
-    [#replica{set=Master}=Rep] = ets:lookup(orswot_eqc, ?MASTER_ID),
-    {ok, Delta} = ?SET:delta_update({add, Element}, ?MASTER_ID, Master),
-    Master2 = ?SET:merge(Delta, Master),
-    ets:insert(orswot_eqc, Rep#replica{set=Master2}),
+delta_add(Replica, Element) ->
+    [#replica{set=Set}=Rep] = ets:lookup(orswot_eqc, Replica),
+    {ok, Delta} = ?SET:delta_update({add, Element}, Replica, Set),
+    Set2 = ?SET:merge(Delta, Set),
+    ets:insert(orswot_eqc, Rep#replica{set=Set2}),
     Delta.
 
 -spec delta_add_next(S :: eqc_statem:symbolic_state(),
                V :: eqc_statem:var(),
                Args :: [term()]) -> eqc_statem:symbolic_state().
-delta_add_next(S=#state{adds=Adds, deltas=Deltas}, Delta, [Element]) ->
+delta_add_next(S=#state{adds=Adds, deltas=Deltas}, Delta, [_Replica, Element]) ->
     S#state{adds=lists:umerge(Adds, [Element]), deltas=[Delta | Deltas]}.
 
 %% ------ Grouped operator: delta_remove
-%% @doc delta_remove_command - Command generator
-delta_remove_args(#state{adds=Adds}) ->
-    [elements(Adds)].
 
+%% @doc delta_remove_pre - Only delta_remove if there are replicas and elements
+%% added already.
 -spec delta_remove_pre(S :: eqc_statem:symbolic_state()) -> boolean().
-delta_remove_pre(#state{adds=Adds}) ->
-    Adds /= [].
+delta_remove_pre(#state{replicas=Replicas, adds=Adds}) ->
+    Replicas /= [] andalso Adds /= [].
+
+delta_remove_args(#state{replicas=Replicas, adds=Adds}) ->
+    [elements(Replicas), elements(Adds)].
+
+%% @doc ensure correct shrinking
+delta_remove_pre(#state{replicas=Replicas}, [Replica, _]) ->
+    lists:member(Replica, Replicas).
 
 %% @doc a dynamic precondition uses concrete state, check that the
 %% `From' set contains `Element'
-delta_remove_dynamicpre(_S, [Element]) ->
-    [#replica{set=Master}] = ets:lookup(orswot_eqc, ?MASTER_ID),
-    lists:member(Element, riak_dt_delta_orswot:value(Master)).
-
+delta_remove_dynamicpre(_S, [Replica, Element]) ->
+    [#replica{set=Set}] = ets:lookup(orswot_eqc, Replica),
+    lists:member(Element, riak_dt_delta_orswot:value(Set)).
 
 %% @doc perform an element delta_remove.
-delta_remove(Element) ->
-    [#replica{set=Master}=Rep] = ets:lookup(orswot_eqc, ?MASTER_ID),
-    {ok, Delta} = ?SET:delta_update({remove, Element}, ?MASTER_ID, Master),
-    Master2 = ?SET:merge(Delta, Master),
-    ets:insert(orswot_eqc, Rep#replica{set=Master2}),
+delta_remove(Replica, Element) ->
+    [#replica{set=Set}=Rep] = ets:lookup(orswot_eqc, Replica),
+    {ok, Delta} = ?SET:delta_update({remove, Element}, Replica, Set),
+    Set2 = ?SET:merge(Delta, Set),
+    ets:insert(orswot_eqc, Rep#replica{set=Set2}),
     Delta.
 
-delta_remove_next(S=#state{deltas=Deltas}, Delta, [_Element]) ->
+delta_remove_next(S=#state{deltas=Deltas}, Delta, [_Replica, _Element]) ->
     S#state{deltas=[Delta | Deltas]}.
 
 
@@ -159,14 +178,14 @@ delta_replicate_pre(#state{replicas=Replicas, deltas=Deltas}, [DeltaBuffer, To])
 
 %% @doc simulate replication by merging state at `To' with `Delta'
 delta_replicate(DeltaBuffer, To) ->
-    [#replica{id=To, set=ToSet0}=ToRep] = ets:lookup(orswot_eqc, To),
+    [#replica{id=To, deltas=ToSet0}=ToRep] = ets:lookup(orswot_eqc, To),
 
     ToSet = lists:foldl(fun(Delta, Set) ->
                                 ?SET:merge(Delta, Set)
                         end,
                         ToSet0,
                         DeltaBuffer),
-    ets:insert(orswot_eqc, ToRep#replica{set=ToSet}),
+    ets:insert(orswot_eqc, ToRep#replica{deltas=ToSet}),
     DeltaBuffer.
 
 delta_replicate_next(S=#state{delivered=Delivered}, DeltaBuffer, [_Element, _To]) ->
@@ -199,11 +218,7 @@ prop_merge() ->
                 %% shrinking. This is best practice.
                 ets:new(orswot_eqc, [named_table, set, {keypos, #replica.id}]),
 
-                %% There's always a master
-                ets:insert(orswot_eqc, #replica{id=?MASTER_ID}),
-
                 {H, S=#state{deltas=Deltas, delivered=Delivered}, Res} = run_commands(?MODULE,Cmds),
-                [#replica{set=Master}] = ets:lookup(orswot_eqc, ?MASTER_ID),
 
                 Undelivered = sets:fold(fun(D, Acc)  ->
                                                 ?SET:merge(D, Acc)
@@ -211,13 +226,12 @@ prop_merge() ->
                                         ?SET:new(),
                                         sets:subtract(sets:from_list(Deltas), sets:from_list(lists:flatten(Delivered)))),
 
-                Merged = lists:foldl(fun(#replica{id=?MASTER_ID}, Mergedest) ->
-                                             Mergedest;
-                                        (#replica{set=Set}, Mergedest) ->
-                                             ?SET:merge(Set, Mergedest)
-                                     end,
-                                     Undelivered,%%?SET:new(),
-                                     ets:tab2list(orswot_eqc)),
+                {Sets, DeltaSets} = lists:foldl(fun(#replica{deltas=Delta, set=Set}, {Mergedest, DeltaMerged}) ->
+                                                        {?SET:merge(Set, Mergedest),
+                                                         ?SET:merge(DeltaMerged, Delta)}
+                                                end,
+                                                {?SET:new(), Undelivered},
+                                                ets:tab2list(orswot_eqc)),
 
                 ets:delete(orswot_eqc),
                 pretty_commands(?MODULE, Cmds, {H, S, Res},
@@ -227,7 +241,7 @@ prop_merge() ->
                                                           measure(undelivered, length(Deltas) - length(lists:flatten(Delivered)),
                                                                   measure(replicas, length(S#state.replicas),
                                                                           conjunction([{result, Res == ok},
-                                                                                       {equal, sets_equal(Master, Merged)}
+                                                                                       {equal, sets_equal(Sets, DeltaSets)}
                                                                                       ])))))))
 
             end).
