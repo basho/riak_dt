@@ -22,6 +22,12 @@
 %% -------------------------------------------------------------------
 -module(riak_dt_delta_orswot).
 
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
+
 %% API
 -export([new/0, value/1]).
 -export([update/3, merge/2]).
@@ -58,11 +64,12 @@ delta_update({add, Elem}, Actor, {Clock, _Entries, _Seen}) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
     Counter = riak_dt_vclock:get_counter(Actor, NewClock),
     Dot = [{Actor, Counter}],
-    {ok, {[], orddict:store(Elem, Dot, orddict:new()), Dot}};
+    {ok, {Dot, orddict:store(Elem, Dot, orddict:new()), Dot}};
 delta_update({remove, Elem}, _Actor, {_Clock, Entries, _Seen}) ->
     case orddict:find(Elem, Entries) of
         {ok, Dots} ->
-            {ok, {[], [], Dots}};
+             {Clock2, Seen2} = compress_seen([], Dots),
+            {ok, {Clock2, [], Seen2}};
         error ->
             {ok, {[], [], []}}
     end.
@@ -164,3 +171,26 @@ merge_common_keys(CommonKeys, {LHSClock, LHSEntries, LHSeen}, {RHSClock, RHSEntr
               end,
               orddict:new(),
               CommonKeys).
+
+
+
+-ifdef(TEST).
+out_of_order_test() ->
+    A=B = new(),
+    {ok, D1} = delta_update({add, 'x'}, a, A),
+    A2 = merge(A, D1),
+    {ok, D2} = delta_update({add, 'x'}, a, A2),
+    A3 = merge(A2, D2),
+    {ok, D3} = delta_update({remove, 'x'}, a, A3),
+    A4 = merge(A3, D3),
+
+    %% no matter what order those three deltas reach B, the result is
+    %% the same
+    ?assertEqual(A4, merge(D1, merge(merge(B, D2), D3))),
+    ?assertEqual(A4, merge(D1, merge(merge(B, D3), D2))),
+    ?assertEqual(A4, merge(D2, merge(merge(B, D1), D3))),
+    ?assertEqual(A4, merge(D2, merge(merge(B, D3), D1))),
+    ?assertEqual(A4, merge(D3, merge(merge(B, D1), D2))),
+    ?assertEqual(A4, merge(D3, merge(merge(B, D2), D1))).
+
+-endif.
