@@ -470,4 +470,5 @@ model_merge({S1, D1}, {S2, D2}) ->
     S = riak_dt_orset:merge(S1, S2),
     D = riak_dt_orset:merge(D1, D2),
     model_apply_deferred(S, D).
+
 -endif.
