@@ -162,7 +162,7 @@ delta_remove_next(S=#state{deltas=Deltas}, Delta, [_Replica, _Element]) ->
 %% ------ Grouped operator: delta_replicate
 %% @doc delta_replicate_args - Choose a From and To for replication
 delta_replicate_args(#state{replicas=Replicas, deltas=Deltas}) ->
-    [subset(Deltas), elements(Replicas)].
+    [subset(Deltas), elements(Replicas), elements(Replicas)].
 
 -spec delta_replicate_pre(S :: eqc_statem:symbolic_state()) -> boolean().
 delta_replicate_pre(#state{deltas=Deltas, replicas=Replicas}) ->
@@ -171,24 +171,28 @@ delta_replicate_pre(#state{deltas=Deltas, replicas=Replicas}) ->
 %% @doc delta_replicate_pre - Ensure correct shrinking
 -spec delta_replicate_pre(S :: eqc_statem:symbolic_state(),
                     Args :: [term()]) -> boolean().
-delta_replicate_pre(#state{replicas=Replicas, deltas=Deltas}, [DeltaBuffer, To]) ->
+delta_replicate_pre(#state{replicas=Replicas, deltas=Deltas}, [DeltaBuffer, From, To]) ->
     sets:is_subset(sets:from_list(DeltaBuffer), sets:from_list(Deltas))
         andalso
-        lists:member(To, Replicas).
+        lists:member(To, Replicas)
+        andalso
+        lists:member(From, Replicas).
 
 %% @doc simulate replication by merging state at `To' with `Delta'
-delta_replicate(DeltaBuffer, To) ->
-    [#replica{id=To, deltas=ToSet0}=ToRep] = ets:lookup(orswot_eqc, To),
+delta_replicate(DeltaBuffer, From, To) ->
+    [#replica{id=To, set=ToSet0, deltas=ToDelta0}=ToRep] = ets:lookup(orswot_eqc, To),
+    [#replica{id=From, set=FromSet}] = ets:lookup(orswot_eqc, From),
 
-    ToSet = lists:foldl(fun(Delta, Set) ->
-                                ?SET:merge(Delta, Set)
-                        end,
-                        ToSet0,
-                        DeltaBuffer),
-    ets:insert(orswot_eqc, ToRep#replica{deltas=ToSet}),
+    ToDelta = lists:foldl(fun(Delta, Set) ->
+                                  ?SET:merge(Delta, Set)
+                          end,
+                          ToDelta0,
+                          DeltaBuffer),
+    ToSet = ?SET:merge(FromSet, ToSet0),
+    ets:insert(orswot_eqc, ToRep#replica{set=ToSet, deltas=ToDelta}),
     DeltaBuffer.
 
-delta_replicate_next(S=#state{delivered=Delivered}, DeltaBuffer, [_Element, _To]) ->
+delta_replicate_next(S=#state{delivered=Delivered}, DeltaBuffer, [_Element, _From, _To]) ->
     S#state{delivered=[DeltaBuffer | Delivered]}.
 
 %% @doc weights for commands. Don't create too many replicas, but
