@@ -20,7 +20,7 @@
 %% -------------------------------------------------------------------
 
 -module(delta_eqc).
-
+-ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eqc/include/eqc_statem.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -266,3 +266,4 @@ sets_equal(S1, S2) ->
 subset(Set) ->
     ?LET(Keep, vector(length(Set), bool()),
          return([ X || {X, true}<-lists:zip(Set, Keep)])).
+-endif.

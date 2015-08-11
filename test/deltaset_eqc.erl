@@ -21,6 +21,8 @@
 
 -module(deltaset_eqc).
 
+-ifdef(EQC).
+
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eqc/include/eqc_statem.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -443,3 +445,4 @@ model_merge({S1, D1}, {S2, D2}) ->
     S = ?SET:merge(S1, S2),
     D = ?SET:merge(D1, D2),
     model_apply_deferred(S, D).
+-endif.
