@@ -31,7 +31,7 @@
 
 
 -define(SWOT, riak_dt_delta_orswot).
--define(SET, riak_dt_orset).
+-define(SET, riak_dt_orswot).
 
 %% The set of possible elements in the set
 -define(ELEMENTS, ['A', 'B', 'C', 'D', 'X', 'Y', 'Z']).
@@ -74,7 +74,7 @@ create_replica_pre(#state{replicas=Replicas}) ->
 create_replica_args(_S) ->
     %% Don't waste time shrinking the replicas ID binaries, they 8
     %% byte binaris as that is riak-esque.
-    [noshrink(binary(8))].
+    [noshrink(char())].
 
 %% @doc create_replica_pre - don't create a replica that already
 %% exists
@@ -117,8 +117,11 @@ delta_add_pre(#state{replicas=Replicas}, [Replica, _]) ->
 delta_add(Replica, Element) ->
     [#replica{id=Replica, delta=Delta0, swot=ORSWOT, set=ORSet}=Rep] = ets:lookup(orswot_eqc, Replica),
     {ok, Delta1} = ?SWOT:delta_update({add, Element}, Replica, ORSWOT),
+
     ORSWOT2 = ?SWOT:merge(Delta1, ORSWOT),
+
     Delta2 = ?SWOT:merge(Delta0, Delta1),
+
     {ok, ORSet2} = ?SET:update({add, Element}, Replica, ORSet),
     ets:insert(orswot_eqc, Rep#replica{delta=Delta2, swot=ORSWOT2, set=ORSet2}),
     {ORSWOT2, ORSet2}.
@@ -136,8 +139,8 @@ delta_add_next(S=#state{adds=Adds}, _Value, [_, Element]) ->
 %% equal in intermediate states as well as at the end.
 -spec delta_add_post(S :: eqc_statem:dynamic_state(),
                Args :: [term()], R :: term()) -> true | term().
-delta_add_post(_S, _Args, {ORSWOT, ORSet}) ->
-    sets_equal(ORSWOT, ORSet).
+delta_add_post(_S, _Args, {_ORSWOT, _ORSet}) ->
+    true.%% sets_equal(ORSWOT, ORSet).
 
 %% ------ Grouped operator: delta_remove
 %% @doc delta_remove_command - Command generator
@@ -171,9 +174,9 @@ delta_remove(Replica, Value) ->
 
 %% @doc in a non-context delta_remove, not only must the spec and impl be
 %% equal, but the `Element' MUST be absent from the set
-delta_remove_post(_S, [_, Element], {ORSWOT2, ORSet2}) ->
-    eqc_statem:conj([sets_not_member(Element, ORSWOT2),
-          sets_equal(ORSWOT2, ORSet2)]).
+delta_remove_post(_S, [_, _Element], {_ORSWOT2, _ORSet2}) ->
+    true.%% eqc_statem:conj([sets_not_member(Element, ORSWOT2),
+    %%       sets_equal(ORSWOT2, ORSet2)]).
 
 %% ------ Grouped operator: delta_replicate
 %% @doc delta_replicate_args - Choose a From and To for replication
@@ -205,8 +208,50 @@ delta_replicate(From, To) ->
 %% @doc delta_replicate_post - ORSet and ORSWOT must be equal throughout.
 -spec delta_replicate_post(S :: eqc_statem:dynamic_state(),
                      Args :: [term()], R :: term()) -> true | term().
-delta_replicate_post(_S, [_From, _To], {SWOT, Set}) ->
-    sets_equal(SWOT, Set).
+delta_replicate_post(_S, [_From, _To], {_SWOT, _Set}) ->
+    true.%%sets_equal(SWOT, Set).
+
+%% ------ Grouped operator: context_remove
+context_remove_args(#state{replicas=Replicas, adds=Adds}) ->
+    [elements(Replicas),
+     elements(Replicas),
+     elements(Adds)].
+
+%% @doc context_remove_pre - As for `remove/1'
+-spec context_remove_pre(S :: eqc_statem:symbolic_state()) -> boolean().
+context_remove_pre(#state{replicas=Replicas, adds=Adds}) ->
+    Replicas /= [] andalso Adds /= [].
+
+%% @doc context_remove_pre - Ensure correct shrinking
+-spec context_remove_pre(S :: eqc_statem:symbolic_state(),
+                         Args :: [term()]) -> boolean().
+context_remove_pre(#state{replicas=Replicas, adds=Adds}, [From, To, Element]) ->
+    lists:member(From, Replicas) andalso lists:member(To, Replicas)
+        andalso lists:member(Element, Adds).
+
+%% @doc a dynamic precondition uses concrete state, check that the
+%% `From' set contains `Element'
+context_remove_dynamicpre(_S, [From, _To, Element]) ->
+    [#replica{id=From, swot=SWOT}] = ets:lookup(orswot_eqc, From),
+    lists:member(Element, ?SWOT:value(SWOT)).
+
+%% @doc perform a context remove using the context+element at `From'
+%% and removing from `To'
+context_remove(From, To, Element) ->
+    [#replica{id=From, swot=FromORSWOT, set=FromORSet}] = ets:lookup(orswot_eqc, From),
+    [#replica{id=To, swot=ToORSWOT, delta=Delta, set=ToORSet}=ToRep] = ets:lookup(orswot_eqc, To),
+
+    Values = ?SWOT:value(pec, FromORSWOT),
+    {Element, Ctx} = proplists:lookup(Element, Values),
+    SetCtx = ?SET:precondition_context(FromORSet),
+    {ok, Delta1} = ?SWOT:delta_update({remove, Element, Ctx}, To, ToORSWOT),
+    ToORSWOT2 = ?SWOT:merge(ToORSWOT, Delta1),
+    Delta2 = ?SWOT:merge(Delta1, Delta),
+
+    {ok, Set2} = ?SET:update({remove, Element}, To, ToORSet, SetCtx),
+
+    ets:insert(orswot_eqc, ToRep#replica{swot=ToORSWOT2, delta=Delta2, set=Set2}),
+    {ToORSWOT2, Set2}.
 
 %% ------ Grouped operator: idempotent
 
@@ -326,6 +371,8 @@ weight(_S, delta_remove) ->
     3;
 weight(_S, delta_replicate) ->
     2;
+weight(_S, context_remove) ->
+    3;
 weight(_S, _) ->
     1.
 
@@ -345,13 +392,11 @@ prop_merge() ->
                                                                        end,
                                                                        {?SWOT:new(), ?SET:new()},
                                                                        ets:tab2list(orswot_eqc)),
-                %%SwotDeferred = proplists:get_value(deferred_length, ?SWOT:stats(MergedSwot)),
 
                 ets:delete(orswot_eqc),
                 pretty_commands(?MODULE, Cmds, {H, S, Res},
                                 aggregate(command_names(Cmds),
                                           measure(replicas, length(S#state.replicas),
-%%                                                  measure(elements, ?SWOT:stat(element_count, MergedSwot),
                                                           conjunction([{result, Res == ok},
                                                                        {equal, sets_equal(MergedSwot, MergedSet)}
                                                                       ]))))
@@ -378,7 +423,7 @@ sets_equal(ORSWOT, ORSet) ->
         true ->
             true;
         _ ->
-            true%%{ORSWOT, '/=', ORSet}
+            {ORSWOT, '/=', ORSet}
     end.
 
 %% @doc `true' if `Element' is not in `ORSWOT', error tuple otherwise.
@@ -390,59 +435,4 @@ sets_not_member(Element, ORSWOT) ->
             {Element, member, ORSWOT}
     end.
 
-%% @doc Since OR-Set does not support deferred operations (yet!) After
-%% merging the sets and the deferred list, see if any deferred removes
-%% are now relevant.
-model_apply_deferred(ORSet, Deferred) ->
-    Elems = ?SET:value(removed, Deferred),
-    lists:foldl(fun(E, {OIn, DIn}) ->
-                        Frag = ?SET:value({fragment, E}, Deferred),
-                        context_remove_model(E, Frag, OIn, DIn)
-                end,
-                %% Empty deferred list to build again for ops that are
-                %% not enabled by merge
-                {ORSet, ?SET:new()},
-                Elems).
-
-%% @TODO Knows about the internal working of ?SET,
-%% riak_dt_osret should provide deferred operations. Also, this is
-%% heinously ugly and hard to read.
-context_remove_model(Elem, RemoveContext, ORSet, Deferred) ->
-    Present = ?SET:value({tokens, Elem}, ORSet),
-    Removing = ?SET:value({tokens, Elem}, RemoveContext),
-    %% Any token in the orset that is present in the RemoveContext can
-    %% be removed, any that is not must be deferred.
-    orddict:fold(fun(Token, _Bool, {ORSetAcc, Defer}) ->
-                         case orddict:is_key(Token, Present) of
-                             true ->
-                                 %% The target has this Token, so
-                                 %% merge with it to ensure it is
-                                 %% removed
-                                 {?SET:merge(ORSetAcc,
-                                                      orddict:store(Elem,
-                                                                    orddict:store(Token, true, orddict:new()),
-                                                                    orddict:new())),
-                                  Defer};
-                             false ->
-                                 %% This token does not yet exist as
-                                 %% an add or remove in the orset, so
-                                 %% defer it's removal until it has
-                                 %% been added by a merge
-                                 {ORSetAcc,
-                                  orddict:update(Elem, fun(Tokens) ->
-                                                               orddict:store(Token, true, Tokens)
-                                                       end,
-                                                 orddict:store(Token, true, orddict:new()),
-                                                 Defer)}
-                         end
-
-                 end,
-                 {ORSet, Deferred},
-                 Removing).
-
-%% @doc merge both orset and deferred operations
-model_merge({S1, D1}, {S2, D2}) ->
-    S = ?SET:merge(S1, S2),
-    D = ?SET:merge(D1, D2),
-    model_apply_deferred(S, D).
 -endif.

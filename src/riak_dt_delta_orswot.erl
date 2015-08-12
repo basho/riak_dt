@@ -29,7 +29,7 @@
 
 
 %% API
--export([new/0, value/1]).
+-export([new/0, value/1, value/2]).
 -export([update/3, merge/2]).
 -export([delta_update/3]).
 
@@ -38,9 +38,11 @@
 new() ->
     {riak_dt_vclock:fresh(), orddict:new(), orddict:new()}.
 
-value({Clock, Entries, _Seen}) ->
-    [K || {K, Dots} <- orddict:to_list(Entries),
-        riak_dt_vclock:subtract_dots(Dots, Clock) == []].
+value({_Clock, Entries, _Seen}) ->
+    [K || {K, _Dots} <- orddict:to_list(Entries)].
+
+value(pec, {_C, E, _S}) ->
+    E.
 
 update({add, Elem}, Actor, ORSet) ->
     {ok, add_elem(Actor, ORSet, Elem)};
@@ -60,11 +62,13 @@ remove_elem({ok, _VClock}, Elem, {Clock, Dict, Seen}) ->
 remove_elem(_, Elem, _ORSet) ->
     {error, {precondition, {not_present, Elem}}}.
 
-delta_update({add, Elem}, Actor, {Clock, _Entries, _Seen}) ->
+delta_update({add, Elem}, Actor, {Clock, Entries, _Seen}) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
     Counter = riak_dt_vclock:get_counter(Actor, NewClock),
     Dot = [{Actor, Counter}],
-    {ok, {Dot, orddict:store(Elem, Dot, orddict:new()), Dot}};
+    {C, S} = prev_ctx(Elem, Entries),
+    {Clock2, Seen2} = compress_seen(C, lists:umerge(Dot, S)),
+    {ok, {Clock2, orddict:store(Elem, Dot, orddict:new()), Seen2}};
 delta_update({remove, Elem}, _Actor, {_Clock, Entries, _Seen}) ->
     case orddict:find(Elem, Entries) of
         {ok, Dots} ->
@@ -72,6 +76,20 @@ delta_update({remove, Elem}, _Actor, {_Clock, Entries, _Seen}) ->
             {ok, {Clock2, [], Seen2}};
         error ->
             {ok, {[], [], []}}
+    end;
+%% A bigset style remove, where the elements dots are sent as ctx to
+%% the client
+delta_update({remove, _Elem, Ctx}, _Actor, {_Clock, _Entries, _Seen}) ->
+    {Clock2, Seen2} = compress_seen([], Ctx),
+    {ok, {Clock2, [], Seen2}}.
+
+
+prev_ctx(Elem, Entries) ->
+    case orddict:find(Elem, Entries) of
+        error ->
+            {[], []};
+        {ok, Dots} ->
+            compress_seen([], Dots)
     end.
 
 merge({LHClock, LHEntries, LHSeen}=LHS, {RHClock, RHEntries, RHSeen}=RHS) ->
