@@ -62,11 +62,22 @@ remove_elem({ok, _VClock}, Elem, {Clock, Dict, Seen}) ->
 remove_elem(_, Elem, _ORSet) ->
     {error, {precondition, {not_present, Elem}}}.
 
-delta_update({add, Elem}, Actor, {Clock, Entries, _Seen}) ->
+delta_update({add, Elem}, Actor, {Clock, _Entries, _Seen}) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
     Counter = riak_dt_vclock:get_counter(Actor, NewClock),
     Dot = [{Actor, Counter}],
-    {C, S} = prev_ctx(Elem, Entries),
+    %% @TODO what about this "optimisation" that means _more_ than a
+    %% delta is sent (it changes how removes work at another replica
+    %% profoundly!) For example if element 'X' exists with dots
+    %% a1,b4,d6 and we add it at a3, if we treat that add as a remove
+    %% of a1,b4,d6 and send them in the delta, a remove of 'X' a3 at
+    %% replica Z will not remove a1,b4,d6, even though _seeing_ a3
+    %% implies Z has seen what a3 supercedes.  BUT, if you're adding
+    %% 'X' with "action at a distance" then that presupposes you
+    %% _haven't_ seen 'X' (why would you add it if you had) which
+    %% makes the remove optimisation incorrect! What if you send a
+    %% context for adds?
+    {C, S} = {[], []},%%prev_ctx(Elem, Entries),
     {Clock2, Seen2} = compress_seen(C, lists:umerge(Dot, S)),
     {ok, {Clock2, orddict:store(Elem, Dot, orddict:new()), Seen2}};
 delta_update({remove, Elem}, _Actor, {_Clock, Entries, _Seen}) ->
