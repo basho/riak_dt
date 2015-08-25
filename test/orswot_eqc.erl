@@ -291,7 +291,10 @@ commutative(Replica1, Replica2) ->
 -spec commutative_post(S :: eqc_statem:dynamic_state(),
                       Args :: [term()], R :: term()) -> true | term().
 commutative_post(_S, [_Replica1, _Replica2], {OneMergeTwo, TwoMergeOne}) ->
-    riak_dt_orswot:equal(OneMergeTwo, TwoMergeOne).
+    riak_dt_orswot:equal(OneMergeTwo, TwoMergeOne) andalso hash_equals(OneMergeTwo, TwoMergeOne).
+
+hash_equals(S1, S2) ->
+    erlang:phash2(riak_dt_orswot:to_binary(1, S1)) == erlang:phash2(riak_dt_orswot:to_binary(1, S2)).
 
 %% ------ Grouped operator: associative
 
