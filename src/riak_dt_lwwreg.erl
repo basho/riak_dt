@@ -71,7 +71,7 @@ parent_clock(Clock, {_RegClock, Values}) ->
     {Clock, Values}.
 
 -spec value(lwwreg()) -> term().
-value({_Clock ,Values}) ->
+value({_Clock, Values}) ->
     case highest_ts(Values) of
         undefined -> <<>>;
         {_Dot, _TS, Val} -> Val
@@ -107,7 +107,7 @@ update({assign, Value}, ActorOrDot, Reg) ->
     %% For when users don't provide timestamps
     %% don't think it is a good idea to mix server and client timestamps
     MicroEpoch = make_micro_epoch(),
-    update({assign, MicroEpoch, Value}, ActorOrDot, Reg).
+    update({assign, Value, MicroEpoch}, ActorOrDot, Reg).
 
 
 update(Op, Actor, Reg, _Ctx) ->
