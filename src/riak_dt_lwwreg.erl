@@ -1,8 +1,9 @@
+%% -*- coding: utf-8 -*-
 %% -------------------------------------------------------------------
 %%
-%% riak_dt_lwwreg: A DVVSet based last-write-wins register
+%% riak_dt_lwwreg: A map-embeddable last-write-wins register
 %%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -20,8 +21,9 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc
-%% An LWW Register CRDT.
+%% @doc An LWW Register CRDT with causality, like Riak's
+%% allow_mult=false. Uses a clock and dots to keep concurrent values,
+%% but on read only the highest timestamped element is shown.
 %%
 %% @reference Marc Shapiro, Nuno Preguiça, Carlos Baquero, Marek Zawirski (2011) A comprehensive study of
 %% Convergent and Commutative Replicated Data Types. http://hal.upmc.fr/inria-00555588/
@@ -49,25 +51,36 @@
 
 -export_type([lwwreg/0, lwwreg_op/0]).
 
--opaque lwwreg() :: {term(), non_neg_integer()}.
+-opaque lwwreg() :: {riak_dt_vclock:vclock(), [reg_entry()]}.
+
+-type reg_entry() :: {riak_dt:dot(), Timestamp :: non_neg_integer() , Value :: term()}.
 
 -type lwwreg_op() :: {assign, term(), non_neg_integer()}  | {assign, term()}.
 
 -type lww_q() :: timestamp.
 
+-define(FRESH_CLOCK, riak_dt_vclock:fresh()).
+
 %% @doc Create a new, empty `lwwreg()'
 -spec new() -> lwwreg().
 new() ->
-    {<<>>, 0}.
+    {?FRESH_CLOCK, []}.
 
 -spec parent_clock(riak_dt_vclock:vclock(), lwwreg()) -> lwwreg().
-parent_clock(_Clock, Reg) ->
-    Reg.
+parent_clock(Clock, {_RegClock, Values}) ->
+    {Clock, Values}.
 
-%% @doc The single total value of a `gcounter()'.
 -spec value(lwwreg()) -> term().
-value({Value, _TS}) ->
-    Value.
+value({_Clock ,Values}) ->
+    case highest_ts(Values) of
+        undefined -> <<>>;
+        {_Dot, _TS, Val} -> Val
+    end.
+
+highest_ts([]) ->
+    undefined;
+highest_ts(Values) ->
+    lists:last(lists:keysort(2, Values)).
 
 %% @doc query for this `lwwreg()'.
 %% `timestamp' is the only query option.
@@ -79,24 +92,33 @@ value(timestamp, {_V, TS}) ->
 %% associating the update with time `TS'
 -spec update(lwwreg_op(), term(), lwwreg()) ->
                     {ok, lwwreg()}.
-update({assign, Value, TS}, _Actor, {_OldVal, OldTS}) when is_integer(TS), TS > 0, TS >= OldTS ->
-    {ok, {Value, TS}};
-update({assign, _Value, _TS}, _Actor, OldLWWReg) ->
-    {ok, OldLWWReg};
-%% For when users don't provide timestamps
-%% don't think it is a good idea to mix server and client timestamps
-update({assign, Value}, _Actor, {OldVal, OldTS}) ->
+update({assign, Value, TS}, ActorOrDot, {Clock, Values}) when TS > 0->
+    {Dot, Clock2} = update_clock(ActorOrDot, Clock),
+    NewHighest = case highest_ts(Values) of
+                     {_OldDot, Time, Val} when Time > TS ->
+                         {Dot, Time, Val};
+                     _ ->
+                         {Dot, TS, Value}
+                 end,
+    {ok, {Clock2, [NewHighest]}};
+update({assign, _Val, 0=_TS}, _Actor, OldReg) ->
+    {ok, OldReg};
+update({assign, Value}, ActorOrDot, Reg) ->
+    %% For when users don't provide timestamps
+    %% don't think it is a good idea to mix server and client timestamps
     MicroEpoch = make_micro_epoch(),
-    LWW = case MicroEpoch > OldTS of
-              true ->
-                  {Value, MicroEpoch};
-              false ->
-                  {OldVal, OldTS}
-          end,
-    {ok, LWW}.
+    update({assign, MicroEpoch, Value}, ActorOrDot, Reg).
+
 
 update(Op, Actor, Reg, _Ctx) ->
     update(Op, Actor, Reg).
+
+update_clock({_Actor, _Count}=Dot, Clock) ->
+    {Dot, riak_dt_vclock:merge([[Dot], Clock])};
+update_clock(Actor, Clock) ->
+    Clock2 = riak_dt_vclock:increment(Actor, Clock),
+    Counter = riak_dt_vclock:get_counter(Actor, Clock2),
+    {{Actor, Counter}, Clock2}.
 
 make_micro_epoch() ->
     {Mega, Sec, Micro} = os:timestamp(),
@@ -105,35 +127,45 @@ make_micro_epoch() ->
 %% @doc Merge two `lwwreg()'s to a single `lwwreg()'. This is the Least Upper Bound
 %% function described in the literature.
 -spec merge(lwwreg(), lwwreg()) -> lwwreg().
-merge({Val1, TS1}, {_Val2, TS2}) when TS1 > TS2 ->
-    {Val1, TS1};
-merge({_Val1, TS1}, {Val2, TS2}) when TS2 > TS1 ->
-    {Val2, TS2};
-merge(LWWReg1, LWWReg2) when LWWReg1 >= LWWReg2 ->
-    LWWReg1;
-merge(_LWWReg1, LWWReg2) ->
-    LWWReg2.
+merge({Clock1, Values1}, {Clock2, Values2}) ->
+    V1Set = sets:from_list(Values1),
+    V2Set = sets:from_list(Values2),
+    Common = sets:intersection(V1Set, V2Set),
+    V1Unique = sets:subtract(V1Set, V2Set),
+    V2Unique = sets:subtract(V2Set, V1Set),
+    V1Keep = sets:filter(filter_fun(Clock2),
+                         V1Unique),
+    V2Keep = sets:filter(filter_fun(Clock1),
+                         V2Unique),
+    {riak_dt_vclock:merge([Clock1, Clock2]),
+     lists:sort(sets:to_list(sets:union([Common, V1Keep, V2Keep])))}.
+
+filter_fun(Clock) ->
+    fun({Dot, _, _}) ->
+         not riak_dt_vclock:descends(Clock, [Dot])
+       end.
 
 %% @doc Are two `lwwreg()'s structurally equal? This is not `value/1' equality.
 %% Two registers might represent the value `armchair', and not be `equal/2'. Equality here is
 %% that both registers contain the same value and timestamp.
 -spec equal(lwwreg(), lwwreg()) -> boolean().
-equal({Val, TS}, {Val, TS}) ->
+equal(Reg, Reg) ->
     true;
-equal(_, _) ->
-    false.
+equal({C1, V1}, {C2, V2}) ->
+    riak_dt_vclock:equal(C1, C2) andalso
+        lists:sort(V1) =:= lists:sort(V2).
 
 -spec stats(lwwreg()) -> [{atom(), number()}].
 stats(LWW) ->
     [{value_size, stat(value_size, LWW)}].
 
 -spec stat(atom(), lwwreg()) -> number() | undefined.
-stat(value_size, {Value,_}=_LWW) ->
-    erlang:external_size(Value);
+stat(value_size, {_Clock, Values}) ->
+    erlang:external_size(Values);
 stat(_, _) -> undefined.
 
 -include("riak_dt_tags.hrl").
--define(TAG, ?DT_LWWREG_TAG).
+-define(TAG, ?DT_CLWWREG_TAG).
 -define(V1_VERS, 1).
 
 %% @doc Encode an effecient binary representation of an `lwwreg()'
@@ -141,14 +173,17 @@ stat(_, _) -> undefined.
 to_binary(LWWReg) ->
     <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(LWWReg))/binary>>.
 
--spec to_binary(Vers :: pos_integer(), lwwreg()) -> {ok, binary()} | ?UNSUPPORTED_VERSION.
+-spec to_binary(Vers :: pos_integer(), lwwreg()) ->
+                   {ok, binary()}  | ?UNSUPPORTED_VERSION.
 to_binary(1, LWW) ->
     {ok, to_binary(LWW)};
 to_binary(Vers, _LWW) ->
     ?UNSUPPORTED_VERSION(Vers).
 
 %% @doc Decode binary `lwwreg()'
--spec from_binary(binary()) -> {ok, lwwreg()} | ?UNSUPPORTED_VERSION | ?INVALID_BINARY.
+-spec from_binary(binary()) ->
+                     {ok, lwwreg()}  | ?UNSUPPORTED_VERSION
+                      | ?INVALID_BINARY.
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
     {ok, riak_dt:from_binary(Bin)};
 from_binary(<<?TAG:8/integer, Vers:8/integer, _Bin/binary>>) ->
@@ -173,7 +208,7 @@ eqc_value_test_() ->
 generate() ->
     ?LET({Op, Actor}, {gen_op(), char()},
          begin
-             {ok, Lww} = riak_dt_lwwreg:update(Op, Actor, riak_dt_lwwreg:new()),
+             {ok, Lww} = update(Op, Actor, new()),
              Lww
          end).
 
