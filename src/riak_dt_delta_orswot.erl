@@ -62,7 +62,7 @@ remove_elem({ok, _VClock}, Elem, {Clock, Dict, Seen}) ->
 remove_elem(_, Elem, _ORSet) ->
     {error, {precondition, {not_present, Elem}}}.
 
-delta_update({add, Elem}, Actor, {Clock, _Entries, _Seen}) ->
+delta_update({add, Elem}, Actor, {Clock, Entries, _Seen}) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
     Counter = riak_dt_vclock:get_counter(Actor, NewClock),
     Dot = [{Actor, Counter}],
@@ -77,7 +77,7 @@ delta_update({add, Elem}, Actor, {Clock, _Entries, _Seen}) ->
     %% _haven't_ seen 'X' (why would you add it if you had) which
     %% makes the remove optimisation incorrect! What if you send a
     %% context for adds?
-    {C, S} = {[], []},%%prev_ctx(Elem, Entries),
+    {C, S} = prev_ctx(Elem, Entries),
     {Clock2, Seen2} = compress_seen(C, lists:umerge(Dot, S)),
     {ok, {Clock2, orddict:store(Elem, Dot, orddict:new()), Seen2}};
 delta_update({remove, Elem}, _Actor, {_Clock, Entries, _Seen}) ->
