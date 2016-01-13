@@ -33,7 +33,8 @@
 
 -module(riak_dt_vclock).
 
--export([fresh/0,descends/2,merge/1,get_counter/2, subtract_dots/2,
+-export([fresh/0,descends/2,merge/1,get_counter/2, set_counter/3,
+         subtract_dots/2,
          increment/2,all_nodes/1, equal/2,
          to_binary/1, from_binary/1, dominates/2, glb/2]).
 
@@ -131,6 +132,13 @@ get_counter(Node, VClock) ->
         {_, Ctr} -> Ctr;
         false           -> 0
     end.
+
+% @doc Set the counter value in VClock set from Node.
+-spec set_counter(Node :: vclock_node(),
+                  Cntr:: pos_integer(),
+                  VClock :: vclock()) -> counter().
+set_counter(Node, Cntr, VClock) ->
+    lists:keystore(Node, 1, VClock, {Node, Cntr}).
 
 % @doc Increment VClock at Node.
 -spec increment(Node :: vclock_node(),
