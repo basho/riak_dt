@@ -128,12 +128,12 @@ merge({LHSClock, LHSDots, LHSDeferred}, {RHSClock, RHSDots, RHSDeferred}) ->
     %% drop all the RHS dots that dominated by the LHS clock
     %% keep all the dots that are in both
     %% save value as value of flag
-    CommonDots = sets:intersection(sets:from_list(LHSDots), sets:from_list(RHSDots)),
-    LHSUnique = sets:to_list(sets:subtract(sets:from_list(LHSDots), CommonDots)),
-    RHSUnique = sets:to_list(sets:subtract(sets:from_list(RHSDots), CommonDots)),
+    CommonDots = ordsets:intersection(ordsets:from_list(LHSDots), ordsets:from_list(RHSDots)),
+    LHSUnique = ordsets:to_list(ordsets:subtract(ordsets:from_list(LHSDots), CommonDots)),
+    RHSUnique = ordsets:to_list(ordsets:subtract(ordsets:from_list(RHSDots), CommonDots)),
     LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, RHSClock),
     RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, LHSClock),
-    Flag = riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]),
+    Flag = riak_dt_vclock:merge([ordsets:to_list(CommonDots), LHSKeep, RHSKeep]),
     Deferred = ordsets:union(LHSDeferred, RHSDeferred),
 
     apply_deferred(NewClock, Flag, Deferred).
