@@ -62,6 +62,8 @@
 
 -behaviour(riak_dt).
 
+-include("r18.hrl").
+
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -define(QC_OUT(P),

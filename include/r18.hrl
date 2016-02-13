@@ -1,0 +1,2 @@
+-type dict() :: dict:dict().
+-type set() :: sets:set().

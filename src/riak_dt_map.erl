@@ -167,6 +167,9 @@
 
 -behaviour(riak_dt).
 
+-include("r18.hrl").
+
+
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -endif.
@@ -186,10 +189,10 @@
 -export([gen_op/0, gen_op/1, gen_field/0, gen_field/1,  generate/0, size/1]).
 -endif.
 
--export_type([map/0, binary_map/0, map_op/0]).
+-export_type([dt_map/0, binary_map/0, map_op/0]).
 
 -type binary_map() :: binary(). %% A binary that from_binary/1 will accept
--type map() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
+-type dt_map() :: {riak_dt_vclock:vclock(), entries(), deferred()}.
 -type entries() :: [field()].
 -type field() :: {field_name(), field_value()}.
 -type field_name() :: {Name :: binary(), CRDTModule :: crdt_mod()}.
@@ -215,7 +218,7 @@
 -type crdt()  ::  riak_dt_emcntr:emcntr() | riak_dt_od_flag:od_flag() |
                   riak_dt_lwwreg:lwwreg() |
                   riak_dt_orswot:orswot() |
-                  riak_dt_map:map().
+                  riak_dt_map:dt_map().
 
 -type map_op() :: {update, [map_field_update() | map_field_op()]}.
 
@@ -234,18 +237,18 @@
 -type precondition_error() :: {error, {precondition, {not_present, field()}}}.
 
 %% @doc Create a new, empty Map.
--spec new() -> map().
+-spec new() -> dt_map().
 new() ->
     {riak_dt_vclock:fresh(), orddict:new(), orddict:new()}.
 
 %% @doc sets the clock in the map to that `Clock'. Used by a
 %% containing Map for sub-CRDTs
--spec parent_clock(riak_dt_vclock:vclock(), map()) -> map().
+-spec parent_clock(riak_dt_vclock:vclock(), dt_map()) -> dt_map().
 parent_clock(Clock, {_MapClock, Values, Deferred}) ->
     {Clock, Values, Deferred}.
 
 %% @doc get the current set of values for this Map
--spec value(map()) -> values().
+-spec value(dt_map()) -> values().
 value({_Clock, Values, _Deferred}) ->
     orddict:fold(fun({Name, Type}, CRDTs, Acc) ->
                          Merged = merge_crdts(Type, CRDTs),
@@ -271,11 +274,11 @@ merge_crdts(Type, {CRDTs, TS}) ->
     Type:merge(TS, V).
 
 %% @doc query map (not implemented yet)
--spec value(term(), map()) -> values().
+-spec value(term(), dt_map()) -> values().
 value(_, Map) ->
     value(Map).
 
-%% @doc update the `map()' or a field in the `map()' by executing
+%% @doc update the `dt_map()' or a field in the `dt_map()' by executing
 %% the `map_op()'. `Ops' is a list of one or more of the following
 %% ops:
 %%
@@ -291,8 +294,8 @@ value(_, Map) ->
 %%  still present, and it's value will contain the concurrent update.
 %%
 %% Atomic, all of `Ops' are performed successfully, or none are.
--spec update(map_op(), riak_dt:actor() | riak_dt:dot(), map()) ->
-                    {ok, map()} | precondition_error().
+-spec update(map_op(), riak_dt:actor() | riak_dt:dot(), dt_map()) ->
+                    {ok, dt_map()} | precondition_error().
 update(Op, ActorOrDot, Map) ->
     update(Op, ActorOrDot, Map, undefined).
 
@@ -302,8 +305,8 @@ update(Op, ActorOrDot, Map) ->
 %% types. hence the common clock.
 %%
 %% @see parent_clock/2
--spec update(map_op(), riak_dt:actor() | riak_dt:dot(), map(), riak_dt:context()) ->
-                    {ok, map()}.
+-spec update(map_op(), riak_dt:actor() | riak_dt:dot(), dt_map(), riak_dt:context()) ->
+                    {ok, dt_map()}.
 update({update, Ops}, ActorOrDot, {Clock0, Values, Deferred}, Ctx) ->
     {Dot, Clock} = update_clock(ActorOrDot, Clock0),
     apply_ops(Ops, Dot, {Clock, Values, Deferred}, Ctx).
@@ -324,7 +327,7 @@ update_clock(Actor, Clock) ->
 %% @private
 -spec apply_ops([map_field_update() | map_field_op()], riak_dt:dot(),
                 {riak_dt_vclock:vclock(), entries() , deferred()}, context()) ->
-                       {ok, map()} | precondition_error().
+                       {ok, dt_map()} | precondition_error().
 apply_ops([], _Dot, Map, _Ctx) ->
     {ok, Map};
 apply_ops([{update, {_Name, Type}=Field, Op} | Rest], Dot, {Clock, Values, Deferred}, Ctx) ->
@@ -363,8 +366,8 @@ apply_ops([{remove, Field} | Rest], Dot, Map, Ctx) ->
 %%
 %% @see defer_remove/4 for handling of removes of fields that are
 %% _not_ present
--spec remove_field(field(), map(), context()) ->
-                          {ok, map()} | precondition_error().
+-spec remove_field(field(), dt_map(), context()) ->
+                          {ok, dt_map()} | precondition_error().
 remove_field(Field, {Clock, Values, Deferred}, undefined) ->
     case orddict:find(Field, Values) of
         error ->
@@ -437,8 +440,8 @@ defer_remove(Clock, Ctx, Field, Deferred) ->
                                 Deferred)
     end.
 
-%% @doc merge two `map()'s.
--spec merge(map(), map()) -> map().
+%% @doc merge two `dt_map()'s.
+-spec merge(dt_map(), dt_map()) -> dt_map().
 merge(Map, Map) ->
     Map;
 %% @TODO is there a way to optimise this, based on clocks maybe?
@@ -569,8 +572,8 @@ apply_deferred(Clock, Entries, Deferred) ->
                 Deferred).
 
 %% @private
--spec remove_all([field()], map(), context()) ->
-                        map().
+-spec remove_all([field()], dt_map(), context()) ->
+                        dt_map().
 remove_all(Fields, Map, Ctx) ->
     lists:foldl(fun(Field, MapAcc) ->
                         {ok, MapAcc2}= remove_field(Field, MapAcc, Ctx),
@@ -579,10 +582,10 @@ remove_all(Fields, Map, Ctx) ->
                 Map,
                 Fields).
 
-%% @doc compare two `map()'s for equality of structure Both schemas
+%% @doc compare two `dt_map()'s for equality of structure Both schemas
 %% and value list must be equal. Performs a pariwise equals for all
 %% values in the value lists
--spec equal(map(), map()) -> boolean().
+-spec equal(dt_map(), dt_map()) -> boolean().
 equal({Clock1, Values1, Deferred1}, {Clock2, Values2, Deferred2}) ->
     riak_dt_vclock:equal(Clock1, Clock2) andalso
         Deferred1 == Deferred2 andalso
@@ -613,7 +616,7 @@ pairwise_equals(_, _) ->
 %% that only seen fields are removed. If a field removal operation has
 %% a context that the Map has not seen, it will be deferred until
 %% causally relevant.
--spec precondition_context(map()) -> riak_dt:context().
+-spec precondition_context(dt_map()) -> riak_dt:context().
 precondition_context({Clock, _Field, _Deferred}) ->
     Clock.
 
@@ -625,11 +628,11 @@ precondition_context({Clock, _Field, _Deferred}) ->
 %%                basically `field_count' - ( unique fields)
 %% `deferred_length': How many operations on the deferred list, a reasonable expression
 %%                   of lag/staleness.
--spec stats(map()) -> [{atom(), integer()}].
+-spec stats(dt_map()) -> [{atom(), integer()}].
 stats(Map) ->
     [ {S, stat(S, Map)} || S <- [actor_count, field_count, duplication, deferred_length]].
 
--spec stat(atom(), map()) -> number() | undefined.
+-spec stat(atom(), dt_map()) -> number() | undefined.
 stat(actor_count, {Clock, _, _}) ->
     length(Clock);
 stat(field_count, {_, Fields, _}) ->
@@ -650,7 +653,7 @@ stat(_,_) -> undefined.
 -define(TAG, ?DT_MAP_TAG).
 -define(V1_VERS, 1).
 
-%% @doc returns a binary representation of the provided `map()'. The
+%% @doc returns a binary representation of the provided `dt_map()'. The
 %% resulting binary is tagged and versioned for ease of future
 %% upgrade. Calling `from_binary/1' with the result of this function
 %% will return the original map.  Use the application env var
@@ -658,15 +661,15 @@ stat(_,_) -> undefined.
 %% (`false')
 %%
 %% @see `from_binary/1'
--spec to_binary(map()) -> binary_map().
+-spec to_binary(dt_map()) -> binary_map().
 to_binary(Map) ->
     <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(Map))/binary>>.
 
 %% @doc When the argument is a `binary_map()' produced by
-%% `to_binary/1' will return the original `map()'.
+%% `to_binary/1' will return the original `dt_map()'.
 %%
 %% @see `to_binary/1'
--spec from_binary(binary_map()) -> map().
+-spec from_binary(binary_map()) -> dt_map().
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
     riak_dt:from_binary(B).
 

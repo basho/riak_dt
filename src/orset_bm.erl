@@ -19,15 +19,15 @@
 -define(N, 10).
 
 start(Cmds, Mod) ->
-    TS = erlang:now(),
+    TS = erlang:monotonic_time(),
     Coord =  start_coordinator(?N, Mod, self()),
     lists:foreach(fun(I) -> start_proc(I, Cmds, Mod, Coord) end, lists:seq(1, ?N)),
 
     receive
         {Coord, Results} ->
-            TE = erlang:now(),
+            TE = erlang:monotonic_time(),
             Size = m_size(Mod, Results),
-            io:format("Results are ~p in ~p~n", [Size, timer:now_diff(TE, TS) / 1000])
+            io:format("Results are ~p in ~p~n", [Size, erlang:convert_time_unit(TE - TS, native, micro_seconds)])
     end.
 
 
