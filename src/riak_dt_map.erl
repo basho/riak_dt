@@ -483,7 +483,7 @@ merge({LHSClock, LHSEntries, LHSDeferred}, {RHSClock, RHSEntries, RHSDeferred}) 
 %% only.
 -spec filter_unique(riak_dt_set(), entries(), riak_dt_vclock:vclock(), entries()) -> entries().
 filter_unique(FieldSet, Entries, Clock, Acc) ->
-    sets:fold(fun({_Name, Type}=Field, Keep) ->
+    ordsets:fold(fun({_Name, Type}=Field, Keep) ->
                       {Dots, TS} = ?DICT:fetch(Field, Entries),
                       KeepDots = ?DICT:filter(fun(Dot, _CRDT) ->
                                                       is_dot_unseen(Dot, Clock)
@@ -518,7 +518,7 @@ is_dot_unseen(Dot, Clock) ->
 %% @doc Get the keys from an ?DICT as a ?SET
 -spec key_set(riak_dt_dict()) -> riak_dt_set().
 key_set(Dict) ->
-    sets:from_list(?DICT:fetch_keys(Dict)).
+    ordsets:from_list(?DICT:fetch_keys(Dict)).
 
 %% @doc break the keys from an two ?DICTs out into three ?SETs, the
 %% common keys, those unique to one, and those unique to the other.
@@ -526,22 +526,22 @@ key_set(Dict) ->
 key_sets(LHS, RHS) ->
     LHSet = key_set(LHS),
     RHSet = key_set(RHS),
-    {sets:intersection(LHSet, RHSet),
-     sets:subtract(LHSet, RHSet),
-     sets:subtract(RHSet, LHSet)}.
+    {ordsets:intersection(LHSet, RHSet),
+     ordsets:subtract(LHSet, RHSet),
+     ordsets:subtract(RHSet, LHSet)}.
 
 
 %% @private for a set of dots (that are unique to one side) decide
 %% whether to keep, or drop each.
 -spec filter_dots(riak_dt_set(), riak_dt_dict(), riak_dt_vclock:vclock()) -> entries().
 filter_dots(Dots, CRDTs, Clock) ->
-    DotsToKeep = sets:filter(fun(Dot) ->
+    DotsToKeep = ordsets:filter(fun(Dot) ->
                                      is_dot_unseen(Dot, Clock)
                              end,
                              Dots),
 
     ?DICT:filter(fun(Dot, _CRDT) ->
-                           sets:is_element(Dot, DotsToKeep)
+                           ordsets:is_element(Dot, DotsToKeep)
                    end,
                    CRDTs).
 
@@ -549,13 +549,13 @@ filter_dots(Dots, CRDTs, Clock) ->
 %% tombstone per field.  If a dot is on both sides, keep it. If it is
 %% only on one side, drop it if dominated by the otherside's clock.
 merge_common(FieldSet, LHS, RHS, LHSClock, RHSClock, Acc) ->
-    sets:fold(fun({_, Type}=Field, Keep) ->
+    ordsets:fold(fun({_, Type}=Field, Keep) ->
                       {LHSDots, LHTS} = ?DICT:fetch(Field, LHS),
                       {RHSDots, RHTS} = ?DICT:fetch(Field, RHS),
                       {CommonDots, LHSUniqe, RHSUnique} = key_sets(LHSDots, RHSDots),
                       TS = Type:merge(RHTS, LHTS),
 
-                      CommonSurviving = sets:fold(fun(Dot, Common) ->
+                      CommonSurviving = ordsets:fold(fun(Dot, Common) ->
                                                           L = ?DICT:fetch(Dot, LHSDots),
                                                           ?DICT:store(Dot, L, Common)
                                                   end,
