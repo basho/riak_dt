@@ -1,7 +1,7 @@
 %% -*- erlang -*-
 {application, riak_dt,
  [
-  {description, "riak CTDT datatypes"},
+  {description, "riak CRDT datatypes"},
   {vsn, git},
   {registered, []},
   {applications, [
