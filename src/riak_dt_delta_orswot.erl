@@ -22,16 +22,23 @@
 %% -------------------------------------------------------------------
 -module(riak_dt_delta_orswot).
 
+-include("riak_dt_tags.hrl").
+-define(TAG, ?DT_ORSWOT_TAG).
+-define(V1_VERS, 1).
+-define(V2_VERS, 2).
+
+-define(DICT, dict).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
-
 %% API
 -export([new/0, value/1, value/2]).
 -export([update/3, merge/2]).
 -export([delta_update/3]).
+-export([to_binary/1, from_binary/1]).
+-export([to_binary/2]).
 
 -compile(export_all).
 
@@ -48,7 +55,13 @@ update({add, Elem}, Actor, ORSet) ->
     {ok, add_elem(Actor, ORSet, Elem)};
 update({remove, Elem}, _Actor, ORSet) ->
     {_Clock, Entries, _Deferred} = ORSet,
-    remove_elem(orddict:find(Elem, Entries), Elem, ORSet).
+    remove_elem(orddict:find(Elem, Entries), Elem, ORSet);
+update({add_all, Elems}, Actor, ORSet) ->
+    ORSet2 = lists:foldl(fun(E, S) ->
+                                 add_elem(Actor, S, E) end,
+                         ORSet,
+                         Elems),
+    {ok, ORSet2}.
 
 add_elem(Dot, {Clock, Entries, Seen}, Elem) when is_tuple(Dot) ->
     {riak_dt_vclock:merge([Clock, [Dot]]), orddict:store(Elem, [Dot], Entries), Seen};
@@ -61,6 +74,9 @@ remove_elem({ok, _VClock}, Elem, {Clock, Dict, Seen}) ->
     {ok, {Clock, orddict:erase(Elem, Dict), Seen}};
 remove_elem(_, Elem, _ORSet) ->
     {error, {precondition, {not_present, Elem}}}.
+
+precondition_context({Clock, _Entries, _Deferred}) ->
+    Clock.
 
 delta_update({add, Elem}, Actor, {Clock, Entries, _Seen}) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
@@ -93,7 +109,6 @@ delta_update({remove, Elem}, _Actor, {_Clock, Entries, _Seen}) ->
 delta_update({remove, _Elem, Ctx}, _Actor, {_Clock, _Entries, _Seen}) ->
     {Clock2, Seen2} = compress_seen([], Ctx),
     {ok, {Clock2, [], Seen2}}.
-
 
 prev_ctx(Elem, Entries) ->
     case orddict:find(Elem, Entries) of
@@ -201,7 +216,72 @@ merge_common_keys(CommonKeys, {LHSClock, LHSEntries, LHSeen}, {RHSClock, RHSEntr
               orddict:new(),
               CommonKeys).
 
+to_binary(S) ->
+    {ok, B} = to_binary(?V2_VERS, S),
+    B.
 
+to_binary(?V1_VERS, S0) ->
+    S = to_v1(S0),
+    {ok, <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(S))/binary>>};
+to_binary(?V2_VERS, S0) ->
+    S = to_v2(S0),
+    {ok, <<?TAG:8/integer, ?V2_VERS:8/integer, (riak_dt:to_binary(S))/binary>>};
+to_binary(Vers, _S0) ->
+    ?UNSUPPORTED_VERSION(Vers).
+
+from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
+    S = riak_dt:from_binary(B),
+    %% Now upgrade the structure to dict from orddict
+    {ok, to_v2(S)};
+from_binary(<<?TAG:8/integer, ?V2_VERS:8/integer, B/binary>>) ->
+    {ok, riak_dt:from_binary(B)};
+from_binary(<<?TAG:8/integer, Vers:8/integer, _B/binary>>) ->
+    ?UNSUPPORTED_VERSION(Vers);
+from_binary(_B) ->
+    ?INVALID_BINARY.
+
+to_v2({Clock, Entries0, Deferred0}) when is_list(Entries0),
+                                         is_list(Deferred0) ->
+    %% Turn v1 set into a v2 set
+    Entries = ?DICT:from_list(Entries0),
+    Deferred = ?DICT:from_list(Deferred0),
+    {Clock, Entries, Deferred};
+to_v2(S) ->
+    S.
+
+to_v1({_Clock, Entries0, Deferred0}=S) when is_list(Entries0),
+                                            is_list(Deferred0) ->
+    S;
+to_v1({Clock, Entries0, Deferred0}) ->
+    %% Must be dicts, there is no is_dict test though
+    %% should we use error handling as logic here??
+    Entries = riak_dt:dict_to_orddict(Entries0),
+    Deferred = riak_dt:dict_to_orddict(Deferred0),
+    {Clock, Entries, Deferred}.
+
+equal({_, Entries1, _}=LHS, {_, Entries2, _}=RHS) when is_list(Entries1);
+                                                       is_list(Entries2) ->
+    equal(to_v2(LHS), to_v2(RHS));
+equal({Clock1, Entries1, _}, {Clock2, Entries2, _}) ->
+    riak_dt_vclock:equal(Clock1, Clock2) andalso
+        lists:sort(?DICT:fetch_keys(Entries1)) ==
+        lists:sort(?DICT:fetch_keys(Entries2)) andalso
+        dots_equal(?DICT:to_list(Entries1), ?DICT:to_list(Entries2)).
+
+dots_equal([], _) ->
+    true;
+dots_equal([{Elem, Clock1} | Rest], Entries2) ->
+    {Elem, Clock2} = lists:keyfind(Elem, 1, Entries2),
+    case riak_dt_vclock:equal(Clock1, Clock2) of
+        true ->
+            dots_equal(Rest, Entries2);
+        false ->
+            false
+    end.
+
+parent_clock(Clock, Set) ->
+    {_SetClock, Entries, Deferred} = to_v2(Set),
+    {Clock, Entries, Deferred}.
 
 -ifdef(TEST).
 out_of_order_test() ->
