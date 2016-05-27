@@ -31,7 +31,7 @@
 
 -module(riak_dt_vclock).
 
--export([fresh/0,descends/2,merge/1,get_counter/2, set_counter/3,
+-export([fresh/0,fresh/2,descends/2,merge/1,get_counter/2, set_counter/3,
          subtract_dots/2,
          increment/2,all_nodes/1, equal/2,
          to_binary/1, from_binary/1, dominates/2, glb/2]).
@@ -55,6 +55,9 @@
 -spec fresh() -> vclock().
 fresh() ->
     [].
+
+fresh(Actor, Cnt) ->
+    [{Actor, Cnt}].
 
 % @doc Return true if Va is a direct descendant of Vb, else false -- remember, a vclock is its own descendant!
 -spec descends(Va :: vclock()|[], Vb :: vclock()|[]) -> boolean().

@@ -62,6 +62,7 @@ remove_elem({ok, _VClock}, Elem, {Clock, Dict, Seen}) ->
 remove_elem(_, Elem, _ORSet) ->
     {error, {precondition, {not_present, Elem}}}.
 
+%% @TODO add deferred operations and deferred op delta ops
 delta_update({add, Elem}, Actor, {Clock, Entries, _Seen}) ->
     NewClock = riak_dt_vclock:increment(Actor, Clock),
     Counter = riak_dt_vclock:get_counter(Actor, NewClock),
@@ -80,6 +81,12 @@ delta_update({add, Elem}, Actor, {Clock, Entries, _Seen}) ->
     {C, S} = prev_ctx(Elem, Entries),
     {Clock2, Seen2} = compress_seen(C, lists:umerge(Dot, S)),
     {ok, {Clock2, orddict:store(Elem, Dot, orddict:new()), Seen2}};
+delta_update({add, Elem, Ctx}, Actor, {Clock, _Entries, _Seen}) ->
+    NewClock = riak_dt_vclock:increment(Actor, Clock),
+    Counter = riak_dt_vclock:get_counter(Actor, NewClock),
+    Dot = [{Actor, Counter}],
+    {DeltaClock, DeltaSeen} = compress_seen([], lists:umerge(Dot, Ctx)),
+    {ok, {DeltaClock, orddict:store(Elem, Dot, orddict:new()), DeltaSeen}};
 delta_update({remove, Elem}, _Actor, {_Clock, Entries, _Seen}) ->
     case orddict:find(Elem, Entries) of
         {ok, Dots} ->
@@ -189,7 +196,8 @@ merge_common_keys(CommonKeys, {LHSClock, LHSEntries, LHSeen}, {RHSClock, RHSEntr
                       RHSUnique = sets:to_list(sets:subtract(sets:from_list(V2), CommonDots)),
                       LHSKeep = lists:subtract(riak_dt_vclock:subtract_dots(LHSUnique, RHSClock), RHSeen),
                       RHSKeep = lists:subtract(riak_dt_vclock:subtract_dots(RHSUnique, LHSClock), LHSeen),
-                      V = riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]),
+                     %% @BUG(why do you merge the dots here?? Isn't it a list?)
+                      V = lists:umerge([sets:to_list(CommonDots), LHSKeep, RHSKeep]),
                       %% Perfectly possible that an item in both sets should be dropped
                       case V of
                           [] ->
