@@ -40,6 +40,9 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
+%% The presence of the special actor indicates the list is sorted
+%% This is a very "low" actor # that was chosen randomly, and smaller than -2**31
+-define(SPECIAL_DOT, {-34359738368, 1}).
 -export_type([vclock/0, vclock_node/0, binary_vclock/0]).
 
 -type vclock() :: [vc_entry()].
@@ -53,15 +56,36 @@
 -type   counter() :: non_neg_integer().
 
 % @doc Create a brand new vclock.
--spec fresh() -> vclock().
+-spec fresh() -> sorted_vclock().
 fresh() ->
-    orddict:new().
+    [].
+
+-spec(ensure_sorted(vclock()) -> sorted_vclock()).
+ensure_sorted(VClock0) ->
+    case lists:member(?SPECIAL_DOT, VClock0) of
+        true ->
+            VClock0;
+        false ->
+            lists:usort([?SPECIAL_DOT|VClock0])
+    end.
+%%    {SpecialActor, _} = ?SPECIAL_DOT,
+%%    case lists:keyfind(SpecialActor, 1, VClock0) of
+%%        {_, SpecialVersionCounter} when SpecialVersionCounter band 1 > 0 ->
+%%            VClock0;
+%%        Else ->
+%%            ?debugFmt("Found: ~p~n", [Else]),
+%%            After = lists:usort([?SPECIAL_DOT|VClock0]),
+%%            ?debugFmt("After: ~p~n", [After]),
+%%            After
+%%
+%%    end.
+
 
 % @doc Return true if Va is a direct descendant of Vb, else false -- remember, a vclock is its own descendant!
 -spec descends(Va :: vclock()|[], Vb :: vclock()|[]) -> boolean().
 descends(Va0, Vb0) ->
-    Va1 = lists:usort(Va0),
-    Vb1 = lists:usort(Vb0),
+    Va1 = ensure_sorted(Va0),
+    Vb1 = ensure_sorted(Vb0),
     descends1(Va1, Vb1).
 
 
@@ -78,8 +102,8 @@ descends1(_, _) ->
 % @doc Return true if Va strictly dominates Vb, else false!
 -spec dominates(vclock(), vclock()) -> boolean().
 dominates(Va0, Vb0) ->
-    Va1 = lists:usort(Va0),
-    Vb1 = lists:usort(Vb0),
+    Va1 = ensure_sorted(Va0),
+    Vb1 = ensure_sorted(Vb0),
     dominates1(Va1, Vb1, false).
 
 -spec dominates1(sorted_vclock(), sorted_vclock(), boolean()) -> boolean().
@@ -104,8 +128,8 @@ dominates1(Va = [{ActorA, _CounterA}|_RestA], [{ActorB, _CounterB}|RestB], HasDo
 %%         [{{b, 2}, {g, 22}]
 -spec subtract_dots(vclock(), vclock()) -> vclock().
 subtract_dots(DotList0, VClock0) ->
-    DotList1 = lists:usort(DotList0),
-    VClock1 = lists:usort(VClock0),
+    DotList1 = ensure_sorted(DotList0),
+    VClock1 = ensure_sorted(VClock0),
     drop_dots(DotList1, VClock1, []).
 
 %% A - B
@@ -128,22 +152,28 @@ drop_dots(A = [{ActorA, _CountA} | _RestA], [{ActorB, _CountB} | RestB], Acc) wh
 %      common descendant.
 -spec merge(VClocks :: [vclock()]) -> vclock() | [].
 merge(VClocks0) ->
-    VClocks1 = lists:merge(VClocks0),
-    VClocks2 = lists:usort(VClocks1),
-    VClocks3 =
-    lists:foldl(
-        fun
-            ({Actor, ClockA}, [{Actor, ClockB}|Acc]) when ClockB >= ClockA ->
-                Acc;
-            (Dot = {Actor, ClockA}, [{Actor, ClockB}|Acc]) when ClockA > ClockB ->
-                [Dot|Acc];
-            (Dot, Acc) ->
-                [Dot|Acc]
-        end,
-        fresh(),
-        VClocks2
-    ),
-    lists:reverse(VClocks3).
+    [VClocks1|RestVClocks1] = lists:map(fun ensure_sorted/1, VClocks0),
+    lists:foldl(fun merge/2, VClocks1, RestVClocks1).
+
+merge(V1, V2) ->
+    merge(V1, V2, []).
+
+merge([], [], Acc) ->
+    lists:reverse(Acc);
+merge([DotA = {Actor, CounterA}|RestVClockA], [_DotB = {Actor, CounterB}|RestVClockB], Acc) when CounterA >= CounterB ->
+    merge(RestVClockA, RestVClockB, [DotA|Acc]);
+merge([_DotA = {Actor, CounterA}|RestVClockA], [DotB = {Actor, CounterB}|RestVClockB], Acc) when CounterA < CounterB ->
+    merge(RestVClockA, RestVClockB, [DotB|Acc]);
+merge(VClockA = [{ActorA, _}|_RestVClockA], [DotB = {ActorB, _}|RestVClockB], Acc) when ActorA > ActorB->
+    merge(VClockA, RestVClockB, [DotB|Acc]);
+merge([DotA = {ActorA, _}|RestVClockA], VClockB = [{ActorB, _}|_RestVClockB], Acc) when ActorA < ActorB->
+    merge(RestVClockA, VClockB, [DotA|Acc]);
+merge([], VClockB, Acc) ->
+    lists:reverse(Acc) ++ VClockB;
+merge(VClockA, [], Acc) ->
+    lists:reverse(Acc) ++ VClockA.
+
+
 
 
 % @doc Get the counter value in VClock set from Node.
@@ -161,19 +191,18 @@ get_counter(Node, VClock) ->
 -spec increment(Node :: vclock_node(),
                 VClock :: vclock()) -> vclock().
 increment(Node, VClock0) ->
-    VClock1 = lists:usort(VClock0),
+    VClock1 = ensure_sorted(VClock0),
     orddict:update(Node, fun(X) -> X + 1 end, 1, VClock1).
 
 % @doc Return the list of all nodes that have ever incremented VClock.
 -spec all_nodes(VClock :: vclock()) -> [vclock_node()].
 all_nodes(VClock0) ->
-    VClock1 = lists:usort(VClock0),
-    lists:usort([X || {X, _} <- VClock1]).
+    lists:usort([X || {X, _} <- VClock0]).
 
 % @doc Compares two VClocks for equality.
 -spec equal(VClockA :: vclock(), VClockB :: vclock()) -> boolean().
 equal(VA,VB) ->
-    lists:usort(VA) =:= lists:usort(VB).
+    ensure_sorted(VA) =:= ensure_sorted(VB).
 
 %% @doc sorts the vclock by actor
 -spec sort(vclock()) -> vclock().
@@ -195,8 +224,8 @@ from_binary(Bin) ->
 %% events both have seen.
 -spec glb(vclock(), vclock()) -> sorted_vclock().
 glb(ClockA0, ClockB0) ->
-    ClockA1 = lists:usort(ClockA0),
-    ClockB1 = lists:usort(ClockB0),
+    ClockA1 = ensure_sorted(ClockA0),
+    ClockB1 = ensure_sorted(ClockB0),
     glb(ClockA1, ClockB1, []).
 
 glb([], [], Acc) ->
@@ -253,26 +282,26 @@ merge_test() ->
            {<<"4">>,  4}],
     VC2 = [{<<"3">>,  3},
            {<<"4">>,  3}],
-    ?assertEqual([], merge(riak_dt_vclock:fresh())),
-    ?assertEqual([{<<"1">>,1},{<<"2">>,2},{<<"3">>,3},{<<"4">>,4}],
+    ?assertEqual([?SPECIAL_DOT], merge([riak_dt_vclock:fresh()])),
+    ?assertEqual([?SPECIAL_DOT, {<<"1">>,1},{<<"2">>,2},{<<"3">>,3},{<<"4">>,4}],
                  merge([VC1, VC2])).
 
 merge_less_left_test() ->
     VC1 = [{<<"5">>, 5}],
     VC2 = [{<<"6">>,  6}, {<<"7">>,  7}],
-    ?assertEqual([{<<"5">>, 5},{<<"6">>, 6}, {<<"7">>, 7}],
+    ?assertEqual([?SPECIAL_DOT, {<<"5">>, 5},{<<"6">>, 6}, {<<"7">>, 7}],
                  riak_dt_vclock:merge([VC1, VC2])).
 
 merge_less_right_test() ->
     VC1 = [{<<"6">>, 6}, {<<"7">>,  7}],
     VC2 = [{<<"5">>, 5}],
-    ?assertEqual([{<<"5">>, 5},{<<"6">>,  6}, {<<"7">>,  7}],
+    ?assertEqual([?SPECIAL_DOT, {<<"5">>, 5},{<<"6">>,  6}, {<<"7">>,  7}],
                  riak_dt_vclock:merge([VC1, VC2])).
 
 merge_same_id_test() ->
     VC1 = [{<<"1">>, 1},{<<"2">>,1}],
     VC2 = [{<<"1">>, 1},{<<"3">>,1}],
-    ?assertEqual([{<<"1">>, 1},{<<"2">>,1},{<<"3">>,1}],
+    ?assertEqual([?SPECIAL_DOT, {<<"1">>, 1},{<<"2">>,1},{<<"3">>,1}],
                  riak_dt_vclock:merge([VC1, VC2])).
 
 random_clock1(N1, N2) ->
@@ -298,13 +327,15 @@ bench_test_() ->
     {timeout, 300, [fun() -> bench() end]}.
 bench() ->
     A = random_clock1(1, 1000),
-    A1 = lists:usort(A),
+    A1 = ensure_sorted(A),
     B = random_clock1(1, 1000),
-    B1 = lists:usort(B),
+    B1 = ensure_sorted(B),
     C = random_clock1(500, 1500),
-    C1 = lists:usort(C),
+    C1 = ensure_sorted(C),
     D = random_clock1(1, 1500),
-    D1 = lists:usort(D),
+    D1 = ensure_sorted(D),
+    E = random_clock1(1, 5),
+    E1 = ensure_sorted(E),
 
     ?debugFmt("Increment Time (1): ~b~n", [get_time(fun increment/2, ['actor-500', A])]),
     ?debugFmt("Increment Time (2): ~b~n", [get_time(fun increment/2, ['actor-500', A1])]),
@@ -314,6 +345,9 @@ bench() ->
     ?debugFmt("Merge Time (4): ~b~n", [get_time(fun merge/1, [[A1, C1]])]),
     ?debugFmt("Merge Time (5): ~b~n", [get_time(fun merge/1, [[A, A]])]),
     ?debugFmt("Merge Time (6): ~b~n", [get_time(fun merge/1, [[A1, A1]])]),
+    ?debugFmt("Merge Time (7): ~b~n", [get_time(fun merge/1, [[E, E]])]),
+    ?debugFmt("Merge Time (8): ~b~n", [get_time(fun merge/1, [[E1, E1]])]),
+
     ?debugFmt("Descends Time (1): ~b~n", [get_time(fun descends/2, [A, C])]),
     ?debugFmt("Descends Time (2): ~b~n", [get_time(fun descends/2, [A1, C1])]),
     ?debugFmt("Descends Time (2): ~b~n", [get_time(fun descends/2, [A, D])]),
