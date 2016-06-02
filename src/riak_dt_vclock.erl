@@ -33,7 +33,8 @@
 
 -export([fresh/0,fresh/2,descends/2,merge/1,get_counter/2, set_counter/3,
          subtract_dots/2,
-         increment/2,all_nodes/1, equal/2,
+         increment/2,all_nodes/1,
+         equal/2,
          to_binary/1, from_binary/1, dominates/2, glb/2]).
 
 -ifdef(TEST).
@@ -138,6 +139,8 @@ get_counter(Node, VClock) ->
 -spec set_counter(Node :: vclock_node(),
                   Cntr:: pos_integer(),
                   VClock :: vclock()) -> counter().
+set_counter(Node, Cntr, VClock) when Cntr < 1 ->
+    lists:keydelete(Node, 1, VClock);
 set_counter(Node, Cntr, VClock) ->
     lists:keystore(Node, 1, VClock, {Node, Cntr}).
 
