@@ -61,6 +61,10 @@ fresh() ->
     [].
 
 -spec(ensure_sorted(vclock()) -> sorted_vclock()).
+-ifdef(TEST).
+ensure_sorted(VClock0) ->
+    VClock0.
+-else.
 ensure_sorted(VClock0) ->
     case lists:member(?SPECIAL_DOT, VClock0) of
         true ->
@@ -68,6 +72,7 @@ ensure_sorted(VClock0) ->
         false ->
             lists:usort([?SPECIAL_DOT|VClock0])
     end.
+-endif.
 %%    {SpecialActor, _} = ?SPECIAL_DOT,
 %%    case lists:keyfind(SpecialActor, 1, VClock0) of
 %%        {_, SpecialVersionCounter} when SpecialVersionCounter band 1 > 0 ->
@@ -107,18 +112,24 @@ dominates(Va0, Vb0) ->
     dominates1(Va1, Vb1, false).
 
 -spec dominates1(sorted_vclock(), sorted_vclock(), boolean()) -> boolean().
-dominates1(_, [], true) -> true;
+%% We've exhausted Vb, then Va dominates
 dominates1([], [], HasDominated) -> HasDominated;
+dominates1(_, [], _) -> true;
+%% We've exhausted Va, but Vb still has actors
+dominates1([], _, _) -> false;
+%% Simple domination
 dominates1([{Actor, CounterA}|RestA], [{Actor, CounterB}|RestB], _HasDominated) when CounterA > CounterB ->
     dominates1(RestA, RestB, true);
+%% Equal actors, and counters
 dominates1([{Actor, Counter}|RestA], [{Actor, Counter}|RestB], HasDominated) ->
     dominates1(RestA, RestB, HasDominated);
+%% The counter in CounterB is bigger than CounterA
 dominates1([{Actor, CounterA}|_RestA], [{Actor, CounterB}|_RestB], _HasDominated) when CounterB > CounterA ->
     false;
-dominates1([{ActorA, _CounterA}|RestA], Vb = [{ActorB, _CounterB}|_RestB], HasDominated) when ActorB >= ActorA ->
+dominates1([{ActorA, _CounterA}|RestA], Vb = [{ActorB, _CounterB}|_RestB], HasDominated) when ActorB > ActorA ->
     dominates1(RestA, Vb, HasDominated);
-dominates1(Va = [{ActorA, _CounterA}|_RestA], [{ActorB, _CounterB}|RestB], HasDominated) when ActorA >= ActorB ->
-    dominates1(Va, RestB, HasDominated).
+dominates1([{ActorA, _CounterA}|_RestA], [{ActorB, _CounterB}|_RestB], _HasDominated) when ActorA > ActorB ->
+    false.
 
 %% @doc subtract the VClock from the DotList.
 %% what this means is that any {actor(), count()} pair in
@@ -282,47 +293,42 @@ merge_test() ->
            {<<"4">>,  4}],
     VC2 = [{<<"3">>,  3},
            {<<"4">>,  3}],
-    ?assertEqual([?SPECIAL_DOT], merge([riak_dt_vclock:fresh()])),
-    ?assertEqual([?SPECIAL_DOT, {<<"1">>,1},{<<"2">>,2},{<<"3">>,3},{<<"4">>,4}],
+    ?assertEqual([], merge([riak_dt_vclock:fresh()])),
+    ?assertEqual([{<<"1">>,1},{<<"2">>,2},{<<"3">>,3},{<<"4">>,4}],
                  merge([VC1, VC2])).
 
 merge_less_left_test() ->
     VC1 = [{<<"5">>, 5}],
     VC2 = [{<<"6">>,  6}, {<<"7">>,  7}],
-    ?assertEqual([?SPECIAL_DOT, {<<"5">>, 5},{<<"6">>, 6}, {<<"7">>, 7}],
+    ?assertEqual([{<<"5">>, 5},{<<"6">>, 6}, {<<"7">>, 7}],
                  riak_dt_vclock:merge([VC1, VC2])).
 
 merge_less_right_test() ->
     VC1 = [{<<"6">>, 6}, {<<"7">>,  7}],
     VC2 = [{<<"5">>, 5}],
-    ?assertEqual([?SPECIAL_DOT, {<<"5">>, 5},{<<"6">>,  6}, {<<"7">>,  7}],
+    ?assertEqual([{<<"5">>, 5},{<<"6">>,  6}, {<<"7">>,  7}],
                  riak_dt_vclock:merge([VC1, VC2])).
 
 merge_same_id_test() ->
     VC1 = [{<<"1">>, 1},{<<"2">>,1}],
     VC2 = [{<<"1">>, 1},{<<"3">>,1}],
-    ?assertEqual([?SPECIAL_DOT, {<<"1">>, 1},{<<"2">>,1},{<<"3">>,1}],
+    ?assertEqual([{<<"1">>, 1},{<<"2">>,1},{<<"3">>,1}],
                  riak_dt_vclock:merge([VC1, VC2])).
 
-random_clock1(N1, N2) ->
-    Seq0 = lists:seq(N1, N2),
-    Seq1 = [{rand:uniform(1000000), X} || X <- Seq0],
-    Seq2 = lists:sort(Seq1),
-    Seq3 = [X || {_, X} <- Seq2],
-    lists:map(
-        fun(I) ->
-            Actor = list_to_atom(lists:flatten(io_lib:format("actor-~b", [I]))),
-            {Actor, random:uniform(100000)}
-        end,
-        Seq3
-    ).
-get_time(Fun, Args) ->
-    T1 = os:timestamp(),
-    lists:foreach(fun(_) -> apply(Fun, Args) end, lists:seq(1, 10000)),
-    T2 = os:timestamp(),
-    DiffMicros = timer:now_diff(T2, T1),
-    round(DiffMicros / 10000.0).
+% if Va strictly dominates Vb, else false!
 
+dominates_test() ->
+    ?assertNot(dominates([], [])),
+    ?assert(dominates([{'minuteman@10.0.3.237',1}], [])),
+    ?assertNot(dominates([], [{a, 1}])),
+    ?assertNot(dominates([{a, 1}], [{b,1}])),
+    ?assertNot(dominates([{b, 1}], [{a,1}])),
+    ?assert(dominates([{a, 1}, {b,1}, {c, 1}, {d,1}], [{c, 1}])),
+    ?assertNot(dominates([{c, 1}], [{a, 1}, {b,1}, {c, 1}, {d,1}])),
+    ?assertNot(dominates([{a, 1}, {c, 1}], [{b, 1}])),
+    ?assertNot(dominates([{b, 1}], [{a, 1}, {c, 1}])).
+
+-ifdef(BENCH).
 bench_test_() ->
     {timeout, 300, [fun() -> bench() end]}.
 bench() ->
@@ -357,4 +363,24 @@ bench() ->
     ?debugFmt("Descends Time (6): ~b~n", [get_time(fun descends/2, [D, D])]),
     ?debugFmt("Descends Time (7): ~b~n", [get_time(fun descends/2, [D1, D1])]).
 
+random_clock1(N1, N2) ->
+    Seq0 = lists:seq(N1, N2),
+    Seq1 = [{rand:uniform(1000000), X} || X <- Seq0],
+    Seq2 = lists:sort(Seq1),
+    Seq3 = [X || {_, X} <- Seq2],
+    lists:map(
+        fun(I) ->
+            Actor = list_to_atom(lists:flatten(io_lib:format("actor-~b", [I]))),
+            {Actor, random:uniform(100000)}
+        end,
+        Seq3
+    ).
+get_time(Fun, Args) ->
+    T1 = os:timestamp(),
+    lists:foreach(fun(_) -> apply(Fun, Args) end, lists:seq(1, 10000)),
+    T2 = os:timestamp(),
+    DiffMicros = timer:now_diff(T2, T1),
+    round(DiffMicros / 10000.0).
+
+-endif.
 -endif.
