@@ -58,7 +58,7 @@
 
 -type binary_gset() :: binary(). %% A binary that from_binary/1 will operate on.
 
--type gset_op() :: {add, member()}.
+-type gset_op() :: {add, member()} | {add_all, members()}.
 
 -type actor() :: riak_dt:actor().
 
@@ -78,10 +78,25 @@ value(GSet) ->
 value(_, GSet) ->
     value(GSet).
 
+%%-spec apply_ops([gset_op()], actor() | dot(), orswot()) ->
+%%                       {ok, orswot()} | precondition_error().
+apply_ops([], _Actor, ORSet) ->
+    {ok, ORSet};
+apply_ops([Op | Rest], Actor, ORSet) ->
+    case update(Op, Actor, ORSet) of
+        {ok, ORSet2} ->
+            apply_ops(Rest, Actor, ORSet2);
+        Error ->
+            Error
+    end.
 
 -spec update(gset_op(), actor(), gset()) -> {ok, gset()}.
 update({add, Elem}, _Actor, GSet) ->
     {ok, ordsets:add_element(Elem, GSet)};
+
+update({update, Ops}, _Actor, GSet) ->
+apply_ops(Ops,_Actor,GSet);
+
 update({add_all, Elems}, _Actor, GSet) ->
     {ok, ordsets:union(GSet, ordsets:from_list(Elems))}.
 
@@ -105,20 +120,26 @@ equal(GSet1, GSet2) ->
 -include("riak_dt_tags.hrl").
 -define(TAG, ?DT_GSET_TAG).
 -define(V1_VERS, 1).
+-define(V2_VERS, 2).
 
 -spec to_binary(gset()) -> binary_gset().
 to_binary(GSet) ->
-    <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(GSet))/binary>>.
+    %%<<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(GSet))/binary>>.
+    {ok, B} = to_binary(?V2_VERS, GSet),
+    B.
 
 -spec to_binary(Vers :: pos_integer(), gset()) -> {ok, binary()} | ?UNSUPPORTED_VERSION.
-to_binary(1, S) ->
-    B = to_binary(S),
-    {ok, B};
-to_binary(Vers, _S) ->
+to_binary(?V1_VERS, S) ->
+    {ok, <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(S))/binary>>};
+to_binary(?V2_VERS, S) ->
+    {ok, <<?TAG:8/integer, ?V2_VERS:8/integer, (riak_dt:to_binary(S))/binary>>};
+to_binary(Vers, _S0) ->
     ?UNSUPPORTED_VERSION(Vers).
 
 -spec from_binary(binary()) -> {ok, gset()} | ?UNSUPPORTED_VERSION | ?INVALID_BINARY.
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, Bin/binary>>) ->
+    {ok, riak_dt:from_binary(Bin)};
+from_binary(<<?TAG:8/integer, ?V2_VERS:8/integer, Bin/binary>>) ->
     {ok, riak_dt:from_binary(Bin)};
 from_binary(<<?TAG:8/integer, Vers:8/integer, _Bin/binary>>) ->
     ?UNSUPPORTED_VERSION(Vers);
