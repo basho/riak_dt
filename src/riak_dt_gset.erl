@@ -178,6 +178,11 @@ stat_test() ->
     ?assertEqual(15, stat(max_element_size, S1)),
     ?assertEqual(undefined, stat(actor_count, S1)).
 
+to_binary_test() ->
+  GSet = update({add, <<"foo">>}, undefined_actor, riak_dt_gset:new()),
+  Bin = riak_dt_gset:to_binary(GSet),
+  ?assertMatch( <<82:8/integer, ?V2_VERS:8/integer, _/binary>> , Bin).
+
 -ifdef(EQC).
 eqc_value_test_() ->
     crdt_statem_eqc:run(?MODULE, 1000).
