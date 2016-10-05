@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_dt_lwwreg: A DVVSet based last-write-wins register
+%% riak_dt_lwwreg: A last-write-wins register
 %%
 %% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
