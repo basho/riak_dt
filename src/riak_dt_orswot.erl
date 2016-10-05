@@ -294,50 +294,56 @@ merge({Clock, Entries, Deferred}, {Clock, Entries, Deferred}) ->
     {Clock, Entries, Deferred};
 merge({LHSClock, LHSEntries, LHSDeferred}, {RHSClock, RHSEntries, RHSDeferred}) ->
     Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
-    {Keep, RHSElems} = ?DICT:fold(fun(Elem, Dots, {Acc, RHSRemaining}) ->
-                         case ?DICT:find(Elem, RHSEntries) of
-                             error ->
-                                 %% Only on left, trim dots and keep
-                                 %% surviving
-                                 case riak_dt_vclock:subtract_dots(Dots, RHSClock) of
-                                     [] ->
-                                         %% Removed
-                                         {Acc, RHSRemaining};
-                                     NewDots ->
-                                         {?DICT:store(Elem, NewDots, Acc), RHSRemaining}
-                                 end;
-                             {ok, RHSDots} ->
-                                 %% On both sides
-                                 CommonDots = sets:intersection(sets:from_list(Dots), sets:from_list(RHSDots)),
-                                 LHSUnique = sets:to_list(sets:subtract(sets:from_list(Dots), CommonDots)),
-                                 RHSUnique = sets:to_list(sets:subtract(sets:from_list(RHSDots), CommonDots)),
-                                 LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, RHSClock),
-                                 RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, LHSClock),
-                                 V = riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]),
-                                 %% Perfectly possible that an item in both sets should be dropped
-                                 case V of
-                                     [] ->
-                                         %% Removed from both sides
-                                         {Acc, ?DICT:erase(Elem, RHSRemaining)};
-                                     _ ->
-                                         {?DICT:store(Elem, V, Acc), ?DICT:erase(Elem, RHSRemaining)}
-                                 end
-                         end
-                 end,
-                 {?DICT:new(), RHSEntries},
-                 LHSEntries),
+    {Keep, RHSElems} =
+        ?DICT:fold(fun(Elem, Dots, {Acc, RHSRemaining}) ->
+                           case ?DICT:find(Elem, RHSEntries) of
+                               error ->
+                                   %% Only on left, trim dots and keep surviving
+                                   case riak_dt_vclock:subtract_dots(Dots, RHSClock) of
+                                       [] ->
+                                           %% Removed
+                                           {Acc, RHSRemaining};
+                                       NewDots ->
+                                           {?DICT:store(Elem, NewDots, Acc), RHSRemaining}
+                                   end;
+                               {ok, RHSDots} ->
+                                   %% On both sides
+                                   CommonDots = ordsets:intersection(
+                                                  ordsets:from_list(Dots),
+                                                  ordsets:from_list(RHSDots)),
+                                   LHSUnique = ordsets:to_list(
+                                                 ordsets:subtract(ordsets:from_list(Dots),
+                                                                  CommonDots)),
+                                   RHSUnique = ordsets:to_list(
+                                                 ordsets:subtract(ordsets:from_list(RHSDots),
+                                                                  CommonDots)),
+                                   LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, RHSClock),
+                                   RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, LHSClock),
+                                   V = riak_dt_vclock:merge([ordsets:to_list(CommonDots), LHSKeep, RHSKeep]),
+                                   %% Perfectly possible that an item in both sets should be dropped
+                                   case V of
+                                       [] ->
+                                           %% Removed from both sides
+                                           {Acc, ?DICT:erase(Elem, RHSRemaining)};
+                                       _ ->
+                                           {?DICT:store(Elem, V, Acc), ?DICT:erase(Elem, RHSRemaining)}
+                                   end
+                           end
+                   end,
+                   {?DICT:new(), RHSEntries},
+                   LHSEntries),
     %%Now what about the stuff left from the right hand side? Do the same to that!
     Entries = ?DICT:fold(fun(Elem, Dots, Acc) ->
-                         case riak_dt_vclock:subtract_dots(Dots, LHSClock) of
-                             [] ->
-                                 %% Removed
-                                 Acc;
-                             NewDots ->
-                                 ?DICT:store(Elem, NewDots, Acc)
-                         end
-                 end,
-                 Keep,
-                 RHSElems),
+                                 case riak_dt_vclock:subtract_dots(Dots, LHSClock) of
+                                     [] ->
+                                         %% Removed
+                                         Acc;
+                                     NewDots ->
+                                         ?DICT:store(Elem, NewDots, Acc)
+                                 end
+                         end,
+                         Keep,
+                         RHSElems),
     Deffered = merge_deferred(LHSDeferred, RHSDeferred),
 
     apply_deferred(Clock, Entries, Deffered).
