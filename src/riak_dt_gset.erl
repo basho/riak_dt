@@ -78,17 +78,13 @@ value(GSet) ->
 value(_, GSet) ->
     value(GSet).
 
-%%-spec apply_ops([gset_op()], actor() | dot(), orswot()) ->
-%%                       {ok, orswot()} | precondition_error().
-apply_ops([], _Actor, ORSet) ->
-    {ok, ORSet};
-apply_ops([Op | Rest], Actor, ORSet) ->
-    case update(Op, Actor, ORSet) of
-        {ok, ORSet2} ->
-            apply_ops(Rest, Actor, ORSet2);
-        Error ->
-            Error
-    end.
+-spec apply_ops([gset_op()], actor(),  gset()) ->
+                       {ok, gset()}.
+apply_ops([], _Actor, GSet) ->
+    {ok, GSet};
+apply_ops([Op | Rest], Actor, GSet) ->
+    {ok, GSet2} =  update(Op, Actor, GSet),
+    apply_ops(Rest, Actor, GSet2).
 
 -spec update(gset_op(), actor(), gset()) -> {ok, gset()}.
 update({add, Elem}, _Actor, GSet) ->
