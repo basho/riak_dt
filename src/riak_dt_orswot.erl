@@ -279,8 +279,7 @@ merge({LHSClock, LHSEntries, LHSDeferred}=LHS, {RHSClock, RHSEntries, RHSDeferre
     Entries = merge_disjoint_keys(RHSUnique, RHSEntries, LHSClock, Entries0),
 
     Deffered = merge_deferred(LHSDeferred, RHSDeferred),
-
-    apply_deferred(Clock, Entries, Deffered).
+    apply_deferred(Clock,  dict:to_list(Entries), Deffered).
 
 %% @private merge the deffered operations for both sets.
 -spec merge_deferred(deferred(), deferred()) -> deferred().
@@ -307,16 +306,17 @@ apply_deferred(Clock, Entries, Deferred) ->
 %% @doc check if each element in `Entries' should be in the merged
 %% set.
 -spec merge_disjoint_keys(set(), orddict:orddict(),
-                          riak_dt_vclock:vclock(), orddict:orddict()) -> orddict:orddict().
-merge_disjoint_keys(Keys, Entries, SetClock, Accumulator) ->
+                          riak_dt_vclock:vclock(), dict:dict()) -> dict:dict().
+merge_disjoint_keys(Keys, Entries0, SetClock, Accumulator) ->
+    Entries1 = dict:from_list(Entries0),
     sets:fold(fun(Key, Acc) ->
-                      Dots = orddict:fetch(Key, Entries),
+                      Dots = dict:fetch(Key, Entries1),
                       case riak_dt_vclock:descends(SetClock, Dots) of
                           false ->
                               %% Optimise the set of stored dots to
                               %% include only those unseen
                               NewDots = riak_dt_vclock:subtract_dots(Dots, SetClock),
-                              orddict:store(Key, NewDots, Acc);
+                              dict:store(Key, NewDots, Acc);
                           true ->
                               Acc
                       end
@@ -327,7 +327,7 @@ merge_disjoint_keys(Keys, Entries, SetClock, Accumulator) ->
 %% @doc merges the minimal clocks for the common entries in both sets.
 -spec merge_common_keys(set(), {riak_dt_vclock:vclock(), entries(), deferred()},
                         {riak_dt_vclock:vclock(), entries(), deferred()}) ->
-                               orddict:orddict().
+                               dict:dict().
 merge_common_keys(CommonKeys, {LHSClock, LHSEntries, _}, {RHSClock, RHSEntries, _}) ->
 
     %% If both sides have the same values, some dots may still need to
@@ -350,12 +350,12 @@ merge_common_keys(CommonKeys, {LHSClock, LHSEntries, _}, {RHSClock, RHSEntries, 
                       %% Perfectly possible that an item in both sets should be dropped
                       case V of
                           [] ->
-                              orddict:erase(Key, Acc);
+                              dict:erase(Key, Acc);
                           _ ->
-                              orddict:store(Key, V, Acc)
+                              dict:store(Key, V, Acc)
                       end
               end,
-              orddict:new(),
+              dict:new(),
               CommonKeys).
 
 -spec equal(orswot(), orswot()) -> boolean().
