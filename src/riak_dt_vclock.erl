@@ -147,7 +147,7 @@ subtract_dots(DotList0, VClock0) ->
 drop_dots([], _Clock, NewDots) ->
     lists:reverse(NewDots);
 drop_dots(A, [], NewDots) ->
-    lists:reverse(A) ++ lists:reverse(NewDots);
+    A ++ lists:reverse(NewDots);
 drop_dots([Dot = {Actor, CountA} | RestA], [{Actor, CountB} | RestB], Acc) when CountA > CountB ->
     drop_dots(RestA, RestB, [Dot|Acc]);
 drop_dots([{Actor, CountA} | RestA], [{Actor, CountB} | RestB], Acc) when CountA =< CountB ->
@@ -327,6 +327,9 @@ dominates_test() ->
     ?assertNot(dominates([{c, 1}], [{a, 1}, {b,1}, {c, 1}, {d,1}])),
     ?assertNot(dominates([{a, 1}, {c, 1}], [{b, 1}])),
     ?assertNot(dominates([{b, 1}], [{a, 1}, {c, 1}])).
+
+subtract_dots_test() ->
+    ?assertEqual([{a, 1}, {b, 2}], subtract_dots([{a, 1}, {b, 2}], [])).
 
 -ifdef(BENCH).
 bench_test_() ->
