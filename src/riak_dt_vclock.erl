@@ -32,6 +32,9 @@
 -module(riak_dt_vclock).
 -compile(inline_list_funcs).
 
+-on_load(init/0).
+
+
 -export([fresh/0,descends/2,merge/1,get_counter/2, subtract_dots/2,
          increment/2,all_nodes/1, equal/2,
          to_binary/1, from_binary/1, dominates/2, glb/2]).
@@ -40,9 +43,11 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
+-define(APPNAME, riak_dt).
+-define(LIBNAME, riak_dt_vclock).
+
 %% The presence of the special actor indicates the list is sorted
 %% This is a very "low" actor # that was chosen randomly, and smaller than -2**31
--define(SPECIAL_DOT, {-34359738368, 1}).
 -export_type([vclock/0, vclock_node/0, binary_vclock/0]).
 
 -type vclock() :: [vc_entry()].
@@ -55,36 +60,35 @@
 -type   vclock_node() :: term().
 -type   counter() :: non_neg_integer().
 
+init() ->
+    SoName = case code:priv_dir(?APPNAME) of
+                 {error, bad_name} ->
+                     case filelib:is_dir(filename:join(["..", priv])) of
+                         true ->
+                             filename:join(["..", priv, ?LIBNAME]);
+                         _ ->
+                             filename:join([priv, ?LIBNAME])
+                     end;
+                 Dir ->
+                     filename:join(Dir, ?LIBNAME)
+             end,
+    erlang:load_nif(SoName, 0).
+
+
 % @doc Create a brand new vclock.
 -spec fresh() -> sorted_vclock().
 fresh() ->
     [].
 
--spec(ensure_sorted(vclock()) -> sorted_vclock()).
--ifdef(TEST).
-ensure_sorted(VClock0) ->
-    VClock0.
--else.
-ensure_sorted(VClock0) ->
-    case lists:member(?SPECIAL_DOT, VClock0) of
-        true ->
-            VClock0;
-        false ->
-            lists:usort([?SPECIAL_DOT|VClock0])
-    end.
--endif.
-%%    {SpecialActor, _} = ?SPECIAL_DOT,
-%%    case lists:keyfind(SpecialActor, 1, VClock0) of
-%%        {_, SpecialVersionCounter} when SpecialVersionCounter band 1 > 0 ->
-%%            VClock0;
-%%        Else ->
-%%            ?debugFmt("Found: ~p~n", [Else]),
-%%            After = lists:usort([?SPECIAL_DOT|VClock0]),
-%%            ?debugFmt("After: ~p~n", [After]),
-%%            After
-%%
-%%    end.
+is_sorted(_List) ->
+    erlang:nif_error({error, not_loaded}).
 
+-spec(ensure_sorted(vclock()) -> sorted_vclock()).
+ensure_sorted(VClock0) ->
+    case is_sorted(VClock0) of
+        true -> VClock0;
+        false -> lists:usort(VClock0)
+    end.
 
 % @doc Return true if Va is a direct descendant of Vb, else false -- remember, a vclock is its own descendant!
 -spec descends(Va :: vclock()|[], Vb :: vclock()|[]) -> boolean().
@@ -166,26 +170,9 @@ merge(VClocks0) ->
     [VClocks1|RestVClocks1] = lists:map(fun ensure_sorted/1, VClocks0),
     lists:foldl(fun merge/2, VClocks1, RestVClocks1).
 
-merge(V1, V2) ->
-    merge(V1, V2, []).
+merge(V1, V2) -> merge2(V1, V2).
 
-merge([], [], Acc) ->
-    lists:reverse(Acc);
-merge([DotA = {Actor, CounterA}|RestVClockA], [_DotB = {Actor, CounterB}|RestVClockB], Acc) when CounterA >= CounterB ->
-    merge(RestVClockA, RestVClockB, [DotA|Acc]);
-merge([_DotA = {Actor, CounterA}|RestVClockA], [DotB = {Actor, CounterB}|RestVClockB], Acc) when CounterA < CounterB ->
-    merge(RestVClockA, RestVClockB, [DotB|Acc]);
-merge(VClockA = [{ActorA, _}|_RestVClockA], [DotB = {ActorB, _}|RestVClockB], Acc) when ActorA > ActorB->
-    merge(VClockA, RestVClockB, [DotB|Acc]);
-merge([DotA = {ActorA, _}|RestVClockA], VClockB = [{ActorB, _}|_RestVClockB], Acc) when ActorA < ActorB->
-    merge(RestVClockA, VClockB, [DotA|Acc]);
-merge([], VClockB, Acc) ->
-    lists:reverse(Acc) ++ VClockB;
-merge(VClockA, [], Acc) ->
-    lists:reverse(Acc) ++ VClockA.
-
-
-
+merge2(_V1, _V2) -> erlang:nif_error({error, not_loaded}).
 
 % @doc Get the counter value in VClock set from Node.
 -spec get_counter(Node :: vclock_node(), VClock :: vclock()) -> counter().
@@ -203,7 +190,9 @@ get_counter(Node, VClock) ->
                 VClock :: vclock()) -> vclock().
 increment(Node, VClock0) ->
     VClock1 = ensure_sorted(VClock0),
-    orddict:update(Node, fun(X) -> X + 1 end, 1, VClock1).
+    orddict:update_counter(Node, 1, VClock1).
+
+%%increment2(_Node, _VClock1) -> erlang:nif_error({error, not_loaded}).
 
 % @doc Return the list of all nodes that have ever incremented VClock.
 -spec all_nodes(VClock :: vclock()) -> [vclock_node()].
@@ -331,19 +320,29 @@ dominates_test() ->
 subtract_dots_test() ->
     ?assertEqual([{a, 1}, {b, 2}], subtract_dots([{a, 1}, {b, 2}], [])).
 
+is_sorted_test() ->
+    ?assert(is_sorted([1,2,3])),
+    ?assertNot(is_sorted([1,1])),
+    ?assertNot(is_sorted([1,2,1])),
+    ?assertNot(is_sorted([1,1])),
+    ?assertNot(is_sorted([2,2])),
+    ?assert(is_sorted([1,2])),
+    ?assert(is_sorted([1])),
+    ?assert(is_sorted([])).
+
 -ifdef(BENCH).
 bench_test_() ->
     {timeout, 300, [fun() -> bench() end]}.
 bench() ->
-    A = random_clock1(1, 1000),
+    A = random_clock1(1, 2000),
     A1 = ensure_sorted(A),
-    B = random_clock1(1, 1000),
+    B = random_clock1(1, 2000),
     B1 = ensure_sorted(B),
-    C = random_clock1(500, 1500),
+    C = random_clock1(500, 3000),
     C1 = ensure_sorted(C),
-    D = random_clock1(1, 1500),
+    D = random_clock1(1, 3000),
     D1 = ensure_sorted(D),
-    E = random_clock1(1, 5),
+    E = random_clock1(1, 10),
     E1 = ensure_sorted(E),
 
     ?debugFmt("Increment Time (1): ~b~n", [get_time(fun increment/2, ['actor-500', A])]),
@@ -374,7 +373,7 @@ random_clock1(N1, N2) ->
     lists:map(
         fun(I) ->
             Actor = list_to_atom(lists:flatten(io_lib:format("actor-~b", [I]))),
-            {Actor, random:uniform(100000)}
+            {Actor, rand:uniform(100000)}
         end,
         Seq3
     ).
@@ -384,6 +383,7 @@ get_time(Fun, Args) ->
     T2 = os:timestamp(),
     DiffMicros = timer:now_diff(T2, T1),
     round(DiffMicros / 10000.0).
+
 
 -endif.
 -endif.
