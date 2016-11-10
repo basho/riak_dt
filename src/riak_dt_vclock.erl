@@ -113,27 +113,10 @@ descends2(_Va, _Vb) ->
 dominates(Va0, Vb0) ->
     Va1 = ensure_sorted(Va0),
     Vb1 = ensure_sorted(Vb0),
-    dominates1(Va1, Vb1, false).
+    dominates2(Va1, Vb1).
 
--spec dominates1(sorted_vclock(), sorted_vclock(), boolean()) -> boolean().
-%% We've exhausted Vb, then Va dominates
-dominates1([], [], HasDominated) -> HasDominated;
-dominates1(_, [], _) -> true;
-%% We've exhausted Va, but Vb still has actors
-dominates1([], _, _) -> false;
-%% Simple domination
-dominates1([{Actor, CounterA}|RestA], [{Actor, CounterB}|RestB], _HasDominated) when CounterA > CounterB ->
-    dominates1(RestA, RestB, true);
-%% Equal actors, and counters
-dominates1([{Actor, Counter}|RestA], [{Actor, Counter}|RestB], HasDominated) ->
-    dominates1(RestA, RestB, HasDominated);
-%% The counter in CounterB is bigger than CounterA
-dominates1([{Actor, CounterA}|_RestA], [{Actor, CounterB}|_RestB], _HasDominated) when CounterB > CounterA ->
-    false;
-dominates1([{ActorA, _CounterA}|RestA], Vb = [{ActorB, _CounterB}|_RestB], HasDominated) when ActorB > ActorA ->
-    dominates1(RestA, Vb, HasDominated);
-dominates1([{ActorA, _CounterA}|_RestA], [{ActorB, _CounterB}|_RestB], _HasDominated) when ActorA > ActorB ->
-    false.
+dominates2(_Va, _Vb) ->
+    erlang:nif_error({error, not_loaded}).
 
 %% @doc subtract the VClock from the DotList.
 %% what this means is that any {actor(), count()} pair in
@@ -149,21 +132,6 @@ subtract_dots(DotList0, VClock0) ->
 
 drop_dots(_DotList, _VClock) ->
     erlang:nif_error({error, not_loaded}).
-%% A - B
-%%drop_dots([], _Clock, NewDots) ->
-%%    lists:reverse(NewDots);
-%%drop_dots(A, [], NewDots) ->
-%%    A ++ lists:reverse(NewDots);
-%%drop_dots([Dot = {Actor, CountA} | RestA], [{Actor, CountB} | RestB], Acc) when CountA > CountB ->
-%%    drop_dots(RestA, RestB, [Dot|Acc]);
-%%drop_dots([{Actor, CountA} | RestA], [{Actor, CountB} | RestB], Acc) when CountA =< CountB ->
-%%    drop_dots(RestA, RestB, Acc);
-%%drop_dots([Dot = {ActorA, _CountA} | RestA], B = [{ActorB, _CountB} | _RestB], Acc) when ActorB > ActorA ->
-%%    drop_dots(RestA, B, [Dot|Acc]);
-%%drop_dots(A = [{ActorA, _CountA} | _RestA], [{ActorB, _CountB} | RestB], Acc) when ActorA > ActorB ->
-%%    drop_dots(A, RestB, Acc).
-
-
 
 % @doc Combine all VClocks in the input list into their least possible
 %      common descendant.

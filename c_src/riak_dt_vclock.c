@@ -1,6 +1,5 @@
 #include "erl_nif.h"
-
-#include <stdio.h>
+#include <stdbool.h>
 
 
 static ERL_NIF_TERM atom_true;
@@ -218,12 +217,70 @@ ERL_NIF_TERM drop_dots_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) 
     return rretlist;
 }
 
+ERL_NIF_TERM dominates2_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+     ERL_NIF_TERM headlhs, taillhs, listlhs = argv[0];
+     ERL_NIF_TERM headrhs, tailrhs, listrhs = argv[1];
+     bool has_dominated = false;
+
+     const ERL_NIF_TERM *tuplelhs, *tuplerhs;
+     int aritylhs, arityrhs, cmp;
+     ErlNifSInt64 vallhs, valrhs;
+
+     while (enif_get_list_cell(env, listlhs, &headlhs, &taillhs) &&
+            enif_get_list_cell(env, listrhs, &headrhs, &tailrhs)) {
+
+        if(!enif_get_tuple(env, headlhs, &aritylhs, &tuplelhs))
+            return badarg;
+        if (aritylhs != 2)
+            return badarg;
+
+        if(!enif_get_tuple(env, headrhs, &arityrhs, &tuplerhs))
+            return badarg;
+        if (arityrhs != 2)
+            return badarg;
+
+        cmp = enif_compare(tuplelhs[0], tuplerhs[0]);
+        if (!enif_get_int64(env, tuplelhs[1], &vallhs))
+            return badarg;
+        if (!enif_get_int64(env, tuplerhs[1], &valrhs))
+            return badarg;
+
+        /* Extra actor on left hand side, ignore it */
+        if (cmp < 0) {
+            listlhs = taillhs;
+        } else if (cmp > 0) {
+            return atom_false;
+        } else {
+            if (vallhs < valrhs)
+                return atom_false;
+            else if(vallhs > valrhs)
+                has_dominated = true;
+            listlhs = taillhs;
+            listrhs = tailrhs;
+        }
+     }
+
+     /* Both sides are empty */
+     if(enif_is_empty_list(env, listlhs) && enif_is_empty_list(env, listrhs)) {
+        if(has_dominated)
+            return atom_true;
+         else
+            return atom_false;
+      /* LHS is not empty, but RHS is empty */
+      } else if(!enif_is_empty_list(env, listlhs) && enif_is_empty_list(env, listrhs)) {
+        return atom_true;
+      /* LHS is empty, but RHS is not empty */
+      } else {
+        return atom_false;
+      }
+}
 
 static ErlNifFunc nif_funcs[] = {
     {"descends2", 2, descends2_nif},
     {"is_sorted", 1, is_sorted_nif},
     {"merge2", 2, merge2_nif},
     {"drop_dots", 2, drop_dots_nif},
+    {"dominates2", 2, dominates2_nif}
 };
 
 ERL_NIF_INIT(riak_dt_vclock, nif_funcs, load, NULL, NULL, NULL)
