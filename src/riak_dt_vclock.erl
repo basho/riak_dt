@@ -84,10 +84,16 @@ is_sorted(_List) ->
     erlang:nif_error({error, not_loaded}).
 
 -spec(ensure_sorted(vclock()) -> sorted_vclock()).
+%ensure_sorted([]) ->
+%    case is_sorted([]) of
+%        _ -> []
+%    end;
+%ensure_sorted(X) -> X.
 ensure_sorted(VClock0) ->
     case is_sorted(VClock0) of
         true -> VClock0;
-        false -> lists:usort(VClock0)
+        false ->
+            lists:usort(VClock0)
     end.
 
 % @doc Return true if Va is a direct descendant of Vb, else false -- remember, a vclock is its own descendant!
@@ -95,18 +101,12 @@ ensure_sorted(VClock0) ->
 descends(Va0, Vb0) ->
     Va1 = ensure_sorted(Va0),
     Vb1 = ensure_sorted(Vb0),
-    descends1(Va1, Vb1).
+    descends2(Va1, Vb1).
 
 
--spec descends1(Va :: sorted_vclock()|[], Vb :: sorted_vclock()|[]) -> boolean().
-descends1(_, []) ->
-    true;
-descends1([{Actor, CounterA}|RestA], [{Actor, CounterB}|RestB]) when CounterA >= CounterB ->
-    descends1(RestA, RestB);
-descends1([{ActorA, _CounterA}|RestA], Vb = [{ActorB, _CounterB}|_RestB]) when ActorB >= ActorA ->
-    descends1(RestA, Vb);
-descends1(_, _) ->
-    false.
+-spec descends2(Va :: sorted_vclock()|[], Vb :: sorted_vclock()|[]) -> boolean().
+descends2(_Va, _Vb) ->
+    erlang:nif_error({error, not_loaded}).
 
 % @doc Return true if Va strictly dominates Vb, else false!
 -spec dominates(vclock(), vclock()) -> boolean().
@@ -145,21 +145,23 @@ dominates1([{ActorA, _CounterA}|_RestA], [{ActorB, _CounterB}|_RestB], _HasDomin
 subtract_dots(DotList0, VClock0) ->
     DotList1 = ensure_sorted(DotList0),
     VClock1 = ensure_sorted(VClock0),
-    drop_dots(DotList1, VClock1, []).
+    drop_dots(DotList1, VClock1).
 
+drop_dots(_DotList, _VClock) ->
+    erlang:nif_error({error, not_loaded}).
 %% A - B
-drop_dots([], _Clock, NewDots) ->
-    lists:reverse(NewDots);
-drop_dots(A, [], NewDots) ->
-    A ++ lists:reverse(NewDots);
-drop_dots([Dot = {Actor, CountA} | RestA], [{Actor, CountB} | RestB], Acc) when CountA > CountB ->
-    drop_dots(RestA, RestB, [Dot|Acc]);
-drop_dots([{Actor, CountA} | RestA], [{Actor, CountB} | RestB], Acc) when CountA =< CountB ->
-    drop_dots(RestA, RestB, Acc);
-drop_dots([Dot = {ActorA, _CountA} | RestA], B = [{ActorB, _CountB} | _RestB], Acc) when ActorB > ActorA ->
-    drop_dots(RestA, B, [Dot|Acc]);
-drop_dots(A = [{ActorA, _CountA} | _RestA], [{ActorB, _CountB} | RestB], Acc) when ActorA > ActorB ->
-    drop_dots(A, RestB, Acc).
+%%drop_dots([], _Clock, NewDots) ->
+%%    lists:reverse(NewDots);
+%%drop_dots(A, [], NewDots) ->
+%%    A ++ lists:reverse(NewDots);
+%%drop_dots([Dot = {Actor, CountA} | RestA], [{Actor, CountB} | RestB], Acc) when CountA > CountB ->
+%%    drop_dots(RestA, RestB, [Dot|Acc]);
+%%drop_dots([{Actor, CountA} | RestA], [{Actor, CountB} | RestB], Acc) when CountA =< CountB ->
+%%    drop_dots(RestA, RestB, Acc);
+%%drop_dots([Dot = {ActorA, _CountA} | RestA], B = [{ActorB, _CountB} | _RestB], Acc) when ActorB > ActorA ->
+%%    drop_dots(RestA, B, [Dot|Acc]);
+%%drop_dots(A = [{ActorA, _CountA} | _RestA], [{ActorB, _CountB} | RestB], Acc) when ActorA > ActorB ->
+%%    drop_dots(A, RestB, Acc).
 
 
 
@@ -207,7 +209,7 @@ equal(VA,VB) ->
 %% @doc sorts the vclock by actor
 -spec sort(vclock()) -> vclock().
 sort(Clock) ->
-    lists:usort(Clock).
+    ensure_sorted(Clock).
 
 %% @doc an effecient format for disk / wire.
 %5 @see `from_binary/1`
@@ -321,13 +323,14 @@ subtract_dots_test() ->
     ?assertEqual([{a, 1}, {b, 2}], subtract_dots([{a, 1}, {b, 2}], [])).
 
 is_sorted_test() ->
-    ?assert(is_sorted([1,2,3])),
-    ?assertNot(is_sorted([1,1])),
-    ?assertNot(is_sorted([1,2,1])),
-    ?assertNot(is_sorted([1,1])),
-    ?assertNot(is_sorted([2,2])),
-    ?assert(is_sorted([1,2])),
-    ?assert(is_sorted([1])),
+    ?assertNot(is_sorted([{1},{2},{3},{2}])),
+    ?assert(is_sorted([{1},{2},{3}])),
+    ?assertNot(is_sorted([{1},{1}])),
+    ?assertNot(is_sorted([{1},{2},{1}])),
+    ?assertNot(is_sorted([{1},{1}])),
+    ?assertNot(is_sorted([{2},{2}])),
+    ?assert(is_sorted([{1},{2}])),
+    ?assert(is_sorted([{1}])),
     ?assert(is_sorted([])).
 
 -ifdef(BENCH).
@@ -335,34 +338,34 @@ bench_test_() ->
     {timeout, 300, [fun() -> bench() end]}.
 bench() ->
     A = random_clock1(1, 2000),
-    A1 = ensure_sorted(A),
+    A1 = lists:usort(A),
     B = random_clock1(1, 2000),
-    B1 = ensure_sorted(B),
+    B1 = lists:usort(B),
     C = random_clock1(500, 3000),
-    C1 = ensure_sorted(C),
+    C1 = lists:usort(C),
     D = random_clock1(1, 3000),
-    D1 = ensure_sorted(D),
+    D1 = lists:usort(D),
     E = random_clock1(1, 10),
-    E1 = ensure_sorted(E),
+    E1 = lists:usort(E),
 
-    ?debugFmt("Increment Time (1): ~b~n", [get_time(fun increment/2, ['actor-500', A])]),
+%    ?debugFmt("Increment Time (1): ~b~n", [get_time(fun increment/2, ['actor-500', A])]),
     ?debugFmt("Increment Time (2): ~b~n", [get_time(fun increment/2, ['actor-500', A1])]),
-    ?debugFmt("Merge Time (1): ~b~n", [get_time(fun merge/1, [[B, A]])]),
+    %?debugFmt("Merge Time (1): ~b~n", [get_time(fun merge/1, [[B, A]])]),
     ?debugFmt("Merge Time (2): ~b~n", [get_time(fun merge/1, [[B1, A1]])]),
-    ?debugFmt("Merge Time (3): ~b~n", [get_time(fun merge/1, [[A, C]])]),
+    %?debugFmt("Merge Time (3): ~b~n", [get_time(fun merge/1, [[A, C]])]),
     ?debugFmt("Merge Time (4): ~b~n", [get_time(fun merge/1, [[A1, C1]])]),
-    ?debugFmt("Merge Time (5): ~b~n", [get_time(fun merge/1, [[A, A]])]),
+    %?debugFmt("Merge Time (5): ~b~n", [get_time(fun merge/1, [[A, A]])]),
     ?debugFmt("Merge Time (6): ~b~n", [get_time(fun merge/1, [[A1, A1]])]),
-    ?debugFmt("Merge Time (7): ~b~n", [get_time(fun merge/1, [[E, E]])]),
+    %?debugFmt("Merge Time (7): ~b~n", [get_time(fun merge/1, [[E, E]])]),
     ?debugFmt("Merge Time (8): ~b~n", [get_time(fun merge/1, [[E1, E1]])]),
 
-    ?debugFmt("Descends Time (1): ~b~n", [get_time(fun descends/2, [A, C])]),
+    %?debugFmt("Descends Time (1): ~b~n", [get_time(fun descends/2, [A, C])]),
     ?debugFmt("Descends Time (2): ~b~n", [get_time(fun descends/2, [A1, C1])]),
-    ?debugFmt("Descends Time (2): ~b~n", [get_time(fun descends/2, [A, D])]),
+    %?debugFmt("Descends Time (2): ~b~n", [get_time(fun descends/2, [A, D])]),
     ?debugFmt("Descends Time (3): ~b~n", [get_time(fun descends/2, [A1, D1])]),
-    ?debugFmt("Descends Time (4): ~b~n", [get_time(fun descends/2, [D, A])]),
+    %?debugFmt("Descends Time (4): ~b~n", [get_time(fun descends/2, [D, A])]),
     ?debugFmt("Descends Time (5): ~b~n", [get_time(fun descends/2, [D1, A1])]),
-    ?debugFmt("Descends Time (6): ~b~n", [get_time(fun descends/2, [D, D])]),
+    %?debugFmt("Descends Time (6): ~b~n", [get_time(fun descends/2, [D, D])]),
     ?debugFmt("Descends Time (7): ~b~n", [get_time(fun descends/2, [D1, D1])]).
 
 random_clock1(N1, N2) ->
