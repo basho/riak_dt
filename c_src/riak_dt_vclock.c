@@ -21,24 +21,30 @@ ERL_NIF_TERM is_sorted_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) 
     const ERL_NIF_TERM *tuple1, *tuple2;
     int arity1, arity2;
 
-    if (!enif_is_list(env, list))
+    if(enif_get_list_cell(env, list, &head1, &tail)) {
+        if(!enif_get_tuple(env, head1, &arity1, &tuple1))
+            return badarg;
+        if(arity1 == 0)
+            return badarg;
+
+        while(enif_get_list_cell(env, tail, &head2, &rest)) {
+            if(!enif_get_tuple(env, head2, &arity2, &tuple2))
+                return badarg;
+            if (arity2 == 0)
+                return badarg;
+            if (enif_compare(tuple1[0], tuple2[0]) >= 0)
+                return atom_false;
+
+            tuple1 = tuple2;
+            arity1 = arity2;
+            head1 = head2;
+            tail = rest;
+        }
+        return atom_true;
+    } else if (enif_is_empty_list(env, list))
+        return atom_true;
+    else
         return badarg;
-
-
-    while(enif_get_list_cell(env, list, &head1, &tail) && enif_get_list_cell(env, tail, &head2, &rest)) {
-        if(!enif_get_tuple(env, head1, &arity1, &tuple1) || !enif_get_tuple(env, head2, &arity2, &tuple2))
-            return badarg;
-
-        if (arity1 == 0 || arity2 == 0)
-            return badarg;
-
-        if (enif_compare(tuple1[0], tuple2[0]) >= 0)
-            return atom_false;
-
-        list = tail;
-    }
-
-    return atom_true;
 }
 
 static inline ErlNifSInt64 max(ErlNifSInt64 i1, ErlNifSInt64 i2) {
