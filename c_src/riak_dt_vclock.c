@@ -97,6 +97,7 @@ ERL_NIF_TERM merge2_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
         listrhs = tailrhs;
     }
 
+    /* TODO: Maybe have some heuristic here to determine whether to do a reverse here, or in Erlang? */
     enif_make_reverse_list(env, retlist, &rretlist);
     return rretlist;
 }
