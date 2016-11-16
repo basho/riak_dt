@@ -120,6 +120,8 @@
 
 -type precondition_error() :: {error, {precondition ,{not_present, member()}}}.
 
+-define(EMPTY_ORSWOT, {[],#{},[]}).
+
 -spec new() -> orswot().
 new() ->
     {riak_dt_vclock:fresh(), maps:new(), orddict:new()}.
@@ -280,23 +282,25 @@ merge(LHS, {RHSClock, RHSEntries0, RHSDeferred}) when is_list(RHSEntries0) ->
     merge(LHS, {RHSClock, RHSEntries1, RHSDeferred});
 merge({Clock, Entries, Deferred}, {Clock, Entries, Deferred}) ->
     {Clock, Entries, Deferred};
+merge({Clock, Entries, LHSDeferred}, {Clock, Entries, RHSDeferred}) ->
+    Deffered = merge_deferred(LHSDeferred, RHSDeferred),
+    apply_deferred(Clock, Entries, Deffered);
+merge(?EMPTY_ORSWOT, RHS) -> RHS;
+merge(LHS, ?EMPTY_ORSWOT) -> LHS;
 merge({LHSClock, LHSEntries, LHSDeferred}=LHS, {RHSClock, RHSEntries, RHSDeferred}=RHS) ->
     Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
     %% If an element is in both dicts, merge it. If it occurs in one,
     %% then see if its dots are dominated by the others whole set
     %% clock. If so, then drop it, if not, keep it.
-    LHSKeys = sets:from_list(maps:keys(LHSEntries)),
-    RHSKeys = sets:from_list(maps:keys(RHSEntries)),
-    CommonKeys = sets:intersection(LHSKeys, RHSKeys),
-    LHSUnique = sets:subtract(LHSKeys, CommonKeys),
-    RHSUnique = sets:subtract(RHSKeys, CommonKeys),
-    Entries00 = merge_common_keys(CommonKeys, LHS, RHS),
+    LHSUnique = maps:filter(fun(Key, _Value) -> not maps:is_key(Key, RHSEntries) end, LHSEntries),
+    RHSUnique = maps:filter(fun(Key, _Value) -> not maps:is_key(Key, LHSEntries) end, RHSEntries),
+    Entries0 = merge_common_keys(LHS, RHS),
 
-    Entries0 = merge_disjoint_keys(LHSUnique, LHSEntries, RHSClock, Entries00),
-    Entries = merge_disjoint_keys(RHSUnique, RHSEntries, LHSClock, Entries0),
+    Entries1 = merge_disjoint_keys(LHSUnique, LHSEntries, RHSClock, Entries0),
+    Entries2 = merge_disjoint_keys(RHSUnique, RHSEntries, LHSClock, Entries1),
 
     Deffered = merge_deferred(LHSDeferred, RHSDeferred),
-    apply_deferred(Clock, Entries, Deffered).
+    apply_deferred(Clock, Entries2, Deffered).
 
 %% @private merge the deffered operations for both sets.
 -spec merge_deferred(deferred(), deferred()) -> deferred().
@@ -325,7 +329,7 @@ apply_deferred(Clock, Entries, Deferred) ->
 -spec merge_disjoint_keys(set(), entries(),
                           riak_dt_vclock:vclock(), entries()) -> entries().
 merge_disjoint_keys(Keys, Entries, SetClock, Accumulator) ->
-    sets:fold(fun(Key, Acc) ->
+    maps:fold(fun(Key, _Val, Acc) ->
                       Dots = maps:get(Key, Entries),
                       case riak_dt_vclock:descends(SetClock, Dots) of
                           false ->
@@ -341,10 +345,10 @@ merge_disjoint_keys(Keys, Entries, SetClock, Accumulator) ->
               Keys).
 
 %% @doc merges the minimal clocks for the common entries in both sets.
--spec merge_common_keys(set(), {riak_dt_vclock:vclock(), entries(), deferred()},
+-spec merge_common_keys({riak_dt_vclock:vclock(), entries(), deferred()},
                         {riak_dt_vclock:vclock(), entries(), deferred()}) ->
                                entries().
-merge_common_keys(CommonKeys, {LHSClock, LHSEntries, _}, {RHSClock, RHSEntries, _}) ->
+merge_common_keys({LHSClock, LHSEntries, _}, {RHSClock, RHSEntries, _}) ->
 
     %% If both sides have the same values, some dots may still need to
     %% be shed.  If LHS has dots for 'X' that RHS does _not_ have, and
@@ -352,27 +356,33 @@ merge_common_keys(CommonKeys, {LHSClock, LHSEntries, _}, {RHSClock, RHSEntries, 
     %% dots.  We only keep dots BOTH side agree on, or dots that are
     %% not dominated. Keep only common dots, and dots that are not
     %% dominated by the other sides clock
+    LHSKeys = maps:keys(LHSEntries),
+    lists:foldl(
+        fun(Key, Acc) ->
+            case maps:is_key(Key, RHSEntries) of
+                true ->
+                    V1 = maps:get(Key, LHSEntries),
+                    V2 = maps:get(Key, RHSEntries),
 
-    sets:fold(fun(Key, Acc) ->
-                      V1 = maps:get(Key, LHSEntries),
-                      V2 = maps:get(Key, RHSEntries),
-
-                      CommonDots = sets:intersection(sets:from_list(V1), sets:from_list(V2)),
-                      LHSUnique = sets:to_list(sets:subtract(sets:from_list(V1), CommonDots)),
-                      RHSUnique = sets:to_list(sets:subtract(sets:from_list(V2), CommonDots)),
-                      LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, RHSClock),
-                      RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, LHSClock),
-                      V = riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]),
-                      %% Perfectly possible that an item in both sets should be dropped
-                      case V of
-                          [] ->
-                              maps:remove(Key, Acc);
-                          _ ->
-                              maps:put(Key, V, Acc)
-                      end
-              end,
-              maps:new(),
-              CommonKeys).
+                    CommonDots = sets:intersection(sets:from_list(V1), sets:from_list(V2)),
+                    LHSUnique = sets:to_list(sets:subtract(sets:from_list(V1), CommonDots)),
+                    RHSUnique = sets:to_list(sets:subtract(sets:from_list(V2), CommonDots)),
+                    LHSKeep = riak_dt_vclock:subtract_dots(LHSUnique, RHSClock),
+                    RHSKeep = riak_dt_vclock:subtract_dots(RHSUnique, LHSClock),
+                    V = riak_dt_vclock:merge([sets:to_list(CommonDots), LHSKeep, RHSKeep]),
+                    %% Perfectly possible that an item in both sets should be dropped
+                    case V of
+                        [] ->
+                            maps:remove(Key, Acc);
+                        _ ->
+                            maps:put(Key, V, Acc)
+                    end;
+                false ->
+                    Acc
+            end
+        end,
+        maps:new(),
+        LHSKeys).
 
 -spec equal(orswot() | legacy_orswot(), orswot() | legacy_orswot()) -> boolean().
 equal({Clock, Entries0, Deferred}, Rhs) when is_list(Entries0) ->
@@ -479,6 +489,8 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
 %% ===================================================================
 -ifdef(TEST).
 
+empty_orswot_test() ->
+    ?assertEqual(new(), ?EMPTY_ORSWOT).
 stat_test() ->
     Set = new(),
     {ok, Set1} = update({add, <<"foo">>}, 1, Set),
