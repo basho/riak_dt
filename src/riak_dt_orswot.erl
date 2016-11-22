@@ -282,11 +282,11 @@ merge(LHS, {RHSClock, RHSEntries0, RHSDeferred}) when is_list(RHSEntries0) ->
     merge(LHS, {RHSClock, RHSEntries1, RHSDeferred});
 merge({Clock, Entries, Deferred}, {Clock, Entries, Deferred}) ->
     {Clock, Entries, Deferred};
+merge(?EMPTY_ORSWOT, RHS) -> RHS;
+merge(LHS, ?EMPTY_ORSWOT) -> LHS;
 merge({Clock, Entries, LHSDeferred}, {Clock, Entries, RHSDeferred}) ->
     Deffered = merge_deferred(LHSDeferred, RHSDeferred),
     apply_deferred(Clock, Entries, Deffered);
-merge(?EMPTY_ORSWOT, RHS) -> RHS;
-merge(LHS, ?EMPTY_ORSWOT) -> LHS;
 merge({LHSClock, LHSEntries, LHSDeferred}=LHS, {RHSClock, RHSEntries, RHSDeferred}=RHS) ->
     Clock = riak_dt_vclock:merge([LHSClock, RHSClock]),
     %% If an element is in both dicts, merge it. If it occurs in one,
@@ -326,7 +326,7 @@ apply_deferred(Clock, Entries, Deferred) ->
 
 %% @doc check if each element in `Entries' should be in the merged
 %% set.
--spec merge_disjoint_keys(set(), entries(),
+-spec merge_disjoint_keys(map(), entries(),
                           riak_dt_vclock:vclock(), entries()) -> entries().
 merge_disjoint_keys(Keys, Entries, SetClock, Accumulator) ->
     maps:fold(fun(Key, _Val, Acc) ->
@@ -424,7 +424,7 @@ add_elem(Actor, {Clock, Entries, Deferred}, Elem) ->
 
 -spec remove_elem({ok, riak_dt_vclock:vclock()} | error,
                   member(), orswot()) ->
-                         {ok, {riak_dt_vclock:vclock(), orddict:orddict(), deferred()}} |
+                         {ok, orswot()} |
                          precondition_error().
 remove_elem({ok, _VClock}, Elem, {Clock, Entries, Deferred}) ->
     {ok, {Clock, maps:remove(Elem, Entries), Deferred}};
