@@ -1,5 +1,6 @@
 # Based on c_src.mk from erlang.mk by Loic Hoguin <essen@ninenines.eu>
 
+.PHONY: all
 CURDIR := $(shell pwd)
 BASEDIR := $(abspath $(CURDIR)/..)
 
