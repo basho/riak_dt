@@ -36,6 +36,9 @@
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -export([gen_op/0, init_state/0, update_expected/3, eqc_state_value/1]).
+
+-behaviour(crdt_statem2_eqc).
+-export([crdt_model_create/0, crdt_model_update/3, crdt_model_merge/2, crdt_model_realise/1]).
 -endif.
 
 -ifdef(TEST).
@@ -128,6 +131,9 @@ flag_and(_, off) ->
 -ifdef(EQC).
 eqc_value_test_() ->
     crdt_statem_eqc:run(?MODULE, 1000).
+    
+eqc_crdt_test_() ->
+    crdt_statem2_eqc:run(?MODULE, 200).
 -endif.
 
 new_test() ->
@@ -187,4 +193,20 @@ update_expected(_ID, _Op, Prev) ->
 
 eqc_state_value(S) ->
     S.
+
+crdt_model_create() ->
+    true.
+
+crdt_model_update(disable, _Actor, _Flag) ->
+    false;
+crdt_model_update(_, _, Flag) ->
+    Flag.
+
+crdt_model_merge(Flag1, Flag2) ->
+    Flag1 and Flag2.
+
+crdt_model_realise(true) ->
+    on;
+crdt_model_realise(false) ->
+    off.
 -endif.
