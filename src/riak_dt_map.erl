@@ -31,7 +31,7 @@
 %% subsequently re-added.
 %%
 %% The contents of the Map are modeled as a dictionary of
-%% `field_name()' to `field_value()' mappings. Where `field_ name()'
+%% `field_name()' to `field_value()' mappings. Where `field_name()'
 %% is a two tuple of an opaque `binary()' name, and one of the
 %% embeddable crdt types (currently `riak_dt_orswot',
 %% `riak_dt_emcntr', `riak_dt_lwwreg', `riak_dt_od_flag', and
