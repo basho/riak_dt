@@ -199,7 +199,6 @@
 -type ord_map() :: {riak_dt_vclock:vclock(), orddict:orddict(), orddict:orddict()}.
 -type any_map() :: riak_dt_map() | ord_map().
 -type entries() :: dict(field_name(), field_value()).
--type field() :: {field_name(), field_value()}.
 -type field_name() :: {Name :: binary(), CRDTModule :: crdt_mod()}.
 -type field_value() :: {crdts(), tombstone()}.
 
@@ -212,7 +211,7 @@
 %% Only field removals can be deferred. CRDTs stored in the map may
 %% have contexts and deferred operations, but as these are part of the
 %% state, they are stored under the field as an update like any other.
--type deferred() :: dict(context(), [field()]).
+-type deferred() :: dict(context(), [field_name()]).
 
 -ifdef(namespaced_types).
 -type dict(A, B) :: dict:dict(A, B).
@@ -233,8 +232,8 @@
 
 -type map_op() :: {update, [map_field_update() | map_field_op()]}.
 
--type map_field_op() ::  {remove, field()}.
--type map_field_update() :: {update, field(), crdt_op()}.
+-type map_field_op() ::  {remove, field_name()}.
+-type map_field_update() :: {update, field_name(), crdt_op()}.
 
 -type crdt_op() :: riak_dt_emcntr:emcntr_op() |
                    riak_dt_lwwreg:lwwreg_op() |
@@ -244,8 +243,8 @@
 -type context() :: riak_dt_vclock:vclock() | undefined.
 
 -type values() :: [value()].
--type value() :: {field(), riak_dt_map:values() | integer() | [term()] | boolean() | term()}.
--type precondition_error() :: {error, {precondition, {not_present, field()}}}.
+-type value() :: {field_name(), riak_dt_map:values() | integer() | [term()] | boolean() | term()}.
+-type precondition_error() :: {error, {precondition, {not_present, field_name()}}}.
 
 -define(DICT, dict).
 -define(SET, sets).
@@ -300,16 +299,17 @@ value(_, Map) ->
 %% executing the `map_op()'. `Ops' is a list of one or more of the
 %% following ops:
 %%
-%% `{update, field(), Op} where `Op' is a valid update operation for a
-%% CRDT of type `Mod' from the `Key' pair `{Name, Mod}' If there is no
-%% local value for `Key' a new CRDT is created, the operation applied
-%% and the result inserted otherwise, the operation is applied to the
-%% local value.
+%% `{update, field_name(), Op} where `Op' is a valid update operation
+%% for a CRDT of type `Mod' from the `Key' pair `{Name, Mod}' If there
+%% is no local value for `Key' a new CRDT is created, the operation
+%% applied and the result inserted otherwise, the operation is applied
+%% to the local value.
 %%
-%%  `{remove, `field()'}' where field is `{name, type}', results in
-%%  the crdt at `field' and the key and value being removed. A
-%%  concurrent `update' will "win" over a remove so that the field is
-%%  still present, and it's value will contain the concurrent update.
+%%  `{remove, `field_name()'}' where field name is `{name, type}',
+%%  results in the crdt at `field' and the key and value being
+%%  removed. A concurrent `update' will "win" over a remove so that
+%%  the field is still present, and it's value will contain the
+%%  concurrent update.
 %%
 %% Atomic, all of `Ops' are performed successfully, or none are.
 -spec update(map_op(), riak_dt:actor() | riak_dt:dot(), riak_dt_map()) ->
@@ -388,7 +388,7 @@ apply_ops([{remove, Field} | Rest], Dot, Map, Ctx) ->
 %%
 %% {@link defer_remove/4} for handling of removes of fields that are
 %% _not_ present
--spec remove_field(field(), riak_dt_map(), context()) ->
+-spec remove_field(field_name(), riak_dt_map(), context()) ->
                           {ok, riak_dt_map()} | precondition_error().
 remove_field(Field, {Clock, Values, Deferred}, undefined) ->
     case ?DICT:find(Field, Values) of
@@ -449,7 +449,7 @@ ctx_rem_field(Field, Values, Ctx, MapClock) ->
 %% result in deferred operations on the parent Map. This simulates
 %% causal delivery, in that an `update' must be seen before it can be
 %% `removed'.
--spec defer_remove(riak_dt_vclock:vclock(), riak_dt_vclock:vclock(), field(), deferred()) ->
+-spec defer_remove(riak_dt_vclock:vclock(), riak_dt_vclock:vclock(), field_name(), deferred()) ->
                           deferred().
 defer_remove(Clock, Ctx, Field, Deferred) ->
     case riak_dt_vclock:descends(Clock, Ctx) of
@@ -599,7 +599,7 @@ apply_deferred(Clock, Entries, Deferred) ->
                Deferred).
 
 %% @private
--spec remove_all([field()], riak_dt_map(), context()) -> riak_dt_map().
+-spec remove_all([field_name()], riak_dt_map(), context()) -> riak_dt_map().
 remove_all(Fields, Map, Ctx) ->
     lists:foldl(fun(Field, MapAcc) ->
                         {ok, MapAcc2}= remove_field(Field, MapAcc, Ctx),
@@ -621,7 +621,7 @@ equal({Clock1, Values1, Deferred1}, {Clock2, Values2, Deferred2}) ->
         pairwise_equals(lists:sort(?DICT:to_list(Values1)),
                         lists:sort(?DICT:to_list(Values2))).
 
--spec pairwise_equals([field()], [field()]) -> boolean().
+-spec pairwise_equals([field_name()], [field_name()]) -> boolean().
 pairwise_equals([], []) ->
     true;
 pairwise_equals([{{Name, Type}, {Dots1, TS1}}| Rest1], [{{Name, Type}, {Dots2, TS2}}|Rest2]) ->
@@ -914,7 +914,7 @@ tombstone_remove_test() ->
 %% that multiple fields could have the same `dot', when clearly, they
 %% can. This test fails with `dot' as the key for a field in
 %% `merge_left/3', but passes with the current structure, of
-%% `{field(), dot()}' as key.
+%% `{field_name(), dot()}' as key.
 dot_key_test() ->
     {ok, A} = update({update, [{update, {'X', riak_dt_orswot}, {add, <<"a">>}}, {update, {'X', riak_dt_od_flag}, enable}]}, a, new()),
     B = A,
