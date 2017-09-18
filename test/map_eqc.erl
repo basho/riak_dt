@@ -59,6 +59,12 @@ run(Count) ->
 check() ->
     eqc:check(prop_merge()).
 
+%% @doc shell convenience, check a specific saved eqc counter example
+check(F) ->
+    {ok, Bytes} = file:read_file(F),
+    CE = binary_to_term(Bytes),
+    eqc:check(prop_merge(), CE).
+
 %% Initialize the state
 -spec initial_state() -> eqc_statem:symbolic_state().
 initial_state() ->
