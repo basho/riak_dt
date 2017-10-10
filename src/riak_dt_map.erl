@@ -617,7 +617,8 @@ equal({_LHSC, LHSE, _LHSD}=LHS, {_RHSC, RHSE, _RHSD}=RHS) when is_list(LHSE);
     equal(to_v2(LHS), to_v2(RHS));
 equal({Clock1, Values1, Deferred1}, {Clock2, Values2, Deferred2}) ->
     riak_dt_vclock:equal(Clock1, Clock2) andalso
-        Deferred1 == Deferred2 andalso
+        lists:sort(?DICT:to_list(Deferred1)) ==
+        lists:sort(?DICT:to_list(Deferred2)) andalso
         pairwise_equals(lists:sort(?DICT:to_list(Values1)),
                         lists:sort(?DICT:to_list(Values2))).
 
