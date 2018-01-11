@@ -50,8 +50,10 @@
 -export([new/0, value/1, value/2]).
 -export([update/3, update/4, merge/2, equal/2]).
 -export([to_binary/1, from_binary/1]).
+-export([to_binary/2]).
 -export([stats/1, stat/2]).
 -export([parent_clock/2]).
+-export([to_version/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -79,9 +81,15 @@
 -type add() :: ?ADD.
 -type remove() :: ?REM.
 
+-ifdef(EQC).
+-define(DICT, orddict).
+-else.
+-define(DICT, dict).
+-endif.
+
 -spec new() -> lwwset().
 new() ->
-    orddict:new().
+    ?DICT:new().
 
 -spec parent_clock(riak_dt_vclock:vclock(), lwwset()) -> lwwset().
 parent_clock(_Clock, LWWSet) ->
@@ -89,7 +97,7 @@ parent_clock(_Clock, LWWSet) ->
 
 -spec value(lwwset()) -> [member()].
 value(LWWSet) ->
-    [K || {K, {_TS, Status}} <- orddict:to_list(LWWSet), Status == 1].
+    [K || {K, {_TS, Status}} <- ?DICT:to_list(LWWSet), Status == 1].
 
 value(size, LWWSet) ->
     length(value(LWWSet));
@@ -108,13 +116,13 @@ update(Op, Actor, Set, _Ctx) ->
 %% Private
 -spec add_elem(member(), ts(), lwwset()) -> lwwset().
 add_elem(Elem, TS, LWWSet) ->
-    case orddict:find(Elem, LWWSet) of
+    case ?DICT:find(Elem, LWWSet) of
         error ->
-            orddict:store(Elem, {TS, ?ADD}, LWWSet);
+            ?DICT:store(Elem, {TS, ?ADD}, LWWSet);
         {ok, {TS, ?REM}} ->
-            orddict:store(Elem, {TS, ?ADD}, LWWSet);
+            ?DICT:store(Elem, {TS, ?ADD}, LWWSet);
         {ok, {TS0, _}} when TS0 < TS ->
-            orddict:store(Elem, {TS, ?ADD}, LWWSet);
+            ?DICT:store(Elem, {TS, ?ADD}, LWWSet);
         _ ->
             LWWSet
     end.
@@ -122,13 +130,13 @@ add_elem(Elem, TS, LWWSet) ->
 %% @doc warning, allows doomstoning.
 -spec remove_elem(member(), ts(), lwwset()) -> lwwset().
 remove_elem(Elem, TS, LWWSet) ->
-    case orddict:find(Elem, LWWSet) of
+    case ?DICT:find(Elem, LWWSet) of
         error ->
-            orddict:store(Elem, {TS, ?REM}, LWWSet);
+            ?DICT:store(Elem, {TS, ?REM}, LWWSet);
         {ok, {TS, ?ADD}} ->
             LWWSet;
         {ok, {TS0, _}} when TS0 < TS ->
-            orddict:store(Elem, {TS, ?REM}, LWWSet);
+            ?DICT:store(Elem, {TS, ?REM}, LWWSet);
         _ ->
             LWWSet
     end.
@@ -137,7 +145,7 @@ remove_elem(Elem, TS, LWWSet) ->
 merge(LWWSet, LWWSet) ->
     LWWSet;
 merge(LWWSet1, LWWSet2) ->
-    orddict:merge(fun lww/3, LWWSet1, LWWSet2).
+    ?DICT:merge(fun lww/3, LWWSet1, LWWSet2).
 
 lww(_Key, {TS, ?ADD}, {TS, ?REM}) ->
     {TS, ?ADD};
@@ -160,7 +168,7 @@ stats(LWWSet) ->
 
 -spec stat(atom(), lwwset()) -> number() | undefined.
 stat(element_count, LWWSet) ->
-    orddict:size(LWWSet);
+    ?DICT:size(LWWSet);
 stat(_,_) -> undefined.
 
 -include("riak_dt_tags.hrl").
@@ -177,15 +185,32 @@ stat(_,_) -> undefined.
 %% @see `from_binary/1'
 -spec to_binary(lwwset()) -> binary_lwwset().
 to_binary(S) ->
-     <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(S))/binary>>.
+    {ok, B} = to_binary(?V1_VERS, S),
+    B.
 
-%% @doc When the argument is a `binary_orswot()' produced by
-%% `to_binary/1' will return the original `orswot()'.
+%% @doc encode set to target version. The first argument is the target
+%% binary type.
+-spec to_binary(Vers :: pos_integer(), lwwset()) -> {ok, binary_lwwset()} | ?UNSUPPORTED_VERSION.
+to_binary(?V1_VERS, S) ->
+    {ok, <<?TAG:8/integer, ?V1_VERS:8/integer, (riak_dt:to_binary(S))/binary>>};
+to_binary(Vers, _S) ->
+    ?UNSUPPORTED_VERSION(Vers).
+
+%% @doc When the argument is a `binary_lwwset()' produced by
+%% `to_binary/1' will return the original `lwwset()'.
 %%
 %% @see `to_binary/1'
--spec from_binary(binary_lwwset()) -> lwwset().
+-spec from_binary(binary_lwwset()) -> {ok, lwwset()} | ?UNSUPPORTED_VERSION | ?INVALID_BINARY.
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, B/binary>>) ->
-    riak_dt:from_binary(B).
+    {ok, riak_dt:from_binary(B)};
+from_binary(<<?TAG:8/integer, Vers:8/integer, _B/binary>>) ->
+    ?UNSUPPORTED_VERSION(Vers);
+from_binary(_B) ->
+    ?INVALID_BINARY.
+
+-spec to_version(pos_integer(), lwwset()) -> lwwset().
+to_version(_Version, Set) ->
+    Set.
 
 %% ===================================================================
 %% EUnit tests
