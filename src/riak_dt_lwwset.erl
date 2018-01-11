@@ -67,19 +67,23 @@
 
 -export_type([lwwset/0, lwwset_op/0, binary_lwwset/0]).
 
--type lwwset() :: [entry()].
+-type lwwset() :: dict(member(), {ts(), status()}).
 
 -type binary_lwwset() :: binary(). %% A binary that from_binary/1 will operate on.
 
 -type lwwset_op() ::  {add, member(), ts()} | {remove, member(), ts()}.
-
--type entry() :: {member(), {ts(), status()}}.
 
 -type member() :: term().
 -type ts() :: pos_integer().
 -type status() :: add() | remove().
 -type add() :: ?ADD.
 -type remove() :: ?REM.
+
+-ifdef(namespaced_types).
+-type dict(A, B) :: dict:dict(A, B).
+-else.
+-type dict(_A, _B) :: dict().
+-endif.
 
 -ifdef(EQC).
 -define(DICT, orddict).
