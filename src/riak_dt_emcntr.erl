@@ -266,7 +266,7 @@ generate() ->
              {Generated, _Evts} = lists:foldl(fun(Op, {Cntr, Evt}) ->
                                                       Actor = case length(Actors) of
                                                                   1 -> hd(Actors);
-                                                                  _ -> lists:nth(crypto:rand_uniform(1, length(Actors)+1), Actors)
+                                                                  _ -> lists:nth(rand:uniform( length(Actors)+1), Actors)
                                                               end,
                                                       {ok, Cntr2} = riak_dt_emcntr:update(Op, {Actor, Evt}, Cntr),
                                                       {Cntr2, Evt+1}

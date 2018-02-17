@@ -27,20 +27,13 @@
 -include_lib("eqc/include/eqc_statem.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--compile(export_all).
+-export([initial_state/0, command/1, next_state/3, precondition/2, postcondition/3]).
+
+-export([create/1, update/3, merge/3, crdt_equals/3]).
+
+-export([prop_converge/1, prop_bin_roundtrip/1]).
 
 -record(state,{vnodes=[], mod_state, vnode_id=0, mod}).
-
--define(NUMTESTS, 1000).
--define(QC_OUT(P),
-        eqc:on_output(fun(Str, Args) ->
-                              io:format(user, Str, Args) end, P)).
-
-run(Module, Count) ->
-    {atom_to_list(Module), {timeout, 120, [?_assert(prop_converge(Count, Module))]}}.
-
-run_binary_rt(Module, Count) ->
-    {atom_to_list(Module), {timeout, 120, [?_assert(prop_bin_roundtrip(Count, Module))]}}.
 
 %% Initialize the state
 initial_state() ->
@@ -88,9 +81,6 @@ postcondition(_S,{call,?MODULE, crdt_equals, _},Res) ->
 postcondition(_S,{call,_,_,_},_Res) ->
     true.
 
-prop_converge(NumTests, Mod) ->
-    eqc:quickcheck(eqc:numtests(NumTests, ?QC_OUT(prop_converge(Mod)))).
-
 prop_converge(Mod) ->
     ?FORALL(Cmds,commands(?MODULE, #state{mod=Mod, mod_state=Mod:init_state()}),
             begin
@@ -105,9 +95,6 @@ prop_converge(Mod) ->
                                 {total, equals(sort(Mod, MergedVal), sort(Mod, ExpectedValue))}]))
             end).
 
-prop_bin_roundtrip(Count, Mod) ->
-    eqc:quickcheck(eqc:numtests(Count, ?QC_OUT(prop_bin_roundtrip(Mod)))).
-
 prop_bin_roundtrip(Mod) ->
     ?FORALL(CRDT, Mod:generate(),
             begin
@@ -121,9 +108,6 @@ prop_bin_roundtrip(Mod) ->
                            end,
                            Mod:equal(CRDT, CRDT2)))
             end).
-
-bytes_smaller(Bin1, Bin2) ->
-   trunc(((byte_size(Bin2) - byte_size(Bin1)) / byte_size(Bin1)) *  100).
 
 range(0) ->
     0;

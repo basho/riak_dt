@@ -64,18 +64,6 @@
 
 -behaviour(riak_dt).
 
--ifdef(EQC).
--include_lib("eqc/include/eqc.hrl").
--define(QC_OUT(P),
-        eqc:on_output(fun(Str, Args) ->
-                              io:format(user, Str, Args) end, P)).
--define(NUMTESTS, 1000).
--endif.
-
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
--endif.
-
 %% API
 -export([new/0, value/1, value/2]).
 -export([update/3, update/4, merge/2, equal/2]).
@@ -87,9 +75,14 @@
 
 %% EQC API
 -ifdef(EQC).
+-include_lib("eqc/include/eqc.hrl").
 -export([gen_op/0, gen_op/1, update_expected/3, eqc_state_value/1]).
 -export([init_state/0, generate/0, size/1]).
+-export([prop_crdt_converge/0, prop_crdt_bin_roundtrip/0]).
+-endif.
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
 -endif.
 
 -export_type([orswot/0, orswot_op/0, binary_orswot/0]).
@@ -628,12 +621,11 @@ batch_order_test() ->
     ?assertEqual([<<"bar">>, <<"baz">>], value(Set5)).
 
 -ifdef(EQC).
+prop_crdt_converge() ->
+     crdt_statem_eqc:prop_converge(?MODULE).
 
-bin_roundtrip_test_() ->
-    crdt_statem_eqc:run_binary_rt(?MODULE, ?NUMTESTS).
-
-eqc_value_test_() ->
-    crdt_statem_eqc:run(?MODULE, ?NUMTESTS).
+prop_crdt_bin_roundtrip() ->
+    crdt_statem_eqc:prop_bin_roundtrip(?MODULE).
 
 size(Set) ->
     value(size, Set).
@@ -644,7 +636,7 @@ generate() ->
          lists:foldl(fun(Op, Set) ->
                              Actor = case length(Actors) of
                                          1 -> hd(Actors);
-                                         _ -> lists:nth(crypto:rand_uniform(1, length(Actors)), Actors)
+                                         _ -> lists:nth(rand:uniform( length(Actors)), Actors)
                                      end,
                              case riak_dt_orswot:update(Op, Actor, Set) of
                                  {ok, S} -> S;

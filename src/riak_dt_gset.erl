@@ -51,6 +51,7 @@
 %% EQC API
 -ifdef(EQC).
 -export([init_state/0, gen_op/0, update_expected/3, eqc_state_value/1]).
+-export([prop_crdt_converge/0]).
 -endif.
 
 -export_type([gset/0, binary_gset/0, gset_op/0]).
@@ -158,8 +159,8 @@ stat_test() ->
     ?assertEqual(undefined, stat(actor_count, S1)).
 
 -ifdef(EQC).
-eqc_value_test_() ->
-    crdt_statem_eqc:run(?MODULE, 1000).
+prop_crdt_converge() ->
+    crdt_statem_eqc:prop_converge(?MODULE).
 
 %% EQC generator
 gen_op() ->

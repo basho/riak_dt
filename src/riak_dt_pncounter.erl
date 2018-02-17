@@ -46,6 +46,7 @@
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0, generate/0]).
+-export([prop_crdt_converge/0, prop_crdt_bin_roundtrip/0]).
 -endif.
 
 -ifdef(TEST).
@@ -262,10 +263,13 @@ decrement_by(Decrement, Actor, PNCnt) ->
 -ifdef(TEST).
 
 -ifdef(EQC).
-%% EQC generator
-eqc_value_test_() ->
-    crdt_statem_eqc:run(?MODULE, 1000).
+prop_crdt_converge() ->
+    crdt_statem_eqc:prop_converge(?MODULE).
 
+prop_crdt_bin_roundtrip() ->
+    crdt_statem_eqc:prop_bin_roundtrip(?MODULE).
+
+%% EQC generator
 generate() ->
     ?LET(Ops, list(gen_op()),
          lists:foldl(fun(Op, Cntr) ->

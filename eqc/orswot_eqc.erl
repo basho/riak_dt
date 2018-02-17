@@ -26,7 +26,29 @@
 -include_lib("eqc/include/eqc_statem.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--compile(export_all).
+-export([initial_state/0, weight/2, prop_merge/0]).
+
+-export([create_replica_pre/2, create_replica/1, create_replica_next/3]).
+
+-export([add_args/1, add_pre/1, add_pre/2, add/2, add_next/3, add_post/3]).
+
+-export([remove_pre/1, remove_args/1, remove_pre/2, remove/2, remove_post/3]).
+
+-export([replicate_args/1, replicate_pre/1, replicate_pre/2, replicate/2,
+         replicate_post/3]).
+
+-export([context_remove_args/1, context_remove_pre/1, context_remove_pre/2,
+         context_remove_dynamicpre/2, context_remove/3]).
+
+-export([idempotent_args/1, idempotent_pre/1, idempotent_pre/2, idempotent/1,
+         idempotent_post/3]).
+
+-export([commutative_args/1, commutative_pre/1, commutative_pre/2, commutative/2,
+         commutative_post/3]).
+
+-export([associative_args/1, associative_pre/1, associative_pre/2, associative/3,
+         associative_post/3]).
+
 
 -record(state, {replicas=[], %% Actor Ids for replicas in the system
                 adds=[]      %% Elements that have been added to the set
@@ -34,24 +56,6 @@
 
 %% The set of possible elements in the set
 -define(ELEMENTS, ['A', 'B', 'C', 'D', 'X', 'Y', 'Z']).
-
--define(NUMTESTS, 1000).
--define(QC_OUT(P),
-        eqc:on_output(fun(Str, Args) ->
-                              io:format(user, Str, Args) end, P)).
-
-eqc_test_() ->
-    {timeout, 60, ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(50, ?QC_OUT(prop_merge()))))}.
-
-run() ->
-    run(?NUMTESTS).
-
-run(Count) ->
-    eqc:quickcheck(eqc:numtests(Count, prop_merge())).
-
-check() ->
-    eqc:check(prop_merge()).
-
 
 initial_state() ->
     #state{}.

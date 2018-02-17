@@ -31,17 +31,15 @@
 -export([to_binary/2]).
 -export([to_version/2]).
 
+%% EQC API
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
+-export([init_state/0, gen_op/0, update_expected/3, eqc_state_value/1]).
+-export([prop_crdt_converge/0]).
 -endif.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
--endif.
-
-%% EQC API
--ifdef(EQC).
--export([init_state/0, gen_op/0, update_expected/3, eqc_state_value/1]).
 -endif.
 
 -export_type([orset/0, binary_orset/0, orset_op/0]).
@@ -281,8 +279,8 @@ stat_test() ->
     ?assertEqual(67, stat(waste_pct, Set4)).
 
 -ifdef(EQC).
-eqc_value_test_() ->
-    crdt_statem_eqc:run(?MODULE, 1000).
+prop_crdt_converge() ->
+    crdt_statem_eqc:prop_converge(?MODULE).
 
 %% EQC generator
 gen_op() ->

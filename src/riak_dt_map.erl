@@ -175,7 +175,6 @@
 -endif.
 
 -ifdef(TEST).
--compile(export_all).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
@@ -190,6 +189,7 @@
 %% EQC API
 -ifdef(EQC).
 -export([gen_op/0, gen_op/1, gen_field/0, gen_field/1,  generate/0, size/1]).
+-export([prop_v1_downgrade_roundtrip/0]).
 -endif.
 
 -export_type([riak_dt_map/0, binary_map/0, map_op/0]).
@@ -958,10 +958,12 @@ equals_test() ->
 
 unsupported_version_test() ->
     ?assertMatch(?UNSUPPORTED_VERSION(12), to_binary(12, new())),
-    ?assertMatch(?UNSUPPORTED_VERSION(8) , from_binary(<<?TAG:8/integer, 8:8/integer, (crypto:rand_bytes(22))/binary>>)).
+    ?assertMatch(?UNSUPPORTED_VERSION(8) , from_binary(<<?TAG:8/integer, 8:8/integer, (crypto:strong_rand_bytes(22))/binary>>)).
 
 invalid_binary_test() ->
-    ?assertMatch(?INVALID_BINARY, from_binary(<<(crypto:rand_bytes(187))/binary>>)).
+    ?assertMatch(?INVALID_BINARY, from_binary(<<(crypto:strong_rand_bytes(187))/binary>>)).
+
+-endif.
 
 -ifdef(EQC).
 -define(NUMTESTS, 1000).
@@ -981,7 +983,7 @@ generate() ->
          lists:foldl(fun(Op, Map) ->
                              Actor = case length(Actors) of
                                          1 -> hd(Actors);
-                                         _ -> lists:nth(crypto:rand_uniform(1, length(Actors)), Actors)
+                                         _ -> lists:nth(rand:uniform( length(Actors)), Actors)
                                      end,
                              case update(Op, Actor, Map) of
                                  {ok, M} -> M;
@@ -1018,15 +1020,6 @@ gen_field(Size) ->
 gen_field_op({_Name, Type}, Size) ->
     Type:gen_op(Size).
 
-
-v1_downgrade_roundtrip_test_() ->
-    {timeout,
-     120,
-     fun() ->
-             quickcheck(numtests(?NUMTESTS, ?QC_OUT(prop_v1_downgrade_roundtrip())))
-     end}.
-
-
 prop_v1_downgrade_roundtrip() ->
     ?FORALL(Map, generate(),
             begin
@@ -1037,4 +1030,3 @@ prop_v1_downgrade_roundtrip() ->
 
 -endif.
 
--endif.

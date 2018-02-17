@@ -46,6 +46,7 @@
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -export([gen_op/0, update_expected/3, eqc_state_value/1, init_state/0, generate/0]).
+-export([prop_crdt_converge/0, prop_crdt_bin_roundtrip/0]).
 -endif.
 
 -ifdef(TEST).
@@ -161,9 +162,11 @@ to_version(_Version, C) ->
 -ifdef(TEST).
 
 -ifdef(EQC).
-%% EQC generator
-eqc_value_test_() ->
-    crdt_statem_eqc:run(?MODULE, 1000).
+prop_crdt_converge() ->
+    crdt_statem_eqc:prop_converge(?MODULE).
+
+prop_crdt_bin_roundtrip() ->
+    crdt_statem_eqc:prop_bin_roundtrip(?MODULE).
 
 generate() ->
     ?LET(Ops, list(gen_op()),
@@ -277,9 +280,9 @@ roundtrip_bin_test() ->
 
 lots_of_actors_test() ->
     GC = lists:foldl(fun(_, GCnt) ->
-                             ActorLen = crypto:rand_uniform(1, 1000),
-                             Actor = crypto:rand_bytes(ActorLen),
-                             Cnt = crypto:rand_uniform(1, 10000),
+                             ActorLen = rand:uniform( 1000),
+                             Actor = crypto:strong_rand_bytes(ActorLen),
+                             Cnt = rand:uniform( 10000),
                              {ok, Cnt2} =riak_dt_gcounter:update({increment, Cnt}, Actor, GCnt),
                              Cnt2
                      end,

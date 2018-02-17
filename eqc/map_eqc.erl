@@ -26,7 +26,15 @@
 -include_lib("eqc/include/eqc_statem.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--compile(export_all).
+-export([initial_state/0, weight/2, prop_merge/0]).
+
+-export([create_replica_pre/1, create_replica_args/1, create_replica_pre/2,
+         create_replica/1, create_replica_next/3]).
+
+-export([remove_pre/1, remove_args/1, remove_pre/2, remove/2, remove_post/3]).
+
+-export([ctx_remove/3, replicate/2, ctx_update/5, update/4, idempotent/1,
+         commutative/2, associative/3]).
 
 -record(state,{replicas=[],
                %% a unique tag per add
@@ -34,36 +42,6 @@
                %% fields that have been added
                adds=[] :: [{atom(), module()}]
               }).
-
--define(NUMTESTS, 1000).
--define(QC_OUT(P),
-        eqc:on_output(fun(Str, Args) ->
-                              io:format(user, Str, Args) end, P)).
-%% @doc eunit runner
-eqc_test_() ->
-    {timeout, 200, ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(100, ?QC_OUT(prop_merge()))))}.
-
-%% @doc eunit runner for bin roundtrip
-bin_roundtrip_test_() ->
-    {timeout, 100, ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(50, ?QC_OUT(crdt_statem_eqc:prop_bin_roundtrip(riak_dt_map)))))}.
-
-%% @doc shell convenience, run eqc property 1000 times.
-run() ->
-    run(?NUMTESTS).
-
-%% @doc shell convenience, run eqc property `Count' times
-run(Count) ->
-    eqc:quickcheck(eqc:numtests(Count, prop_merge())).
-
-%% @doc shell convenience, check eqc property (last failing counter example)
-check() ->
-    eqc:check(prop_merge()).
-
-%% @doc shell convenience, check a specific saved eqc counter example
-check(F) ->
-    {ok, Bytes} = file:read_file(F),
-    CE = binary_to_term(Bytes),
-    eqc:check(prop_merge(), CE).
 
 %% Initialize the state
 -spec initial_state() -> eqc_statem:symbolic_state().

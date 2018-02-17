@@ -25,8 +25,19 @@
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eqc/include/eqc_statem.hrl").
 -include_lib("eunit/include/eunit.hrl").
+-export([initial_state/0, weight/2, prop_merge/0]).
 
--compile(export_all).
+-export([enable_pre/1, enable_args/1, enable/2, enable_next/3,
+         enable_post/3]).
+
+-export([create_replica_pre/2, create_replica/1, create_replica_next/3]).
+
+-export([disable_pre/1, disable_args/1, disable_pre/2, disable/1, disable_post/3]).
+
+-export([ctx_disable_dynamicpre/2, ctx_disable/2, ctx_disable_post/3]).
+
+-export([replicate_pre/1, replicate_args/1, replicate_pre/2, replicate/2,
+         replicate_post/3]).
 
 -record(state,{replicas=[] :: [binary()], %% Sort of like the ring, upto N*2 ids
                counter=1 :: pos_integer() %% a unique tag per add
@@ -36,18 +47,6 @@
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) ->
                               io:format(user, Str, Args) end, P)).
-
-eqc_test_() ->
-    {timeout, 60, ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(50, ?QC_OUT(prop_merge()))))}.
-
-run() ->
-    run(?NUMTESTS).
-
-run(Count) ->
-    eqc:quickcheck(eqc:numtests(Count, prop_merge())).
-
-check() ->
-    eqc:check(prop_merge()).
 
 %% Initialize the state
 -spec initial_state() -> eqc_statem:symbolic_state().

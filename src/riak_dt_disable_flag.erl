@@ -36,6 +36,7 @@
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -export([gen_op/0, init_state/0, update_expected/3, eqc_state_value/1]).
+-export([prop_crdt_converge/0]).
 -endif.
 
 -ifdef(TEST).
@@ -119,16 +120,10 @@ flag_and(off, _) ->
 flag_and(_, off) ->
     off.
 
-
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
 -ifdef(TEST).
-
--ifdef(EQC).
-eqc_value_test_() ->
-    crdt_statem_eqc:run(?MODULE, 1000).
--endif.
 
 new_test() ->
     ?assertEqual(on, new()).
@@ -174,6 +169,10 @@ stat_test() ->
 
 %% EQC generator
 -ifdef(EQC).
+
+prop_crdt_converge() ->
+    crdt_statem_eqc:prop_converge(?MODULE).
+
 init_state() ->
     on.
 
