@@ -2,6 +2,7 @@
 %% -------------------------------------------------------------------
 %%
 %% riak_dt_orswot: Tombstone-less, replicated, state based observe remove set
+%% orswot is short for Observe Remove Set WithOut Tombstone
 %%
 %% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
