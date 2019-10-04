@@ -96,7 +96,7 @@
 %% <h2>Merging/Size</h2>
 %%
 %% When any pair of Maps are merged, the embedded CRDTs are _not_
-%% merged, instead each concurrent `dot'->`field()' entry is
+%% merged, instead each concurrent `dot'->`field_name()' entry is
 %% kept. This leads to a greater size for Maps that are highly
 %% divergent. Updating a field in the map, however, leads to all
 %% entries for that field being merged to a single CRDT that is stored
