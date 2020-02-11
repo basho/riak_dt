@@ -18,7 +18,7 @@ distclean: clean
 	@./rebar delete-deps
 
 DIALYZER_APPS = kernel stdlib sasl erts ssl tools os_mon runtime_tools crypto inets \
-	xmerl eunit syntax_tools compiler mnesia public_key snmp
+	xmerl webtool eunit syntax_tools compiler mnesia public_key snmp
 
 include tools.mk
 
