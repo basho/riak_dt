@@ -961,7 +961,11 @@ unsupported_version_test() ->
     ?assertMatch(?UNSUPPORTED_VERSION(8) , from_binary(<<?TAG:8/integer, 8:8/integer, (crypto:rand_bytes(22))/binary>>)).
 
 invalid_binary_test() ->
-    ?assertMatch(?INVALID_BINARY, from_binary(<<(crypto:rand_bytes(187))/binary>>)).
+    %% The binary is invalid if the tag does not match - so a set of
+    %% random bytes might be invalid, but might be an unsupoprted version, or
+    %% 1:60K times throw an exception
+    %% Choose a bad tag - and confirm invalid binary
+    ?assertMatch(?INVALID_BINARY, from_binary(<<0:64/integer>>)).
 
 -ifdef(EQC).
 -define(NUMTESTS, 1000).
