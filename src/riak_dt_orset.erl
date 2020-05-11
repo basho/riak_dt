@@ -277,6 +277,7 @@ stat_test() ->
     ?assertEqual(1, stat(adds_count, Set4)),
     ?assertEqual(2, stat(removes_count, Set4)),
     ?assertEqual(67, stat(waste_pct, Set4)).
+-endif.
 
 -ifdef(EQC).
 prop_crdt_converge() ->
@@ -372,7 +373,5 @@ eqc_state_value({_Cnt, Dict}) ->
     Remaining = sets:subtract(A, R),
     Values = [ Elem || {Elem, _X} <- sets:to_list(Remaining)],
     lists:usort(Values).
-
--endif.
 
 -endif.

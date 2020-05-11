@@ -260,8 +260,6 @@ decrement_by(Decrement, Actor, PNCnt) ->
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
--ifdef(TEST).
-
 -ifdef(EQC).
 prop_crdt_converge() ->
     crdt_statem_eqc:prop_converge(?MODULE).
@@ -305,6 +303,7 @@ eqc_state_value(S) ->
     S.
 -endif.
 
+-ifdef(TEST).
 new_test() ->
     ?assertEqual([], new()).
 

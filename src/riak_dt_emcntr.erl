@@ -256,7 +256,6 @@ to_version(_Version, Cntr) ->
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
--ifdef(TEST).
 
 -ifdef(EQC).
 %% EQC generator
@@ -304,6 +303,7 @@ eqc_state_value(S) ->
     S.
 -endif.
 
+-ifdef(TEST).
 new_test() ->
     ?assertEqual(0, value(new())).
 

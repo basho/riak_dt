@@ -122,7 +122,6 @@ flag_or(off, off) ->
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
--ifdef(TEST).
 
 -ifdef(EQC).
 prop_crdt_converge() ->
@@ -144,6 +143,7 @@ eqc_state_value(S) ->
     S.
 -endif.
 
+-ifdef(TEST).
 new_test() ->
     ?assertEqual(off, new()).
 
