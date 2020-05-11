@@ -179,6 +179,7 @@ to_binary_test() ->
   GSet = update({add, <<"foo">>}, undefined_actor, riak_dt_gset:new()),
   Bin = riak_dt_gset:to_binary(GSet),
   ?assertMatch( <<82:8/integer, ?V2_VERS:8/integer, _/binary>> , Bin).
+-endif.
 
 -ifdef(EQC).
 prop_crdt_converge() ->
@@ -214,7 +215,5 @@ eqc_state_value(Dict) ->
                   sets:new(),
                   Dict),
     sets:to_list(S).
-
--endif.
 
 -endif.

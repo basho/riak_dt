@@ -620,6 +620,7 @@ batch_order_test() ->
     {ok, Set4} = update({remove, <<"baz">>}, a, Set),
     {ok, Set5} = update({add, <<"baz">>}, a, Set4),
     ?assertEqual([<<"bar">>, <<"baz">>], value(Set5)).
+-endif.
 
 -ifdef(EQC).
 prop_crdt_converge() ->
@@ -749,7 +750,5 @@ is_sub_bag2([Elem | Rest], SuperBag) ->
         SuperBag2 ->
             is_sub_bag2(Rest, SuperBag2)
     end.
-
--endif.
 
 -endif.

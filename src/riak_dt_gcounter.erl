@@ -159,7 +159,6 @@ to_version(_Version, C) ->
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
--ifdef(TEST).
 
 -ifdef(EQC).
 prop_crdt_converge() ->
@@ -197,6 +196,7 @@ eqc_state_value(S) ->
     S.
 -endif.
 
+-ifdef(TEST).
 new_test() ->
     ?assertEqual([], new()).
 

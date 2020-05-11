@@ -209,7 +209,6 @@ to_version(_Version, Flag) ->
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
--ifdef(TEST).
 
 -ifdef(EQC).
 prop_crdt_converge() ->
@@ -255,6 +254,8 @@ update_expected(ID, {merge, SourceID}, Dict) ->
 eqc_state_value(Dict) ->
     orddict:fold(fun(_K, V, Acc) -> V or Acc end, false, Dict).
 -endif.
+
+-ifdef(TEST).
 
 disable_test() ->
     {ok, A} = update(enable, a, new()),
