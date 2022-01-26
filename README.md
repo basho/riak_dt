@@ -1,6 +1,6 @@
 # riak dt
 
-[![Erlang CI Actions Status](https://github.com/basho/riak_dt/workflows/erlang/badge.svg)](https://github.com/basho/riak_dt/actions)
+[![Erlang CI Actions Status](https://github.com/basho/riak_dt/workflows/Erlang%20CI/badge.svg)](https://github.com/basho/riak_dt/actions)
 
 
 ## WHAT?
