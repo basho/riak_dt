@@ -1,5 +1,8 @@
 # riak dt
 
+[![Actions Status](https://github.com/basho/riak_dt/workflows/Erlang%20CI/badge.svg)](https://github.com/basho/riak_dt/actions)
+
+
 ## WHAT?
 
 A set of state based CRDTs implemented in Erlang and  on the paper -
