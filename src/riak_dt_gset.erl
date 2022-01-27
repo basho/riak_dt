@@ -169,10 +169,11 @@ to_version(_Version, Set) ->
 stat_test() ->
     S0 = new(),
     {ok, S1} = update({add_all, [<<"a">>, <<"b1">>, <<"c23">>, <<"d234">>]}, 1, S0),
+    MaxElementSize = erlang:external_size(<<"d234">>),
     ?assertEqual([{element_count, 0}, {max_element_size, 0}], stats(S0)),
-    ?assertEqual([{element_count, 4}, {max_element_size, 15}], stats(S1)),
+    ?assertEqual([{element_count, 4}, {max_element_size, MaxElementSize}], stats(S1)),
     ?assertEqual(4, stat(element_count, S1)),
-    ?assertEqual(15, stat(max_element_size, S1)),
+    ?assertEqual(MaxElementSize, stat(max_element_size, S1)),
     ?assertEqual(undefined, stat(actor_count, S1)).
 
 to_binary_test() ->

@@ -261,9 +261,11 @@ query_test() ->
 
 stat_test() ->
     LWW = new(),
+    NewSize = erlang:external_size(<<>>),
+    UpdateSize = erlang:external_size(<<"abcd">>),
     {ok, LWW1} = update({assign, <<"abcd">>}, 1, LWW),
-    ?assertEqual([{value_size, 11}], stats(LWW)),
-    ?assertEqual([{value_size, 15}], stats(LWW1)),
-    ?assertEqual(15, stat(value_size, LWW1)),
+    ?assertEqual([{value_size, NewSize}], stats(LWW)),
+    ?assertEqual([{value_size, UpdateSize}], stats(LWW1)),
+    ?assertEqual(UpdateSize, stat(value_size, LWW1)),
     ?assertEqual(undefined, stat(actor_count, LWW1)).
 -endif.
