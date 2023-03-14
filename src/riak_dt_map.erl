@@ -243,7 +243,7 @@
 -type context() :: riak_dt_vclock:vclock() | undefined.
 
 -type values() :: [value()].
--type value() :: {field_name(), riak_dt_map:values() | integer() | [term()] | boolean() | term()}.
+-type value() :: {field_name(), values() | integer() | [term()] | boolean() | term()}.
 -type precondition_error() :: {error, {precondition, {not_present, field_name()}}}.
 
 -define(DICT, dict).

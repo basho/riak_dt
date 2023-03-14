@@ -23,7 +23,7 @@
 -module(riak_dt).
 
 -export([to_binary/1, from_binary/1, dict_to_orddict/1]).
--export_type([actor/0, dot/0, crdt/0, context/0]).
+-export_type([actor/0, dot/0, crdt/0, context/0, value/0, operation/0]).
 
 -include("riak_dt.hrl").
 -include("riak_dt_tags.hrl").
