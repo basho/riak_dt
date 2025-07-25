@@ -10,10 +10,10 @@ A set of state based CRDTs implemented in Erlang and  on the paper -
 (http://hal.inria.fr/docs/00/55/55/88/PDF/techreport.pdf) - which you
 may find an interesting read.
 
-### What happend to riak_dt, the database?
+### What happened to riak_dt, the database?
 
 Riak is getting CRDT support built in, so we've archived the old
 riak_dt in the branch `prototype`. No further work will be done on
-it. This repo is now a resuable library of Quickcheck tested
+it. This repo is now a reusable library of Quickcheck tested
 implementations of CRDTs.
 
